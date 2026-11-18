@@ -1,0 +1,352 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidToggleMap(toggles) {
+      return toggles is map
+        && toggles.keys().hasAll([
+          'spotWsStream', 'l2OrderBookDepth', 'topGainersScanner', 'cmcBaselineValidator',
+          'futuresFeedModule', 'signalEngine', 'smcVolumeAgent', 'patternScannerAgent',
+          'sentinelAgent', 'autonomousCoordinator', 'rlAutoTuner', 'voiceCommandAgent',
+          'spotExecutionRouter', 'futuresExecutionRouter', 'testnetSandboxRouter',
+          'liveExecutionRouter', 'crossExchangeArbitrage', 'institutionalCopyDesk',
+          'portfolioAutoRebalancer', 'telemetrySseStream', 'diagnosticErrorCapture',
+          'haAutoFailover', 'automatedRollbackProtocol', 'emailDigestDispatcher'
+        ])
+        && toggles.keys().hasOnly([
+          'spotWsStream', 'l2OrderBookDepth', 'topGainersScanner', 'cmcBaselineValidator',
+          'futuresFeedModule', 'signalEngine', 'smcVolumeAgent', 'patternScannerAgent',
+          'sentinelAgent', 'autonomousCoordinator', 'rlAutoTuner', 'voiceCommandAgent',
+          'spotExecutionRouter', 'futuresExecutionRouter', 'testnetSandboxRouter',
+          'liveExecutionRouter', 'crossExchangeArbitrage', 'institutionalCopyDesk',
+          'portfolioAutoRebalancer', 'telemetrySseStream', 'diagnosticErrorCapture',
+          'haAutoFailover', 'automatedRollbackProtocol', 'emailDigestDispatcher'
+        ])
+        && toggles.spotWsStream is bool
+        && toggles.l2OrderBookDepth is bool
+        && toggles.topGainersScanner is bool
+        && toggles.cmcBaselineValidator is bool
+        && toggles.futuresFeedModule is bool
+        && toggles.signalEngine is bool
+        && toggles.smcVolumeAgent is bool
+        && toggles.patternScannerAgent is bool
+        && toggles.sentinelAgent is bool
+        && toggles.autonomousCoordinator is bool
+        && toggles.rlAutoTuner is bool
+        && toggles.voiceCommandAgent is bool
+        && toggles.spotExecutionRouter is bool
+        && toggles.futuresExecutionRouter is bool
+        && toggles.testnetSandboxRouter is bool
+        && toggles.liveExecutionRouter is bool
+        && toggles.crossExchangeArbitrage is bool
+        && toggles.institutionalCopyDesk is bool
+        && toggles.portfolioAutoRebalancer is bool
+        && toggles.telemetrySseStream is bool
+        && toggles.diagnosticErrorCapture is bool
+        && toggles.haAutoFailover is bool
+        && toggles.automatedRollbackProtocol is bool
+        && toggles.emailDigestDispatcher is bool;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'createdAt', 'updatedAt'])
+        && data.uid is string
+        && data.uid.size() >= 1
+        && data.uid.size() <= 128
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 254
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 80
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWatchlistItem(data, userId, coinId) {
+      return data.keys().hasAll(['id', 'userId', 'symbol', 'coinName', 'createdAt'])
+        && data.keys().hasOnly(['id', 'userId', 'symbol', 'coinName', 'notes', 'createdAt'])
+        && data.id is string
+        && data.id == coinId
+        && data.id.size() >= 1
+        && data.id.size() <= 32
+        && data.userId is string
+        && data.userId.size() >= 1
+        && data.userId.size() <= 128
+        && data.userId == userId
+        && data.userId == request.auth.uid
+        && data.symbol is string
+        && data.symbol.size() >= 4
+        && data.symbol.size() <= 16
+        && data.symbol.matches('^[A-Z0-9]+$')
+        && data.coinName is string
+        && data.coinName.size() >= 1
+        && data.coinName.size() <= 50
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 240))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidPriceAlert(data, userId, alertId) {
+      return data.keys().hasAll([
+          'id', 'userId', 'symbol', 'condition', 'targetPrice',
+          'active', 'triggered', 'emailNotify', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'userId', 'symbol', 'condition', 'targetPrice',
+          'active', 'triggered', 'emailNotify', 'createdAt', 'updatedAt'
+        ])
+        && data.id is string
+        && data.id == alertId
+        && data.id.size() >= 1
+        && data.id.size() <= 64
+        && data.userId is string
+        && data.userId.size() >= 1
+        && data.userId.size() <= 128
+        && data.userId == userId
+        && data.userId == request.auth.uid
+        && data.symbol is string
+        && data.symbol.size() >= 4
+        && data.symbol.size() <= 16
+        && data.symbol.matches('^[A-Z0-9]+$')
+        && data.condition is string
+        && data.condition.size() == 5
+        && (data.condition == 'ABOVE' || data.condition == 'BELOW')
+        && data.targetPrice is number
+        && data.targetPrice > 0
+        && data.active is bool
+        && data.triggered is bool
+        && data.emailNotify is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceControlConfig(data, userId, configId) {
+      return data.keys().hasAll(['id', 'userId', 'checksum', 'toggles', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'checksum', 'toggles', 'createdAt', 'updatedAt'])
+        && data.id is string
+        && data.id == configId
+        && data.id.size() >= 1
+        && data.id.size() <= 64
+        && data.userId is string
+        && data.userId.size() >= 1
+        && data.userId.size() <= 128
+        && data.userId == userId
+        && data.userId == request.auth.uid
+        && data.checksum is string
+        && data.checksum.size() >= 4
+        && data.checksum.size() <= 40
+        && isValidToggleMap(data.toggles)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidRollbackCheckpoint(data, userId, snapshotId) {
+      return data.keys().hasAll(['snapshotId', 'userId', 'version', 'reason', 'checksum', 'toggles', 'createdAt'])
+        && data.keys().hasOnly(['snapshotId', 'userId', 'version', 'reason', 'checksum', 'toggles', 'createdAt'])
+        && data.snapshotId is string
+        && data.snapshotId == snapshotId
+        && data.snapshotId.size() >= 1
+        && data.snapshotId.size() <= 64
+        && data.userId is string
+        && data.userId.size() >= 1
+        && data.userId.size() <= 128
+        && data.userId == userId
+        && data.userId == request.auth.uid
+        && data.version is number
+        && data.version >= 1
+        && data.reason is string
+        && data.reason.size() >= 1
+        && data.reason.size() <= 200
+        && data.checksum is string
+        && data.checksum.size() >= 4
+        && data.checksum.size() <= 40
+        && isValidToggleMap(data.toggles)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidErrorAuditRecord(data, userId, logId) {
+      return data.keys().hasAll(['id', 'userId', 'correlationId', 'serviceId', 'severity', 'code', 'message', 'recoveryAction', 'createdAt'])
+        && data.keys().hasOnly(['id', 'userId', 'correlationId', 'serviceId', 'severity', 'code', 'message', 'recoveryAction', 'createdAt'])
+        && data.id is string
+        && data.id == logId
+        && data.id.size() >= 1
+        && data.id.size() <= 64
+        && data.userId is string
+        && data.userId.size() >= 1
+        && data.userId.size() <= 128
+        && data.userId == userId
+        && data.userId == request.auth.uid
+        && data.correlationId is string
+        && data.correlationId.size() >= 1
+        && data.correlationId.size() <= 80
+        && data.serviceId is string
+        && data.serviceId.size() >= 4
+        && data.serviceId.size() <= 40
+        && (data.serviceId == 'market-data-svc' || data.serviceId == 'ai-agents-svc' || data.serviceId == 'execution-router-svc' || data.serviceId == 'risk-kernel-svc' || data.serviceId == 'telemetry-bus-svc')
+        && data.severity is string
+        && data.severity.size() >= 4
+        && data.severity.size() <= 12
+        && (data.severity == 'WARN' || data.severity == 'ERROR' || data.severity == 'CRITICAL')
+        && data.code is string
+        && data.code.size() >= 1
+        && data.code.size() <= 64
+        && data.message is string
+        && data.message.size() >= 1
+        && data.message.size() <= 320
+        && data.recoveryAction is string
+        && data.recoveryAction.size() >= 1
+        && data.recoveryAction.size() <= 240
+        && data.createdAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow create: if isValidId(userId)
+        && isVerified()
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isVerified()
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'updatedAt']);
+      allow delete: if false;
+
+      match /watchlist/{coinId} {
+        allow get: if isValidId(userId) && isValidId(coinId) && isOwner(userId);
+        allow list: if isValidId(userId) && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(coinId)
+          && isVerified()
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidWatchlistItem(incoming(), userId, coinId)
+          && incoming().createdAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(coinId)
+          && isVerified()
+          && isOwner(userId)
+          && isValidWatchlistItem(incoming(), userId, coinId)
+          && incoming().id == existing().id
+          && incoming().userId == existing().userId
+          && incoming().symbol == existing().symbol
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['notes']);
+        allow delete: if isValidId(userId) && isValidId(coinId) && isVerified() && isOwner(userId);
+      }
+
+      match /alerts/{alertId} {
+        allow get: if isValidId(userId) && isValidId(alertId) && isOwner(userId);
+        allow list: if isValidId(userId) && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(alertId)
+          && isVerified()
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidPriceAlert(incoming(), userId, alertId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(alertId)
+          && isVerified()
+          && isOwner(userId)
+          && isValidPriceAlert(incoming(), userId, alertId)
+          && incoming().id == existing().id
+          && incoming().userId == existing().userId
+          && incoming().symbol == existing().symbol
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['active', 'triggered', 'targetPrice', 'condition', 'emailNotify', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(alertId) && isVerified() && isOwner(userId);
+      }
+
+      match /workspaceConfig/{configId} {
+        allow get: if isValidId(userId) && isValidId(configId) && isOwner(userId);
+        allow list: if isValidId(userId) && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(configId)
+          && isVerified()
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidWorkspaceControlConfig(incoming(), userId, configId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(configId)
+          && isVerified()
+          && isOwner(userId)
+          && isValidWorkspaceControlConfig(incoming(), userId, configId)
+          && incoming().id == existing().id
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['checksum', 'toggles', 'updatedAt']);
+        allow delete: if false;
+      }
+
+      match /rollbackSnapshots/{snapshotId} {
+        allow get: if isValidId(userId) && isValidId(snapshotId) && isOwner(userId);
+        allow list: if isValidId(userId) && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(snapshotId)
+          && isVerified()
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidRollbackCheckpoint(incoming(), userId, snapshotId)
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isValidId(userId) && isValidId(snapshotId) && isVerified() && isOwner(userId);
+      }
+
+      match /errorLogs/{logId} {
+        allow get: if isValidId(userId) && isValidId(logId) && isOwner(userId);
+        allow list: if isValidId(userId) && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(logId)
+          && isVerified()
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidErrorAuditRecord(incoming(), userId, logId)
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isValidId(userId) && isValidId(logId) && isVerified() && isOwner(userId);
+      }
+    }
+  }
+}

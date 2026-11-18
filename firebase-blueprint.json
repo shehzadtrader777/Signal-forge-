@@ -1,0 +1,307 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated trader profile stored under private user scope.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "displayName", "createdAt", "updatedAt"]
+    },
+    "WatchlistItem": {
+      "title": "WatchlistItem",
+      "description": "A cryptocurrency pair tracked by the user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "symbol": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 16,
+          "pattern": "^[A-Z0-9]+$"
+        },
+        "coinName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "userId", "symbol", "coinName", "createdAt"]
+    },
+    "PriceAlert": {
+      "title": "PriceAlert",
+      "description": "User-configured target price alert for a crypto pair.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "symbol": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 16,
+          "pattern": "^[A-Z0-9]+$"
+        },
+        "condition": {
+          "type": "string",
+          "enum": ["ABOVE", "BELOW"]
+        },
+        "targetPrice": {
+          "type": "number"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "triggered": {
+          "type": "boolean"
+        },
+        "emailNotify": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "symbol",
+        "condition",
+        "targetPrice",
+        "active",
+        "triggered",
+        "emailNotify",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "WorkspaceControlConfig": {
+      "title": "WorkspaceControlConfig",
+      "description": "Persistent granular microservice control toggle matrix scoped strictly to verified owner.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "checksum": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 40
+        },
+        "toggles": {
+          "type": "object"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "userId", "checksum", "toggles", "createdAt", "updatedAt"]
+    },
+    "RollbackCheckpoint": {
+      "title": "RollbackCheckpoint",
+      "description": "Immutable configuration snapshot checkpoint for automated/manual rollback.",
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "version": {
+          "type": "number"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "checksum": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 40
+        },
+        "toggles": {
+          "type": "object"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["snapshotId", "userId", "version", "reason", "checksum", "toggles", "createdAt"]
+    },
+    "ErrorAuditRecord": {
+      "title": "ErrorAuditRecord",
+      "description": "Structured PII-masked microservice error event stored for operator forensics.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "serviceId": {
+          "type": "string",
+          "enum": [
+            "market-data-svc",
+            "ai-agents-svc",
+            "execution-router-svc",
+            "risk-kernel-svc",
+            "telemetry-bus-svc"
+          ]
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["WARN", "ERROR", "CRITICAL"]
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 320
+        },
+        "recoveryAction": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "correlationId",
+        "serviceId",
+        "severity",
+        "code",
+        "message",
+        "recoveryAction",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user profile isolated to the authenticated owner."
+    },
+    "/users/{userId}/watchlist/{coinId}": {
+      "schema": { "$ref": "#/entities/WatchlistItem" },
+      "description": "User watchlist coins."
+    },
+    "/users/{userId}/alerts/{alertId}": {
+      "schema": { "$ref": "#/entities/PriceAlert" },
+      "description": "User price alerts."
+    },
+    "/users/{userId}/workspaceConfig/{configId}": {
+      "schema": { "$ref": "#/entities/WorkspaceControlConfig" },
+      "description": "Persistent granular microservice control toggle matrix."
+    },
+    "/users/{userId}/rollbackSnapshots/{snapshotId}": {
+      "schema": { "$ref": "#/entities/RollbackCheckpoint" },
+      "description": "Immutable configuration rollback checkpoints."
+    },
+    "/users/{userId}/errorLogs/{logId}": {
+      "schema": { "$ref": "#/entities/ErrorAuditRecord" },
+      "description": "Structured PII-masked microservice error logs."
+    }
+  }
+}

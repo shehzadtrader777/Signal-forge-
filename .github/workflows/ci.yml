@@ -1,0 +1,80 @@
+name: Signal Forge Five-Phase Hardening CI/CD
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  five_phase_hardening:
+    name: Five-Phase Hardening & Zero-Disruption Release Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      # Phase 1: Structural & Dependency Invariants
+      - name: "Phase 1: Architectural & Dependency Integrity Gate"
+        run: npx tsx --test src/lib/architectureConstraints.test.ts
+
+      # Phase 2: Strict Type Safety
+      - name: "Phase 2: Strict TypeScript Compiler Gate"
+        run: npm run lint
+
+      # Phase 3: Unit, Structural Invariant, PIT Tripwire, FillModel & Property-Based Testing
+      - name: "Phase 3a: Blocking L1 PITFeed, L2 FillModel & Tripwire Look-Ahead Gate"
+        run: npx tsx --test src/lib/pitFeed.test.ts src/lib/fillModel.test.ts src/lib/backtest.test.ts
+
+      - name: "Phase 3a-WFV: L4 Walk-Forward & PG_v4 14-Conjunct Certification Gate"
+        run: npx tsx --test src/lib/pgV4Gate.test.ts
+
+      - name: "Phase 3a-Risk: 1:5 R:R Kernel, CPS & 6-Level Drawdown Gate"
+        run: npx tsx --test src/lib/riskEngine.test.ts src/lib/dataIntegrityAmendment.test.ts
+
+      - name: "Phase 3b: Full Unit & Property-Based Test Suite"
+        run: npm run test
+
+      # Phase 4: Production Bundle Build
+      - name: "Phase 4: Production Vite Build Gate"
+        run: npm run build
+
+      # Phase 5: Unified Zero-Disruption Verification
+      - name: "Phase 5: Full End-to-End Verify Gate"
+        run: npm run verify
+
+  cross_arch_fill_determinism:
+    name: Cross-Architecture FillModel Determinism (${{ matrix.os }})
+    needs: [five_phase_hardening]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify cross-host FillModel & vector digest
+        run: npx tsx --test src/lib/fillModel.test.ts
