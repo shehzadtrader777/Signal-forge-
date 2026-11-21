@@ -1,8 +1,9 @@
+import { memo, useMemo } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { TRACKED_COINS, formatCryptoPrice } from '../lib/marketData';
 
-export function LivePriceStrip() {
+export const LivePriceStrip = memo(function LivePriceStrip() {
   const {
     tickers,
     selectedSymbol,
@@ -16,12 +17,29 @@ export function LivePriceStrip() {
 
   const latencyReadout = telemetryMetrics.lastLatencyMs || telemetryMetrics.avgLatencyMs;
 
+  const tickerItems = useMemo(
+    () =>
+      TRACKED_COINS.map((coin) => {
+        const ticker = tickers[coin.symbol];
+        if (!ticker) return null;
+        return {
+          symbol: coin.symbol,
+          baseAsset: coin.baseAsset,
+          price: ticker.price,
+          change24hPercent: ticker.change24hPercent,
+        };
+      }).filter((item): item is NonNullable<typeof item> => item !== null),
+    [tickers]
+  );
+
   return (
     <section
       aria-label="Live Cryptocurrency Prices"
-      className="border-b border-slate-800/80 bg-[#0d1323]"
+      data-testid="live-price-strip"
+      className="border-b border-slate-800/80 bg-[#0d1323] forge-widget-contain"
     >
       <div className="mx-auto flex max-w-[1440px] items-center gap-3 px-4 py-2 sm:px-6 lg:px-8">
+        {/* Left Feed Anchor & Force Resync */}
         <div className="hidden sm:flex items-center gap-2.5 shrink-0 pr-3 border-r border-slate-800">
           <span
             className={`h-2 w-2 rounded-full ${
@@ -65,41 +83,54 @@ export function LivePriceStrip() {
           </button>
         </div>
 
-        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
-          {TRACKED_COINS.map((coin) => {
-            const t = tickers[coin.symbol];
-            if (!t) return null;
-            const isSelected = selectedSymbol === coin.symbol;
-            const isUp = t.change24hPercent >= 0;
-
-            return (
-              <button
-                key={coin.symbol}
-                type="button"
-                onClick={() => setSelectedSymbol(coin.symbol)}
-                className={`flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
-                  isSelected
-                    ? 'border-[#3b82f6] bg-[#3b82f6]/15 text-white'
-                    : 'border-slate-800/80 bg-[#111827] text-slate-300 hover:border-slate-700 hover:text-white'
-                }`}
+        {/* Continuously Animated Seamless Marquee Track */}
+        <div className="forge-ticker-marquee forge-ticker-mask relative flex-1 overflow-hidden py-0.5">
+          <div
+            data-testid="live-ticker-marquee-track"
+            className="forge-ticker-track items-center gap-2"
+          >
+            {[0, 1].map((dupIndex) => (
+              <div
+                key={dupIndex}
+                aria-hidden={dupIndex === 1 ? true : undefined}
+                className="flex items-center gap-2 pr-2 shrink-0"
               >
-                <span className="text-xs font-semibold tracking-tight">{coin.baseAsset}</span>
-                <span className="font-mono text-xs tabular-nums text-slate-100">
-                  ${formatCryptoPrice(t.price)}
-                </span>
-                <span
-                  className={`font-mono text-xs tabular-nums font-medium ${
-                    isUp ? 'text-emerald-400' : 'text-rose-400'
-                  }`}
-                >
-                  {isUp ? '+' : ''}
-                  {t.change24hPercent.toFixed(2)}%
-                </span>
-              </button>
-            );
-          })}
+                {tickerItems.map((item) => {
+                  const isSelected = selectedSymbol === item.symbol;
+                  const isUp = item.change24hPercent >= 0;
+
+                  return (
+                    <button
+                      key={`${dupIndex}-${item.symbol}`}
+                      type="button"
+                      tabIndex={dupIndex === 1 ? -1 : 0}
+                      onClick={() => setSelectedSymbol(item.symbol)}
+                      className={`flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
+                        isSelected
+                          ? 'border-[#3b82f6] bg-[#3b82f6]/15 text-white'
+                          : 'border-slate-800/80 bg-[#111827] text-slate-300 hover:border-slate-700 hover:text-white'
+                      }`}
+                    >
+                      <span className="text-xs font-semibold tracking-tight">{item.baseAsset}</span>
+                      <span className="font-mono text-xs tabular-nums text-slate-100">
+                        ${formatCryptoPrice(item.price)}
+                      </span>
+                      <span
+                        className={`font-mono text-xs tabular-nums font-medium ${
+                          isUp ? 'text-emerald-400' : 'text-rose-400'
+                        }`}
+                      >
+                        {isUp ? '+' : ''}
+                        {item.change24hPercent.toFixed(2)}%
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </section>
   );
-}
+});

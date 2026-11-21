@@ -1,7 +1,9 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+dotenv.config({ override: true });
 import express from 'express';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Resend } from 'resend';
@@ -139,6 +141,16 @@ import {
   type GuardProfileId,
 } from './src/lib/runtimeGuard';
 import {
+  DEVELOPER_AUDIT_BATCH_INTERVAL_MIN,
+  createPublicVerifiedTradeRecord,
+  diagnoseSystemAuditEvents,
+  evaluateDeveloperAuditDispatch,
+  normalizeTradingViewWebhook,
+  verifyPublicTradeId,
+  type PublicVerifiedTradeRecord,
+  type TradingViewWebhookSignal,
+} from './src/lib/multiAgentTradingArchitecture';
+import {
   DEFAULT_EXECUTION_ALGORITHM,
   EXECUTION_ALGORITHM_REGISTRY,
   FILL_MODEL_KERNEL_ARTIFACT,
@@ -194,6 +206,39 @@ import {
   type SubscriptionPrincipal,
 } from './src/lib/subscriptionGatekeeper';
 import {
+  buildRbacIdentity,
+  evaluateRbacAccess,
+  type RbacPermission,
+} from './src/lib/rbac';
+import {
+  ModularProfitTakingEngine,
+  type ProfitAgentId,
+} from './src/lib/modularProfitTaking';
+import {
+  optimizeBacktestParameters,
+  runComparativeSimulationMatrix,
+  type MatrixAgentStrategyId,
+} from './src/lib/modularBacktestEngine';
+import { MultiAgentStateSyncEngine } from './src/lib/agentSyncEngine';
+import {
+  ProfitScoopVaultEngine,
+  type ProfitThresholdMode,
+  type VaultActorType,
+  type VaultOverrideAction,
+} from './src/lib/profitVaultEngine';
+import { TokenBucketLimiter } from './src/lib/tokenBucketLimiter';
+import {
+  SelfHealingSupervisor,
+  YearnLockedProfitDegradation,
+  type MarketDebateContext,
+} from './src/lib/multiAgentDebateEngine';
+import {
+  GeminiServiceError,
+  getGeminiConfigurationHealth,
+  runGroundedMarketSearch,
+  runMultiAgentDebateDecision,
+} from './src/services/geminiDebateService';
+import {
   ORDERED_MICROSERVICE_IDS,
   type ErrorSeverity,
   type FailoverNodeRole,
@@ -204,6 +249,56 @@ import {
   verifyFirebaseIdToken,
 } from './src/services/firebaseAuthVerifier';
 import { GLOBAL_MICROSERVICE_COORDINATOR } from './src/services/microserviceCoordinator';
+import {
+  classifyLatencyStatus,
+  computeCpuUsagePercent,
+  computeNextDailyAuditIso,
+  computeRiskRewardRatio,
+  formatDailyAuditReportMessage,
+  formatDeveloperAuditMessage,
+  formatPublicSignalMessage,
+  getUtcDateKey,
+  maskChatId,
+  maskTelegramToken,
+  parseTelegramWebhookUpdate,
+  shouldTriggerDailyAudit,
+  type DailyAuditReportSummary,
+  type ModuleLatencyMetric,
+  type StructuredTradeSignalAlert,
+  type SystemAuditLogEntry,
+  type SystemHealthParameters,
+  type TelegramDualStreamStatus,
+  type TelegramWebhookInboundEvent,
+} from './src/lib/telegramStreams';
+import {
+  DEFAULT_SPAM_FILTER_CONFIG,
+  buildOutboundWebhookPayload,
+  evaluateSignalSpamFilter,
+  extractTradingAlertParams,
+  maskWebhookUrl,
+  type IncomingTradingAlertInput,
+  type OutboundMakeWebhookPayload,
+  type ProcessedSignalRecord,
+  type SignalLifecycleStatus,
+  type SignalProcessorStatusSnapshot,
+  type SpamFilterHistoryEntry,
+  type TpMilestone,
+} from './src/lib/signalProcessor';
+import {
+  EntryZoneExecutionValidator,
+  PrePumpSupportExecutionModule,
+  TelegramDispatchStabilizer,
+  computeEntryZoneBounds,
+  evaluateExecutedPositionLifecycle,
+  type BackendExecutedOrderLog,
+  type BackendExecutionPipelineSnapshot,
+  type EntryZoneSignalCandidate,
+} from './src/lib/executionPipeline';
+import { AgenticCliGatewayRuntime } from './src/lib/agenticCliGatewayServer';
+import { FableOrchestratorRuntime } from './src/lib/fableOrchestratorServer';
+import { FreqtradeCoreServerRuntime } from './src/lib/freqtradeCoreServer';
+import { isSupportedExchange } from './src/lib/freqtradeCoreEngine';
+import { HybridArchitectureServerRuntime } from './src/lib/hybridArchitectureServer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -489,6 +584,77 @@ function requirePremiumSubscription(capability: CapabilityClass) {
     }
     (req as express.Request & { subscriberPrincipal?: SubscriptionPrincipal }).subscriberPrincipal =
       principal;
+    return next();
+  };
+}
+
+const extraAdminEmailsFromEnv = (process.env.ADMIN_EMAIL_ALLOWLIST || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const modularProfitTakingEngine = new ModularProfitTakingEngine();
+const multiAgentSyncEngine = new MultiAgentStateSyncEngine();
+const profitVaultEngine = new ProfitScoopVaultEngine(25_000);
+const apiTokenBucketLimiter = new TokenBucketLimiter({
+  rpm: Number(process.env.RATE_LIMIT_RPM) || 200,
+  burst: Number(process.env.RATE_LIMIT_BURST) || 50,
+});
+const yearnProfitDegradation = new YearnLockedProfitDegradation(
+  Number(process.env.VAULT_UNLOCK_HOURS) || 6
+);
+yearnProfitDegradation.reportGain(profitVaultEngine.getSnapshot().lockedVaultBalanceUsd);
+const selfHealingSupervisor = new SelfHealingSupervisor(2, 30);
+const agenticCliGateway = new AgenticCliGatewayRuntime(__dirname);
+const fableOrchestrator = new FableOrchestratorRuntime(__dirname);
+const freqtradeCore = new FreqtradeCoreServerRuntime(__dirname);
+const hybridArchitecture = new HybridArchitectureServerRuntime(__dirname);
+
+function tokenBucketRateLimit(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  const identity =
+    (typeof req.headers['x-forwarded-for'] === 'string'
+      ? req.headers['x-forwarded-for'].split(',')[0].trim()
+      : req.ip) || 'operator';
+  const result = apiTokenBucketLimiter.consume(identity);
+  res.setHeader('X-RateLimit-Limit', String(result.limitRpm));
+  res.setHeader('X-RateLimit-Burst', String(result.limitBurst));
+  res.setHeader('X-RateLimit-Remaining', String(result.remainingTokens));
+  if (!result.allowed) {
+    res.setHeader('Retry-After', String(result.retryAfterSec));
+    return res.status(429).json({
+      ok: false,
+      code: 'RATE_LIMIT_EXCEEDED',
+      error: `Token bucket rate limit exceeded (${result.limitRpm} RPM / ${result.limitBurst} burst). Retry in ${result.retryAfterSec}s.`,
+      retryAfterSec: result.retryAfterSec,
+    });
+  }
+  return next();
+}
+
+function requireRbacPermission(permission: RbacPermission) {
+  return async (
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction
+  ) => {
+    const principal = await resolveCallerPrincipal(req);
+    const identity = buildRbacIdentity(principal, extraAdminEmailsFromEnv);
+    const decision = evaluateRbacAccess(identity, permission);
+    if (!decision.allowed) {
+      return res.status(decision.httpStatus).json({
+        ok: false,
+        code: decision.code,
+        role: decision.role,
+        requiredPermission: decision.requiredPermission,
+        rbacDenied: true,
+        error: decision.reason,
+      });
+    }
+    (req as express.Request & { rbacIdentity?: typeof identity }).rbacIdentity = identity;
     return next();
   };
 }
@@ -1596,13 +1762,861 @@ const previousGainerSnapshot = new Map<string, { rank: number; change: number }>
 const lastGainerAlertTime = new Map<string, number>();
 
 let discoveredTelegramChatId: string | null = null;
+let boundDeveloperChatId: string | null =
+  process.env.DEVELOPER_CHAT_ID || process.env.TELEGRAM_DEV_CHAT_ID || null;
+let autoBoundDeveloperViaWebhook = false;
+
+const CONTINUOUS_AUDIT_INTERVAL_SEC = 60;
+let dailyAuditAutoDeliveryEnabled = true;
+let dailyAuditScheduledUtcHour = Math.max(
+  0,
+  Math.min(23, Number(process.env.TELEGRAM_DAILY_AUDIT_UTC_HOUR ?? 0) || 0)
+);
+let lastDailyAuditDateUtc: string | null = null;
+let lastDailyAuditSentAt: string | null = null;
+let dailyAuditReportsDispatchedTotal = 0;
+
+let telegramWebhookRegistered = false;
+let telegramWebhookUrl: string | null = null;
+let telegramWebhookLastRegisteredAt: string | null = null;
+let telegramWebhookLastInboundAt: string | null = null;
+let telegramWebhookTotalInbound = 0;
+let telegramWebhookLastError: string | null = null;
+
+const publicSignalStreamLog: StructuredTradeSignalAlert[] = [];
+const developerAuditStreamLog: SystemAuditLogEntry[] = [];
+const recentWebhookEventsLog: TelegramWebhookInboundEvent[] = [];
+const rolling24hAuditSamples: Array<{
+  tsMs: number;
+  cpuUsagePct: number;
+  memoryRssMb: number;
+  eventLoopLagMs: number;
+  peakModuleLatencyMs: number;
+  slowestModuleLabel: string;
+}> = [];
+
+let lastCpuSample = process.cpuUsage();
+let lastCpuSampleAtMs = Date.now();
+let lastComputedCpuPct = 4.2;
 
 function getTelegramBotToken(): string | undefined {
-  return process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || undefined;
+  return process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || undefined;
+}
+
+function getPublicChannelChatId(): string {
+  return (
+    process.env.CHAT_ID ||
+    process.env.TELEGRAM_CHAT_ID ||
+    process.env.TELEGRAM_CHANNEL_ID ||
+    ''
+  ).trim();
+}
+
+function getDeveloperPrivateChatId(): string {
+  return (
+    boundDeveloperChatId ||
+    process.env.DEVELOPER_CHAT_ID ||
+    process.env.TELEGRAM_DEV_CHAT_ID ||
+    ''
+  ).trim();
+}
+
+function getMakeWebhookUrl(): string {
+  return (process.env.MAKE_WEBHOOK_URL || '').trim();
+}
+
+function getWebhookBotToken(): string {
+  return (process.env.WEBHOOK_BOT_TOKEN || getTelegramBotToken() || '').trim();
+}
+
+const signalSpamHistory: SpamFilterHistoryEntry[] = [];
+const processedSignalsLog: ProcessedSignalRecord[] = [];
+const filteredSpamSignalsLog: ProcessedSignalRecord[] = [];
+let signalProcessorReceivedTotal = 0;
+let signalProcessorTransmittedTotal = 0;
+let signalProcessorSpamFilteredTotal = 0;
+let signalProcessorWebhookDeliveredTotal = 0;
+let signalProcessorMilestoneUpdatesTotal = 0;
+
+async function transmitToMakeWebhook(payload: OutboundMakeWebhookPayload): Promise<{
+  ok: boolean;
+  httpStatus: number | null;
+  latencyMs: number;
+  error: string | null;
+}> {
+  const url = getMakeWebhookUrl();
+  if (!url) {
+    return {
+      ok: false,
+      httpStatus: null,
+      latencyMs: 0,
+      error: 'MAKE_WEBHOOK_URL not configured in server environment.',
+    };
+  }
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5500);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Signal-Forge-Chat-Id': payload.chat_id,
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    const latencyMs = Math.max(1, Date.now() - startedAt);
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => '');
+      return {
+        ok: false,
+        httpStatus: response.status,
+        latencyMs,
+        error: `Webhook HTTP ${response.status}${bodyText ? `: ${bodyText.slice(0, 120)}` : ''}`,
+      };
+    }
+    return {
+      ok: true,
+      httpStatus: response.status,
+      latencyMs,
+      error: null,
+    };
+  } catch (err) {
+    const latencyMs = Math.max(1, Date.now() - startedAt);
+    return {
+      ok: false,
+      httpStatus: null,
+      latencyMs,
+      error: err instanceof Error ? err.message : 'Outbound webhook network error',
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function buildSignalProcessorStatus(): SignalProcessorStatusSnapshot {
+  const webhookUrl = getMakeWebhookUrl();
+  const targetChatId = getPublicChannelChatId() || '-1008928895086';
+  return {
+    ok: true,
+    webhookConfigured: Boolean(webhookUrl),
+    maskedWebhookUrl: maskWebhookUrl(webhookUrl),
+    targetChatId,
+    maskedBotToken: maskTelegramToken(getWebhookBotToken()),
+    spamFilterConfig: DEFAULT_SPAM_FILTER_CONFIG,
+    stats: {
+      totalReceived: signalProcessorReceivedTotal,
+      totalTransmitted: signalProcessorTransmittedTotal,
+      totalSpamFiltered: signalProcessorSpamFilteredTotal,
+      totalWebhookDelivered: signalProcessorWebhookDeliveredTotal,
+      totalMilestoneUpdates: signalProcessorMilestoneUpdatesTotal,
+    },
+    recentProcessed: processedSignalsLog.slice(0, 30),
+    recentFiltered: filteredSpamSignalsLog.slice(0, 30),
+  };
+}
+
+async function processAndTransmitTradingAlert(
+  input: IncomingTradingAlertInput
+): Promise<
+  | {
+      ok: false;
+      error: string;
+      status: SignalProcessorStatusSnapshot;
+    }
+  | {
+      ok: true;
+      filtered: boolean;
+      record: ProcessedSignalRecord;
+      structuredSignal?: StructuredTradeSignalAlert;
+      status: SignalProcessorStatusSnapshot;
+    }
+> {
+  signalProcessorReceivedTotal += 1;
+  const symGuess = String(input.symbol || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  const fallbackPrice =
+    (symGuess && spotFeedCache[symGuess]?.price) ||
+    (symGuess && !symGuess.endsWith('USDT') && spotFeedCache[`${symGuess}USDT`]?.price) ||
+    0;
+
+  const extracted = extractTradingAlertParams(input, fallbackPrice);
+  if (!extracted.ok) {
+    return {
+      ok: false,
+      error: extracted.error,
+      status: buildSignalProcessorStatus(),
+    };
+  }
+
+  const card = extracted.card;
+  const targetChatId = getPublicChannelChatId() || '-1008928895086';
+  const nowMs = Date.now();
+  const spamVerdict = evaluateSignalSpamFilter(
+    card,
+    signalSpamHistory,
+    nowMs,
+    DEFAULT_SPAM_FILTER_CONFIG
+  );
+
+  if (!spamVerdict.allowed) {
+    signalProcessorSpamFilteredTotal += 1;
+    const rejectedRecord: ProcessedSignalRecord = {
+      ...card,
+      filteredOut: true,
+      spamVerdict,
+      targetChatId,
+      webhookDispatched: false,
+      webhookHttpStatus: null,
+      webhookLatencyMs: null,
+      webhookError: null,
+      telegramMirrorDelivered: false,
+      transmittedAt: null,
+    };
+    filteredSpamSignalsLog.unshift(rejectedRecord);
+    if (filteredSpamSignalsLog.length > 60) filteredSpamSignalsLog.length = 60;
+    return {
+      ok: true,
+      filtered: true,
+      record: rejectedRecord,
+      status: buildSignalProcessorStatus(),
+    };
+  }
+
+  // Record in anti-spam rolling window BEFORE network I/O to eliminate duplicate race windows
+  signalSpamHistory.unshift({
+    signalId: card.signalId,
+    symbol: card.symbol,
+    direction: card.direction,
+    fingerprint: card.fingerprint,
+    lifecycleStatus: card.lifecycleStatus,
+    hitTpMilestones: card.hitTpMilestones,
+    timestampMs: nowMs,
+  });
+  if (signalSpamHistory.length > 400) signalSpamHistory.length = 400;
+
+  const outboundPayload = buildOutboundWebhookPayload(card, {
+    chatId: targetChatId,
+    botToken: getWebhookBotToken(),
+    channelName: 'Signal Forge',
+  });
+
+  const webhookRes = await transmitToMakeWebhook(outboundPayload);
+  const tgMirrorRes = await sendTelegramRawMessage({
+    chatId: targetChatId,
+    text: card.formattedCard,
+  });
+
+  const transmittedAt = new Date().toISOString();
+  signalProcessorTransmittedTotal += 1;
+  if (webhookRes.ok) signalProcessorWebhookDeliveredTotal += 1;
+  if (outboundPayload.event_type === 'MILESTONE_PNL_UPDATE') {
+    signalProcessorMilestoneUpdatesTotal += 1;
+  }
+
+  const record: ProcessedSignalRecord = {
+    ...card,
+    filteredOut: false,
+    spamVerdict,
+    targetChatId,
+    webhookDispatched: webhookRes.ok,
+    webhookHttpStatus: webhookRes.httpStatus,
+    webhookLatencyMs: webhookRes.latencyMs,
+    webhookError: webhookRes.error,
+    telegramMirrorDelivered: tgMirrorRes.ok,
+    transmittedAt,
+  };
+
+  processedSignalsLog.unshift(record);
+  if (processedSignalsLog.length > 60) processedSignalsLog.length = 60;
+
+  // Keep Stream 1 public alert feed & legacy Telegram channel feed synchronized
+  const deliveredAny = webhookRes.ok || tgMirrorRes.ok;
+  const qItem = telegramDispatchStabilizer.enqueue({
+    signalId: record.signalId,
+    symbol: record.symbol,
+    direction: record.direction,
+    targetChatId,
+    payloadText: record.formattedCard,
+  });
+  telegramDispatchStabilizer.recordAttemptResult(qItem.queueId, {
+    ok: deliveredAny,
+    httpStatus: webhookRes.httpStatus ?? (tgMirrorRes.ok ? 200 : null),
+    error: deliveredAny ? null : webhookRes.error || tgMirrorRes.errorDetail,
+  });
+
+  const structuredSignal: StructuredTradeSignalAlert = {
+    id: record.signalId,
+    stream: 'PUBLIC_SIGNAL',
+    channelName: 'Signal Forge',
+    targetChatId,
+    symbol: record.symbol,
+    direction: record.direction,
+    entryPrice: record.entryPrice,
+    exitPrice: record.exitPrice,
+    stopLoss: record.stopLoss,
+    confidence: record.confidence,
+    riskRewardRatio: record.riskRewardRatio,
+    timeframe: record.timeframe,
+    rationale: record.rationale,
+    formattedMessage: record.formattedCard,
+    deliveredViaBot: deliveredAny,
+    deliveryStatus: deliveredAny ? 'DELIVERED' : 'QUEUED_FALLBACK',
+    errorDetail: deliveredAny ? null : webhookRes.error || tgMirrorRes.errorDetail,
+    timestamp: transmittedAt,
+  };
+  publicSignalStreamLog.unshift(structuredSignal);
+  if (publicSignalStreamLog.length > 60) publicSignalStreamLog.length = 60;
+
+  telegramChannelFeed.unshift({
+    id: record.signalId,
+    channelName: 'Signal Forge',
+    symbol: record.symbol,
+    direction: record.direction,
+    confidence: record.confidence,
+    message: record.formattedCard,
+    deliveredViaBot: deliveredAny,
+    timestamp: transmittedAt,
+  });
+  if (telegramChannelFeed.length > 40) telegramChannelFeed.length = 40;
+
+  return {
+    ok: true,
+    filtered: false,
+    record,
+    structuredSignal,
+    status: buildSignalProcessorStatus(),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Backend Event Pipeline: Entry Zone Validation, Automated Order Execution,
+// Pre-Pump Continuous Support & Hold-Until-Max-Profit Engine, Telegram Retry
+// ---------------------------------------------------------------------------
+const entryZoneValidator = new EntryZoneExecutionValidator();
+const prePumpSupportEngine = new PrePumpSupportExecutionModule();
+const telegramDispatchStabilizer = new TelegramDispatchStabilizer();
+
+const activeEntryZoneSignals: EntryZoneSignalCandidate[] = [];
+const backendExecutedOrdersLog: BackendExecutedOrderLog[] = [];
+let backendPipelineEpoch = 0;
+let backendPipelineTicks = 0;
+let backendPipelineAvgLatencyMs = 1.4;
+
+function getLivePriceLookupMap(): Record<string, number> {
+  const map: Record<string, number> = {};
+  for (const [sym, tick] of Object.entries(spotFeedCache)) {
+    if (tick && Number.isFinite(tick.price) && tick.price > 0) {
+      map[sym] = tick.price;
+    }
+  }
+  for (const g of topGainersCache) {
+    if (!map[g.symbol] && Number.isFinite(g.price) && g.price > 0) {
+      map[g.symbol] = g.price;
+    }
+  }
+  return map;
+}
+
+function seedOrRefreshEntryZoneCandidates(): void {
+  const liveMap = getLivePriceLookupMap();
+  const existingKeys = new Set(activeEntryZoneSignals.map((s) => `${s.symbol}_${s.direction}`));
+  const openExecSymbols = new Set(
+    backendExecutedOrdersLog
+      .filter((o) => o.status === 'OPEN_EXECUTED')
+      .map((o) => o.symbol)
+  );
+
+  // Build structural Entry Zone candidates anchored slightly away from live spot so
+  // cards demonstrate strict Entry Zone gating until price enters the zone.
+  const seedSymbols = [
+    ...TRACKED_COINS.slice(0, 6).map((c, idx) => ({
+      symbol: c.symbol,
+      coinName: c.name,
+      direction: (idx % 3 === 1 ? 'SELL' : 'BUY') as 'BUY' | 'SELL',
+      offsetPct: idx % 3 === 1 ? 0.85 : -0.75,
+      sourceModule: 'AI_ENGINE' as const,
+      isPrePump: false,
+      prePumpScore: undefined as number | undefined,
+    })),
+    ...topGainersCache.slice(0, 3).map((g) => ({
+      symbol: g.symbol,
+      coinName: g.name,
+      direction: 'BUY' as const,
+      offsetPct: -0.55,
+      sourceModule: 'PRE_PUMP_SUPPORT' as const,
+      isPrePump: true,
+      prePumpScore: g.prePumpScore ?? 84,
+    })),
+  ];
+
+  for (const item of seedSymbols) {
+    if (activeEntryZoneSignals.length >= 8) break;
+    const key = `${item.symbol}_${item.direction}`;
+    if (existingKeys.has(key) || openExecSymbols.has(item.symbol)) continue;
+    const livePrice = liveMap[item.symbol];
+    if (!Number.isFinite(livePrice) || livePrice <= 0) continue;
+
+    const precision = livePrice >= 1000 ? 2 : livePrice >= 1 ? 4 : 6;
+    const entryPrice = Number((livePrice * (1 + item.offsetPct / 100)).toFixed(precision));
+    const entryZone = computeEntryZoneBounds(entryPrice, 0.42);
+    const sign = item.direction === 'BUY' ? 1 : -1;
+    const stopLoss = Number((entryPrice * (1 - sign * 0.018)).toFixed(precision));
+    const riskDist = Math.max(Math.abs(entryPrice - stopLoss), entryPrice * 0.008);
+    const tp1 = Number((entryPrice + sign * riskDist * 2.0).toFixed(precision));
+    const tp2 = Number((entryPrice + sign * riskDist * 3.5).toFixed(precision));
+    const tp3 = Number((entryPrice + sign * riskDist * 5.2).toFixed(precision));
+
+    activeEntryZoneSignals.push({
+      signalId: `ez_${item.symbol}_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+      symbol: item.symbol,
+      coinName: item.coinName,
+      direction: item.direction,
+      timeframe: '4h',
+      entryPrice,
+      entryZone,
+      stopLoss,
+      takeProfits: [tp1, tp2, tp3],
+      confidence: item.isPrePump ? 91 : 88,
+      sourceModule: item.sourceModule,
+      reason: item.isPrePump
+        ? `Pre-Pump Support Zone anchored at $${entryPrice}; holds strictly until TP3 max target $${tp3}.`
+        : `Structural ${item.direction === 'BUY' ? 'demand' : 'supply'} Entry Zone [$${entryZone.low}–$${entryZone.high}] · 1:5.2 R:R verified.`,
+      isPrePump: item.isPrePump,
+      prePumpScore: item.prePumpScore,
+      supportPrice: item.isPrePump ? entryPrice : undefined,
+      holdUntilMaxTarget: item.isPrePump,
+      createdAt: new Date().toISOString(),
+    });
+    existingKeys.add(key);
+  }
+}
+
+async function executeCandidateIntoBackendLog(
+  candidate: EntryZoneSignalCandidate,
+  fillPrice: number,
+  notionalUsd = 1500
+): Promise<BackendExecutedOrderLog> {
+  const executedAt = new Date().toISOString();
+  const order: BackendExecutedOrderLog = {
+    executionId: `exec_${candidate.symbol}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    signalId: candidate.signalId,
+    symbol: candidate.symbol,
+    direction: candidate.direction,
+    sourceModule: candidate.sourceModule,
+    entryPrice: candidate.entryPrice,
+    executedPrice: fillPrice,
+    entryZone: candidate.entryZone,
+    stopLoss: candidate.stopLoss,
+    takeProfits: candidate.takeProfits,
+    maxProfitTarget: candidate.takeProfits[2],
+    notionalUsd,
+    leverage: 1,
+    status: 'OPEN_EXECUTED',
+    holdUntilMaxTarget: candidate.holdUntilMaxTarget,
+    earlyLiquidationBlockedCount: 0,
+    currentPrice: fillPrice,
+    progressToMaxTargetPct: 0,
+    unrealizedPnlUsd: 0,
+    unrealizedPnlPercent: 0,
+    realizedPnlUsd: null,
+    realizedPnlPercent: null,
+    executedAt,
+    closedAt: null,
+    exitReason: null,
+    telegramDispatched: false,
+  };
+
+  // Transition executed card OFF the active dashboard list into Backend Execution Logs
+  const idx = activeEntryZoneSignals.findIndex((s) => s.signalId === candidate.signalId);
+  if (idx >= 0) {
+    activeEntryZoneSignals.splice(idx, 1);
+  }
+
+  backendExecutedOrdersLog.unshift(order);
+  if (backendExecutedOrdersLog.length > 80) {
+    backendExecutedOrdersLog.length = 80;
+  }
+
+  // Stabilized real-time signal dispatch via Make.com Webhook + Telegram Bot mirror
+  const relayRes = await processAndTransmitTradingAlert({
+    source: 'AUTOMATED',
+    symbol: order.symbol,
+    direction: order.direction,
+    timeframe: candidate.timeframe,
+    entryPrice: order.executedPrice,
+    takeProfits: order.takeProfits,
+    exitPrice: order.maxProfitTarget,
+    stopLoss: order.stopLoss,
+    confidence: candidate.confidence,
+    rationale: order.holdUntilMaxTarget
+      ? `Pre-Pump Support Auto-Executed @ $${fillPrice} · HOLD UNTIL MAX TARGET ($${order.maxProfitTarget})`
+      : `Entry Zone Validated & Auto-Executed @ $${fillPrice} · Archived to Backend Execution Log`,
+  }).catch(() => null);
+
+  if (relayRes && relayRes.ok && !relayRes.filtered) {
+    order.telegramDispatched =
+      relayRes.record.webhookDispatched || relayRes.record.telegramMirrorDelivered;
+  }
+
+  return order;
+}
+
+async function flushTelegramStabilizerQueue(): Promise<number> {
+  const due = telegramDispatchStabilizer.getDueRetryItems(Date.now());
+  let processedCount = 0;
+  for (const item of due.slice(0, 5)) {
+    processedCount += 1;
+    const webhookRes = await transmitToMakeWebhook({
+      event_type: 'SIGNAL_CARD',
+      chat_id: item.targetChatId,
+      bot_token: getWebhookBotToken(),
+      channel_name: 'Signal Forge',
+      signal_id: item.signalId,
+      source: 'AUTOMATED',
+      pair: item.symbol,
+      direction: item.direction,
+      timeframe: '4h',
+      entry_price: spotFeedCache[item.symbol]?.price ?? 0,
+      take_profits: { tp1: 0, tp2: 0, tp3: 0 },
+      exit_price: 0,
+      stop_loss: 0,
+      confidence_score: 90,
+      risk_reward_ratio: 5,
+      hit_tp_milestones: [],
+      final_pnl_usd: null,
+      final_pnl_percent: null,
+      lifecycle_status: 'OPEN',
+      signal_card: item.payloadText,
+      text: item.payloadText,
+      timestamp: new Date().toISOString(),
+    });
+    const tgRes = await sendTelegramRawMessage({
+      chatId: item.targetChatId,
+      text: item.payloadText,
+    });
+    const ok = webhookRes.ok || tgRes.ok;
+    telegramDispatchStabilizer.recordAttemptResult(item.queueId, {
+      ok,
+      httpStatus: webhookRes.httpStatus ?? (tgRes.ok ? 200 : null),
+      error: ok ? null : webhookRes.error || tgRes.errorDetail,
+    });
+  }
+  return processedCount;
+}
+
+async function runBackendExecutionPipelineSweep(): Promise<void> {
+  const started = Date.now();
+  seedOrRefreshEntryZoneCandidates();
+  const liveMap = getLivePriceLookupMap();
+
+  // 1. Strict Entry Zone Validation -> auto-execute valid signals & remove from active grid
+  const snapshotCandidates = [...activeEntryZoneSignals];
+  for (const cand of snapshotCandidates) {
+    const livePrice = liveMap[cand.symbol];
+    if (!Number.isFinite(livePrice) || livePrice <= 0) continue;
+    const evalRes = entryZoneValidator.evaluate({ candidate: cand, livePrice });
+    if (evalRes.shouldAutoExecute && appLiveEnabled) {
+      await executeCandidateIntoBackendLog(cand, livePrice, 1500);
+    }
+  }
+
+  // 2. Continuous Pre-Pump / Top Gainer Support Monitoring & Immediate Support Execution
+  const activePosBySym: Record<string, BackendExecutedOrderLog> = {};
+  for (const ord of backendExecutedOrdersLog) {
+    if (!activePosBySym[ord.symbol] && ord.status === 'OPEN_EXECUTED') {
+      activePosBySym[ord.symbol] = ord;
+    }
+  }
+  const prePumpList = prePumpSupportEngine.process({
+    topGainers: topGainersCache,
+    livePriceMap: liveMap,
+    activePositionsBySymbol: activePosBySym,
+  });
+
+  const openPrePumpCount = backendExecutedOrdersLog.filter(
+    (o) => o.status === 'OPEN_EXECUTED' && o.holdUntilMaxTarget
+  ).length;
+  if (appLiveEnabled && openPrePumpCount < 3) {
+    const eligible = prePumpList.find((c) => c.autoExecuteEligible && c.prePumpScore >= 76);
+    if (eligible) {
+      const prePumpCandidate: EntryZoneSignalCandidate = {
+        signalId: `prepump_${eligible.symbol}_${Date.now()}`,
+        symbol: eligible.symbol,
+        coinName: eligible.baseAsset,
+        direction: 'BUY',
+        timeframe: '15m',
+        entryPrice: eligible.supportLevel,
+        entryZone: computeEntryZoneBounds(eligible.supportLevel, 0.75),
+        stopLoss: eligible.stopLoss,
+        takeProfits: eligible.takeProfits,
+        confidence: Math.min(97, eligible.prePumpScore),
+        sourceModule: 'PRE_PUMP_SUPPORT',
+        reason: `Pre-Pump #${eligible.gainerRank} Support Confirmed @ $${eligible.supportLevel} · Forced Hold Until Max Target ($${eligible.resistanceTargetMax}).`,
+        isPrePump: true,
+        prePumpScore: eligible.prePumpScore,
+        supportPrice: eligible.supportLevel,
+        holdUntilMaxTarget: true,
+        createdAt: new Date().toISOString(),
+      };
+      await executeCandidateIntoBackendLog(prePumpCandidate, eligible.livePrice, 2000);
+    }
+  }
+
+  // 3. Enforce Hold-Until-Max-Profit Lifecycle on all open executed orders
+  for (let i = 0; i < backendExecutedOrdersLog.length; i += 1) {
+    const ord = backendExecutedOrdersLog[i];
+    if (ord.status !== 'OPEN_EXECUTED') continue;
+    const livePrice = liveMap[ord.symbol];
+    if (!Number.isFinite(livePrice) || livePrice <= 0) continue;
+    const lifecycle = evaluateExecutedPositionLifecycle(ord, livePrice);
+    backendExecutedOrdersLog[i] = lifecycle.updated;
+    if (lifecycle.liquidatedNow) {
+      if (
+        typeof lifecycle.updated.realizedPnlUsd === 'number' &&
+        Number.isFinite(lifecycle.updated.realizedPnlUsd)
+      ) {
+        profitVaultEngine.ingestRealizedTrade({
+          tradeId: `exec_${lifecycle.updated.executionId}`,
+          symbol: lifecycle.updated.symbol,
+          realizedPnlUsd: lifecycle.updated.realizedPnlUsd,
+          sourceAgent: lifecycle.updated.sourceModule || 'BACKEND_EXECUTION_PIPELINE',
+        });
+      }
+      processAndTransmitTradingAlert({
+        source: 'AUTOMATED',
+        symbol: lifecycle.updated.symbol,
+        direction: lifecycle.updated.direction,
+        entryPrice: lifecycle.updated.executedPrice,
+        takeProfits: lifecycle.updated.takeProfits,
+        exitPrice: livePrice,
+        stopLoss: lifecycle.updated.stopLoss,
+        confidence: 95,
+        hitTpMilestones:
+          lifecycle.updated.status === 'LIQUIDATED_MAX_PROFIT' ? ['TP1', 'TP2', 'TP3'] : [],
+        finalPnlUsd: lifecycle.updated.realizedPnlUsd,
+        finalPnlPercent: lifecycle.updated.realizedPnlPercent,
+        lifecycleStatus:
+          lifecycle.updated.status === 'LIQUIDATED_MAX_PROFIT' ? 'CLOSED_TP' : 'CLOSED_SL',
+        rationale: lifecycle.updated.exitReason || 'Automated Max-Target Liquidation',
+      }).catch(() => undefined);
+    }
+  }
+
+  // 4. Process due Telegram stabilizer retries
+  await flushTelegramStabilizerQueue().catch(() => 0);
+
+  const elapsed = Math.max(0.2, Date.now() - started);
+  backendPipelineTicks += 1;
+  backendPipelineEpoch += 1;
+  backendPipelineAvgLatencyMs = Number(
+    (backendPipelineAvgLatencyMs * 0.8 + elapsed * 0.2).toFixed(2)
+  );
+
+  // 5. Enforce monotonic cross-agent state synchronization anchored to authoritative live Binance WS price
+  const syncLiveMap = getLivePriceLookupMap();
+  const anchorPrice = syncLiveMap['BTCUSDT'] ?? Object.values(syncLiveMap)[0] ?? 91500;
+  multiAgentSyncEngine.process({
+    symbol: 'BTCUSDT',
+    authoritativePrice: anchorPrice,
+    epoch: backendPipelineEpoch,
+  });
+}
+
+function buildBackendExecutionPipelineSnapshot(): BackendExecutionPipelineSnapshot {
+  seedOrRefreshEntryZoneCandidates();
+  const liveMap = getLivePriceLookupMap();
+
+  const activeAwaitingSignals = activeEntryZoneSignals.map((cand) => {
+    const livePrice = liveMap[cand.symbol] ?? cand.entryPrice;
+    const evaluation = entryZoneValidator.evaluate({ candidate: cand, livePrice });
+    return { ...cand, evaluation };
+  });
+
+  const activePosBySym: Record<string, BackendExecutedOrderLog> = {};
+  for (const ord of backendExecutedOrdersLog) {
+    if (!activePosBySym[ord.symbol] && ord.status === 'OPEN_EXECUTED') {
+      activePosBySym[ord.symbol] = ord;
+    }
+  }
+
+  const prePumpSupportMonitor = prePumpSupportEngine.process({
+    topGainers: topGainersCache,
+    livePriceMap: liveMap,
+    activePositionsBySymbol: activePosBySym,
+  });
+
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    pipelineEpoch: backendPipelineEpoch,
+    aiActivityPulse: {
+      activeModels: 5,
+      ticksProcessed: backendPipelineTicks,
+      avgPipelineLatencyMs: backendPipelineAvgLatencyMs,
+      wsBatchIntervalMs: 16,
+      status: appLiveEnabled ? 'STREAMING' : 'CALIBRATING',
+    },
+    moduleHealth: [prePumpSupportEngine.healthCheck()],
+    activeAwaitingSignals,
+    executedOrdersLog: backendExecutedOrdersLog.slice(0, 40),
+    prePumpSupportMonitor,
+    telegramStabilizer: telegramDispatchStabilizer.getSnapshot(),
+  };
+}
+
+setInterval(() => {
+  if (!appLiveEnabled) return;
+  runBackendExecutionPipelineSweep().catch(() => undefined);
+}, 12_000);
+
+function getTelegramWebhookSecret(): string {
+  if (process.env.TELEGRAM_WEBHOOK_SECRET && process.env.TELEGRAM_WEBHOOK_SECRET.trim()) {
+    return process.env.TELEGRAM_WEBHOOK_SECRET.trim();
+  }
+  const token = getTelegramBotToken();
+  if (!token) return '';
+  return crypto
+    .createHmac('sha256', SESSION_SIGNING_KEY)
+    .update(`tg-webhook:${token}`)
+    .digest('hex')
+    .slice(0, 40);
+}
+
+function sampleSystemHealthAndLatencies(): {
+  capturedAt: string;
+  health: SystemHealthParameters;
+  moduleLatencies: ModuleLatencyMetric[];
+} {
+  const nowMs = Date.now();
+  const elapsedMs = Math.max(50, nowMs - lastCpuSampleAtMs);
+  const currentCpu = process.cpuUsage();
+  const coreCount = Math.max(1, os.cpus().length || 1);
+  if (elapsedMs >= 250) {
+    lastComputedCpuPct = computeCpuUsagePercent({
+      prevUserMicros: lastCpuSample.user,
+      prevSystemMicros: lastCpuSample.system,
+      nextUserMicros: currentCpu.user,
+      nextSystemMicros: currentCpu.system,
+      elapsedMs,
+      cpuCoreCount: coreCount,
+    });
+    lastCpuSample = currentCpu;
+    lastCpuSampleAtMs = nowMs;
+  }
+
+  const mem = process.memoryUsage();
+  const load1m = Number((os.loadavg()[0] ?? 0).toFixed(2));
+  const microSnap = GLOBAL_MICROSERVICE_COORDINATOR.getSnapshot();
+  const svcList = ORDERED_MICROSERVICE_IDS.map((id) => microSnap.services[id]);
+  const healthyServices = svcList.filter(
+    (s) => s.lifecycle === 'ACTIVE' || s.lifecycle === 'FAILOVER_ACTIVE'
+  ).length;
+  const openPositionsCount = sandboxPositions.filter((p) => p.status === 'OPEN').length;
+
+  const moduleLatencies: ModuleLatencyMetric[] = [
+    {
+      moduleId: 'market-data-spot',
+      label: 'Binance Spot Feed',
+      latencyMs: Math.max(1, Math.round(lastSpotPollLatencyMs || microSnap.services['market-data-svc'].lastLatencyMs || 18)),
+      targetCeilingMs: 300,
+      status: classifyLatencyStatus(
+        Math.max(1, Math.round(lastSpotPollLatencyMs || microSnap.services['market-data-svc'].lastLatencyMs || 18)),
+        300
+      ),
+    },
+    {
+      moduleId: 'top-gainers',
+      label: 'Top Gainers Feeder',
+      latencyMs: Math.max(1, Math.round(lastGainersPollLatencyMs || 24)),
+      targetCeilingMs: 400,
+      status: classifyLatencyStatus(Math.max(1, Math.round(lastGainersPollLatencyMs || 24)), 400),
+    },
+    {
+      moduleId: 'ai-agents-svc',
+      label: 'AI Agent Pipeline',
+      latencyMs: Math.max(1, Math.round(microSnap.services['ai-agents-svc'].lastLatencyMs || 12)),
+      targetCeilingMs: 150,
+      status: classifyLatencyStatus(
+        Math.max(1, Math.round(microSnap.services['ai-agents-svc'].lastLatencyMs || 12)),
+        150
+      ),
+    },
+    {
+      moduleId: 'execution-router-svc',
+      label: 'Execution Router',
+      latencyMs: Math.max(1, Math.round(microSnap.services['execution-router-svc'].lastLatencyMs || 14)),
+      targetCeilingMs: 120,
+      status: classifyLatencyStatus(
+        Math.max(1, Math.round(microSnap.services['execution-router-svc'].lastLatencyMs || 14)),
+        120
+      ),
+    },
+    {
+      moduleId: 'risk-kernel-svc',
+      label: 'Risk & Invariant Kernel',
+      latencyMs: Math.max(1, Math.round(microSnap.services['risk-kernel-svc'].lastLatencyMs || 4)),
+      targetCeilingMs: 50,
+      status: classifyLatencyStatus(
+        Math.max(1, Math.round(microSnap.services['risk-kernel-svc'].lastLatencyMs || 4)),
+        50
+      ),
+    },
+    {
+      moduleId: 'event-loop',
+      label: 'Node Event Loop Lag',
+      latencyMs: Number((monitorState.eventLoopLagMs || 0).toFixed(2)),
+      targetCeilingMs: 25,
+      status: classifyLatencyStatus(monitorState.eventLoopLagMs || 0, 25),
+    },
+    {
+      moduleId: 'self-heal',
+      label: 'Auto-Heal Recovery',
+      latencyMs: Math.max(0, Math.round(monitorState.selfHealLatencyMs || 0)),
+      targetCeilingMs: 500,
+      status: classifyLatencyStatus(Math.max(0, Math.round(monitorState.selfHealLatencyMs || 0)), 500),
+    },
+  ];
+
+  const overallStatus: SystemHealthParameters['overallStatus'] =
+    monitorState.status === 'SELF_HEALING'
+      ? 'SELF_HEALING'
+      : healthyServices < svcList.length || lastComputedCpuPct >= 85 || monitorState.eventLoopLagMs > 50
+      ? 'DEGRADED'
+      : 'OPTIMAL';
+
+  const health: SystemHealthParameters = {
+    overallStatus,
+    uptimeSec: Math.floor((nowMs - serverStartedAtMs) / 1000),
+    cpuUsagePct: lastComputedCpuPct,
+    loadAvg1m: load1m,
+    memoryRssMb: Number((mem.rss / (1024 * 1024)).toFixed(1)),
+    heapUsedMb: Number((mem.heapUsed / (1024 * 1024)).toFixed(1)),
+    heapTotalMb: Number((mem.heapTotal / (1024 * 1024)).toFixed(1)),
+    eventLoopLagMs: Number((monitorState.eventLoopLagMs || 0).toFixed(2)),
+    wsConnected: backendWsConnected,
+    wsFrameAgeMs:
+      backendWsLastFrameAtMs > 0 ? Math.max(0, nowMs - backendWsLastFrameAtMs) : 0,
+    sseSubscribers: sseTickListeners.size,
+    activeOpenPositions: openPositionsCount,
+    autoHealCount: monitorState.autoHealCount,
+    staleFeedCount: monitorState.staleFeedCount,
+    isolatedFaultsCount: microSnap.isolatedFaultsContainedTotal,
+    activeServicesHealthy: healthyServices,
+    totalServices: svcList.length,
+  };
+
+  return {
+    capturedAt: new Date(nowMs).toISOString(),
+    health,
+    moduleLatencies,
+  };
 }
 
 async function resolveTelegramChatId(token: string): Promise<string | null> {
-  const configuredChatId = process.env.TELEGRAM_CHAT_ID || process.env.CHAT_ID;
+  const configuredChatId = getPublicChannelChatId();
   if (configuredChatId) return configuredChatId;
   if (discoveredTelegramChatId) return discoveredTelegramChatId;
   const controller = new AbortController();
@@ -1615,9 +2629,12 @@ async function resolveTelegramChatId(token: string): Promise<string | null> {
     const json = await res.json();
     const updates = Array.isArray(json.result) ? json.result : [];
     for (let i = updates.length - 1; i >= 0; i--) {
-      const chatId =
-        updates[i]?.message?.chat?.id ?? updates[i]?.channel_post?.chat?.id;
+      const chat = updates[i]?.message?.chat ?? updates[i]?.channel_post?.chat;
+      const chatId = chat?.id;
       if (chatId !== undefined && chatId !== null) {
+        if (chat?.type === 'private' && !boundDeveloperChatId) {
+          boundDeveloperChatId = String(chatId);
+        }
         discoveredTelegramChatId = String(chatId);
         return discoveredTelegramChatId;
       }
@@ -1630,6 +2647,50 @@ async function resolveTelegramChatId(token: string): Promise<string | null> {
   return null;
 }
 
+async function sendTelegramRawMessage(params: {
+  chatId: string;
+  text: string;
+}): Promise<{ ok: boolean; errorDetail: string | null }> {
+  const token = getTelegramBotToken();
+  if (!token) {
+    return { ok: false, errorDetail: 'BOT_TOKEN not configured in environment.' };
+  }
+  const target = params.chatId.trim();
+  if (!target) {
+    return { ok: false, errorDetail: 'Target Telegram chat ID not configured.' };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4000);
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: target,
+        text: params.text,
+        disable_web_page_preview: true,
+      }),
+      signal: controller.signal,
+    });
+    if (res.ok) {
+      return { ok: true, errorDetail: null };
+    }
+    const errBody = await res.json().catch(() => null);
+    const desc =
+      errBody && typeof errBody.description === 'string'
+        ? errBody.description
+        : `Telegram API HTTP ${res.status}`;
+    return { ok: false, errorDetail: desc };
+  } catch (err) {
+    return {
+      ok: false,
+      errorDetail: err instanceof Error ? err.message : 'Telegram network timeout',
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function sendTelegramAlertIfConfigured(
   text: string,
   preferChannel = false
@@ -1640,54 +2701,368 @@ async function sendTelegramAlertIfConfigured(
   }
   const token = getTelegramBotToken();
   if (!token) return false;
-  const configuredChatId = process.env.TELEGRAM_CHAT_ID || process.env.CHAT_ID;
+  const configuredChatId = getPublicChannelChatId();
   const rawChannel = preferChannel ? process.env.TELEGRAM_CHANNEL_ID : undefined;
   const normalizedChannel = rawChannel
     ? rawChannel.replace(/^https?:\/\/t\.me\//i, '@').replace(/^@@+/, '@')
     : undefined;
   const chatId = configuredChatId || normalizedChannel || (await resolveTelegramChatId(token));
   if (!chatId) return false;
+  const result = await sendTelegramRawMessage({ chatId, text });
+  return result.ok;
+}
+
+async function dispatchPublicTradeSignalAlert(input: {
+  symbol: string;
+  direction: 'BUY' | 'SELL' | 'SUMMARY';
+  entryPrice: number;
+  exitPrice: number;
+  stopLoss: number;
+  confidence: number;
+  timeframe?: string;
+  rationale?: string;
+  customMessage?: string;
+  bypassAppLive?: boolean;
+}): Promise<StructuredTradeSignalAlert> {
+  const cleanSymbol = String(input.symbol || 'BTCUSDT')
+    .toUpperCase()
+    .replace(/[^A-Z0-9/_-]/g, '');
+  const direction: StructuredTradeSignalAlert['direction'] =
+    input.direction === 'SELL' ? 'SELL' : input.direction === 'SUMMARY' ? 'SUMMARY' : 'BUY';
+  const entryPrice = Number(input.entryPrice || spotFeedCache[cleanSymbol]?.price || 0);
+  const stopLoss =
+    Number(input.stopLoss) > 0
+      ? Number(input.stopLoss)
+      : direction === 'SELL'
+      ? Number((entryPrice * 1.018).toFixed(4))
+      : Number((entryPrice * 0.982).toFixed(4));
+  const exitPrice =
+    Number(input.exitPrice) > 0
+      ? Number(input.exitPrice)
+      : direction === 'SELL'
+      ? Number((entryPrice - Math.abs(entryPrice - stopLoss) * 5).toFixed(4))
+      : Number((entryPrice + Math.abs(entryPrice - stopLoss) * 5).toFixed(4));
+  const confidence = Math.max(0, Math.min(100, Math.round(Number(input.confidence || 85))));
+  const riskRewardRatio = computeRiskRewardRatio(direction, entryPrice, exitPrice, stopLoss);
+  const formattedMessage = formatPublicSignalMessage({
+    symbol: cleanSymbol,
+    direction,
+    entryPrice,
+    exitPrice,
+    stopLoss,
+    confidence,
+    timeframe: input.timeframe || '4h',
+    rationale: input.rationale,
+  });
+
+  const targetChatId = getPublicChannelChatId() || '@SignalForge';
+  let deliveredViaBot = false;
+  let deliveryStatus: StructuredTradeSignalAlert['deliveryStatus'] = 'QUEUED_FALLBACK';
+  let errorDetail: string | null = null;
+
+  if (appLiveEnabled || input.bypassAppLive) {
+    const sendRes = await sendTelegramRawMessage({
+      chatId: targetChatId,
+      text: formattedMessage,
+    });
+    deliveredViaBot = sendRes.ok;
+    deliveryStatus = sendRes.ok ? 'DELIVERED' : 'QUEUED_FALLBACK';
+    errorDetail = sendRes.errorDetail;
+  } else {
+    errorDetail = 'App Live paused — recorded in Signal Forge local stream.';
+  }
+
+  const timestamp = new Date().toISOString();
+  const entry: StructuredTradeSignalAlert = {
+    id: `sig_tg_${cleanSymbol}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    stream: 'PUBLIC_SIGNAL',
+    channelName: 'Signal Forge',
+    targetChatId,
+    symbol: cleanSymbol,
+    direction,
+    entryPrice,
+    exitPrice,
+    stopLoss,
+    confidence,
+    riskRewardRatio,
+    timeframe: input.timeframe || '4h',
+    rationale: input.rationale,
+    formattedMessage,
+    deliveredViaBot,
+    deliveryStatus,
+    errorDetail,
+    timestamp,
+  };
+
+  publicSignalStreamLog.unshift(entry);
+  if (publicSignalStreamLog.length > 60) publicSignalStreamLog.length = 60;
+
+  const legacyPost: TelegramChannelPost = {
+    id: entry.id,
+    channelName: 'Signal Forge',
+    symbol: entry.symbol,
+    direction: entry.direction,
+    confidence: entry.confidence,
+    message: input.customMessage && input.customMessage.includes('Entry Price:')
+      ? input.customMessage
+      : formattedMessage,
+    deliveredViaBot,
+    timestamp,
+  };
+  telegramChannelFeed.unshift(legacyPost);
+  if (telegramChannelFeed.length > 40) telegramChannelFeed.length = 40;
+
+  return entry;
+}
+
+function buildDailyAuditSummary(): DailyAuditReportSummary {
+  const nowMs = Date.now();
+  const cutoff24h = nowMs - 24 * 60 * 60 * 1000;
+  const recent = rolling24hAuditSamples.filter((s) => s.tsMs >= cutoff24h);
+  const current = sampleSystemHealthAndLatencies();
+  const slowestCurrent = [...current.moduleLatencies].sort((a, b) => b.latencyMs - a.latencyMs)[0];
+
+  const samples =
+    recent.length > 0
+      ? recent
+      : [
+          {
+            tsMs: nowMs,
+            cpuUsagePct: current.health.cpuUsagePct,
+            memoryRssMb: current.health.memoryRssMb,
+            eventLoopLagMs: current.health.eventLoopLagMs,
+            peakModuleLatencyMs: slowestCurrent?.latencyMs ?? 0,
+            slowestModuleLabel: slowestCurrent?.label ?? 'Binance Spot Feed',
+          },
+        ];
+
+  const avgCpu =
+    samples.reduce((acc, s) => acc + s.cpuUsagePct, 0) / samples.length;
+  const peakCpu = Math.max(...samples.map((s) => s.cpuUsagePct));
+  const avgMem =
+    samples.reduce((acc, s) => acc + s.memoryRssMb, 0) / samples.length;
+  const avgLag =
+    samples.reduce((acc, s) => acc + s.eventLoopLagMs, 0) / samples.length;
+  const slowestSample = [...samples].sort(
+    (a, b) => b.peakModuleLatencyMs - a.peakModuleLatencyMs
+  )[0];
+
+  const public24h = publicSignalStreamLog.filter(
+    (s) => Date.parse(s.timestamp) >= cutoff24h
+  ).length;
+  const audits24h = developerAuditStreamLog.filter(
+    (a) => Date.parse(a.timestamp) >= cutoff24h
+  ).length;
+
+  return {
+    reportDateUtc: getUtcDateKey(nowMs),
+    generatedAt: current.capturedAt,
+    samplesCollected: samples.length,
+    avgCpuUsagePct: Number(avgCpu.toFixed(1)),
+    peakCpuUsagePct: Number(peakCpu.toFixed(1)),
+    avgMemoryRssMb: Number(avgMem.toFixed(1)),
+    avgEventLoopLagMs: Number(avgLag.toFixed(2)),
+    peakModuleLatencyMs: slowestSample?.peakModuleLatencyMs ?? 0,
+    slowestModuleLabel: slowestSample?.slowestModuleLabel ?? 'Binance Spot Feed',
+    publicSignalsDispatched24h: public24h,
+    continuousAuditsLogged24h: audits24h,
+    autoHealEventsTotal: current.health.autoHealCount,
+    uptimeSec: current.health.uptimeSec,
+    latestHealth: current.health,
+    moduleLatencies: current.moduleLatencies,
+  };
+}
+
+async function dispatchDeveloperSystemAudit(
+  kind: SystemAuditLogEntry['kind'] = 'CONTINUOUS_AUDIT',
+  explicitChatId?: string
+): Promise<SystemAuditLogEntry> {
+  const sample = sampleSystemHealthAndLatencies();
+  const slowest = [...sample.moduleLatencies].sort((a, b) => b.latencyMs - a.latencyMs)[0];
+  rolling24hAuditSamples.push({
+    tsMs: Date.now(),
+    cpuUsagePct: sample.health.cpuUsagePct,
+    memoryRssMb: sample.health.memoryRssMb,
+    eventLoopLagMs: sample.health.eventLoopLagMs,
+    peakModuleLatencyMs: slowest?.latencyMs ?? 0,
+    slowestModuleLabel: slowest?.label ?? 'Binance Spot Feed',
+  });
+  if (rolling24hAuditSamples.length > 1500) {
+    rolling24hAuditSamples.splice(0, rolling24hAuditSamples.length - 1500);
+  }
+
+  const formattedMessage =
+    kind === 'DAILY_DIGEST'
+      ? formatDailyAuditReportMessage(buildDailyAuditSummary())
+      : formatDeveloperAuditMessage(sample.health, sample.moduleLatencies, sample.capturedAt);
+
+  // Stream 2 strictly routes to Developer's private chat ID (never to public CHAT_ID channel)
+  const devChatId = (explicitChatId || getDeveloperPrivateChatId()).trim();
+  const publicChannelId = getPublicChannelChatId();
+  let deliveredViaBot = false;
+  let deliveryStatus: SystemAuditLogEntry['deliveryStatus'] = 'QUEUED_FALLBACK';
+  let errorDetail: string | null = null;
+
+  if (!devChatId) {
+    errorDetail =
+      'Developer private chat unbound — set DEVELOPER_CHAT_ID or message /start to the bot in private chat to auto-bind Stream 2.';
+  } else if (devChatId === publicChannelId) {
+    errorDetail =
+      'Stream isolation enforced: developer private chat ID cannot match public Signal Forge channel ID.';
+  } else {
+    const sendRes = await sendTelegramRawMessage({
+      chatId: devChatId,
+      text: formattedMessage,
+    });
+    deliveredViaBot = sendRes.ok;
+    deliveryStatus = sendRes.ok ? 'DELIVERED' : 'QUEUED_FALLBACK';
+    errorDetail = sendRes.errorDetail;
+  }
+
+  const entry: SystemAuditLogEntry = {
+    id: `audit_${kind.toLowerCase()}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    stream: 'DEVELOPER_AUDIT',
+    kind,
+    targetChatId: devChatId ? maskChatId(devChatId) : 'Unbound',
+    health: sample.health,
+    moduleLatencies: sample.moduleLatencies,
+    formattedMessage,
+    deliveredViaBot,
+    deliveryStatus,
+    errorDetail,
+    timestamp: sample.capturedAt,
+  };
+
+  developerAuditStreamLog.unshift(entry);
+  if (developerAuditStreamLog.length > 120) developerAuditStreamLog.length = 120;
+
+  if (kind === 'DAILY_DIGEST') {
+    lastDailyAuditDateUtc = getUtcDateKey(Date.now());
+    lastDailyAuditSentAt = sample.capturedAt;
+    dailyAuditReportsDispatchedTotal += 1;
+  }
+
+  return entry;
+}
+
+async function registerTelegramWebhook(explicitUrl?: string): Promise<{
+  ok: boolean;
+  webhookUrl: string | null;
+  description: string;
+}> {
+  const token = getTelegramBotToken();
+  if (!token) {
+    return {
+      ok: false,
+      webhookUrl: null,
+      description: 'BOT_TOKEN not configured in environment.',
+    };
+  }
+  const baseUrl = (explicitUrl || process.env.APP_URL || '').trim().replace(/\/+$/, '');
+  if (!baseUrl || !/^https:\/\//i.test(baseUrl)) {
+    return {
+      ok: false,
+      webhookUrl: null,
+      description:
+        'A public HTTPS APP_URL (or explicit https:// webhookUrl) is required for Telegram setWebhook.',
+    };
+  }
+  const targetUrl = baseUrl.endsWith('/api/telegram/webhook')
+    ? baseUrl
+    : `${baseUrl}/api/telegram/webhook`;
+  const secretToken = getTelegramWebhookSecret();
+
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 3500);
+  const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        disable_web_page_preview: true,
+        url: targetUrl,
+        secret_token: secretToken || undefined,
+        allowed_updates: ['message', 'channel_post', 'edited_message'],
       }),
       signal: controller.signal,
     });
-    if (!res.ok && preferChannel) {
-      const fallbackChat = await resolveTelegramChatId(token);
-      if (fallbackChat && fallbackChat !== chatId) {
-        const retryController = new AbortController();
-        const retryTimer = setTimeout(() => retryController.abort(), 3500);
-        try {
-          const retryRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: fallbackChat,
-              text,
-              disable_web_page_preview: true,
-            }),
-            signal: retryController.signal,
-          });
-          return retryRes.ok;
-        } finally {
-          clearTimeout(retryTimer);
-        }
-      }
+    const json = await res.json().catch(() => ({}));
+    if (res.ok && json?.ok) {
+      telegramWebhookRegistered = true;
+      telegramWebhookUrl = targetUrl;
+      telegramWebhookLastRegisteredAt = new Date().toISOString();
+      telegramWebhookLastError = null;
+      return {
+        ok: true,
+        webhookUrl: targetUrl,
+        description: String(json.description || 'Webhook registered successfully.'),
+      };
     }
-    return res.ok;
-  } catch {
-    return false;
+    const errDesc = String(json?.description || `Telegram setWebhook HTTP ${res.status}`);
+    telegramWebhookLastError = errDesc;
+    return { ok: false, webhookUrl: targetUrl, description: errDesc };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Telegram setWebhook network error';
+    telegramWebhookLastError = msg;
+    return { ok: false, webhookUrl: targetUrl, description: msg };
   } finally {
     clearTimeout(timer);
   }
+}
+
+function buildTelegramDualStreamStatus(): TelegramDualStreamStatus {
+  const token = getTelegramBotToken();
+  const publicChatId = getPublicChannelChatId();
+  const devChatId = getDeveloperPrivateChatId();
+  const live = sampleSystemHealthAndLatencies();
+  const appUrlBase = (process.env.APP_URL || '').trim().replace(/\/+$/, '');
+  const inferredWebhookUrl =
+    telegramWebhookUrl ||
+    (appUrlBase && /^https:\/\//i.test(appUrlBase)
+      ? `${appUrlBase}/api/telegram/webhook`
+      : null);
+
+  return {
+    ok: true,
+    botConfigured: Boolean(token),
+    maskedToken: maskTelegramToken(token),
+    publicChannel: {
+      name: 'Signal Forge',
+      chatId: publicChatId || '@SignalForge',
+      handle: process.env.TELEGRAM_CHANNEL_ID || '@SignalForge',
+      totalDispatched: publicSignalStreamLog.length,
+      deliveredCount: publicSignalStreamLog.filter((s) => s.deliveredViaBot).length,
+      lastDispatchedAt: publicSignalStreamLog[0]?.timestamp ?? null,
+    },
+    developerAudit: {
+      chatIdConfigured: Boolean(devChatId),
+      targetChatIdMasked: maskChatId(devChatId),
+      autoBoundViaWebhook: autoBoundDeveloperViaWebhook,
+      continuousIntervalSec: CONTINUOUS_AUDIT_INTERVAL_SEC,
+      totalAuditsLogged: developerAuditStreamLog.length,
+      deliveredCount: developerAuditStreamLog.filter((a) => a.deliveredViaBot).length,
+      lastAuditAt: developerAuditStreamLog[0]?.timestamp ?? null,
+      dailyAutoDeliveryEnabled: dailyAuditAutoDeliveryEnabled,
+      dailyScheduledUtcHour: dailyAuditScheduledUtcHour,
+      lastDailyReportDateUtc: lastDailyAuditDateUtc,
+      lastDailyReportSentAt: lastDailyAuditSentAt,
+      nextDailyReportUtcIso: computeNextDailyAuditIso(Date.now(), dailyAuditScheduledUtcHour),
+      dailyReportsDispatchedTotal: dailyAuditReportsDispatchedTotal,
+    },
+    webhook: {
+      endpointPath: '/api/telegram/webhook',
+      configuredUrl: inferredWebhookUrl,
+      registered: telegramWebhookRegistered,
+      secretHeaderEnforced: Boolean(getTelegramWebhookSecret()),
+      lastRegisteredAt: telegramWebhookLastRegisteredAt,
+      lastInboundAt: telegramWebhookLastInboundAt,
+      totalInboundUpdates: telegramWebhookTotalInbound,
+      lastError: telegramWebhookLastError,
+    },
+    liveTelemetry: live,
+    publicSignals: publicSignalStreamLog.slice(0, 25),
+    developerAuditLogs: developerAuditStreamLog.slice(0, 30),
+    recentWebhookEvents: recentWebhookEventsLog.slice(0, 20),
+  };
 }
 
 function computePrePumpMetrics(params: {
@@ -2530,7 +3905,6 @@ async function startServer() {
   // Global security headers & strict same-origin API protection
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     if (req.path.startsWith('/api/')) {
       res.setHeader('Cache-Control', 'no-store');
@@ -3274,6 +4648,12 @@ async function startServer() {
         pos.pnlPercent = settlement.pnlPercent;
         pos.roePercent = settlement.roePercent;
         pos.closedAt = new Date().toISOString();
+        profitVaultEngine.ingestRealizedTrade({
+          tradeId: `auto_${pos.id}`,
+          symbol: pos.symbol,
+          realizedPnlUsd: settlement.netRealizedPnlUsd,
+          sourceAgent: 'AUTONOMOUS_COORDINATOR',
+        });
         autonomousExitsExecuted += 1;
         if (exitStatus === 'CLOSED_REVERSAL') {
           autonomousReversalExitsExecuted += 1;
@@ -3299,6 +4679,21 @@ async function startServer() {
           `[AUTO EXIT · ${pos.marketType ?? 'SPOT'}] ${pos.symbol} ${pos.direction} closed via ${exitStatus} @ $${livePrice} | PnL ${settlement.netRealizedPnlUsd >= 0 ? '+' : ''}$${settlement.netRealizedPnlUsd}`,
           true
         ).catch(() => undefined);
+
+        processAndTransmitTradingAlert({
+          source: 'AUTOMATED',
+          symbol: pos.symbol,
+          direction: pos.direction,
+          entryPrice: pos.entryPrice,
+          exitPrice: livePrice,
+          stopLoss: pos.trailingStopLoss,
+          confidence: 92,
+          hitTpMilestones: exitStatus === 'CLOSED_TP' ? ['TP1', 'TP2', 'TP3'] : [],
+          finalPnlUsd: settlement.netRealizedPnlUsd,
+          finalPnlPercent: settlement.pnlPercent,
+          lifecycleStatus: exitStatus === 'CLOSED_TP' ? 'CLOSED_TP' : 'CLOSED_SL',
+          rationale: exitReason,
+        }).catch(() => undefined);
       }
     }
 
@@ -3335,6 +4730,12 @@ async function startServer() {
             hedgePos.pnlPercent = settlement.pnlPercent;
             hedgePos.roePercent = settlement.roePercent;
             hedgePos.closedAt = new Date().toISOString();
+            profitVaultEngine.ingestRealizedTrade({
+              tradeId: `hedge_${hedgePos.id}`,
+              symbol: hedgePos.symbol,
+              realizedPnlUsd: settlement.netRealizedPnlUsd,
+              sourceAgent: 'SENTINEL_HEDGE',
+            });
             autonomousExitsExecuted += 1;
             autonomousReversalExitsExecuted += 1;
             logAutonomousDecision({
@@ -4406,7 +5807,7 @@ async function startServer() {
     return { gateRecord, walkForwardReport };
   }
 
-  app.get('/api/pg-v4/evaluate', async (req, res) => {
+  app.get('/api/pg-v4/evaluate', requireRbacPermission('DEBUG_ENDPOINTS_ACCESS'), async (req, res) => {
     try {
       const symbol = String(req.query.symbol || 'BTCUSDT').toUpperCase();
       const rawTf = String(req.query.timeframe || '15m');
@@ -4445,7 +5846,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/pg-v4/records', (_req, res) => {
+  app.get('/api/pg-v4/records', requireRbacPermission('DEBUG_ENDPOINTS_ACCESS'), (_req, res) => {
     return res.json({
       ok: true,
       currentLogicVersion: PG_V4_LOGIC_VERSION,
@@ -4457,7 +5858,7 @@ async function startServer() {
     });
   });
 
-  app.post('/api/promotions', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+  app.post('/api/promotions', requireOperatorAuth, standardWriteRateLimit, requireRbacPermission('PROMOTION_CERTIFY'), async (req, res) => {
     try {
       const body = req.body && typeof req.body === 'object' ? req.body : {};
       let candidateRecord = body.gateRecord as unknown;
@@ -5957,42 +7358,1018 @@ async function startServer() {
     });
   });
 
-  // "Signal Forge" Telegram Channel Routing Endpoints
+  // "Signal Forge" Dual-Stream Telegram Channel, Developer Private Audit & Webhook Endpoints
   app.get('/api/telegram/feed', (_req, res) => {
     res.json({
       channelName: 'Signal Forge',
       channelHandle: process.env.TELEGRAM_CHANNEL_ID || '@SignalForge',
+      channelChatId: getPublicChannelChatId() || '@SignalForge',
       botConfigured: Boolean(getTelegramBotToken()),
       posts: telegramChannelFeed,
+      structuredSignals: publicSignalStreamLog,
     });
   });
 
-  app.post('/api/telegram/signal', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
-    const { symbol, direction, confidence, message, dedupeKey } = req.body || {};
-    if (!symbol || !message) {
-      return res.status(400).json({ ok: false, error: 'Missing symbol or message.' });
-    }
-    const key = String(dedupeKey || `${symbol}_${direction}_${new Date().toISOString().slice(0, 13)}`);
-    if (sentTelegramKeys.has(key)) {
-      const existing = telegramChannelFeed.find((p) => p.symbol === symbol && p.direction === direction);
-      return res.json({ ok: true, deduped: true, post: existing });
-    }
-    addBoundedSetKey(sentTelegramKeys, key, 500);
+  app.get('/api/telegram/streams/status', (_req, res) => {
+    return res.json(buildTelegramDualStreamStatus());
+  });
 
-    const deliveredViaBot = await sendTelegramAlertIfConfigured(String(message), true);
-    const post: TelegramChannelPost = {
-      id: `tg_${symbol}_${Date.now()}`,
-      channelName: 'Signal Forge',
-      symbol: String(symbol),
-      direction: direction === 'SELL' ? 'SELL' : 'BUY',
-      confidence: Number(confidence || 85),
-      message: String(message),
-      deliveredViaBot,
-      timestamp: new Date().toISOString(),
+  app.post('/api/telegram/signal', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+    const {
+      symbol,
+      direction,
+      entryPrice,
+      tp1,
+      tp2,
+      tp3,
+      takeProfits,
+      exitPrice,
+      stopLoss,
+      confidence,
+      timeframe,
+      rationale,
+      rawAlertText,
+      hitTpMilestones,
+      finalPnlUsd,
+      finalPnlPercent,
+      lifecycleStatus,
+      source,
+      dedupeKey,
+    } = req.body || {};
+    if (!symbol && !rawAlertText) {
+      return res.status(400).json({ ok: false, error: 'Missing trading pair symbol or raw alert text.' });
+    }
+    const cleanSym = symbol
+      ? String(symbol).toUpperCase().replace(/[^A-Z0-9/_-]/g, '')
+      : '';
+    if (dedupeKey && sentTelegramKeys.has(String(dedupeKey))) {
+      const existing = telegramChannelFeed.find((p) => p.symbol === cleanSym && p.direction === direction);
+      const existingStructured = publicSignalStreamLog.find(
+        (p) => p.symbol === cleanSym && p.direction === direction
+      );
+      return res.json({
+        ok: true,
+        deduped: true,
+        filtered: true,
+        post: existing,
+        structuredSignal: existingStructured,
+        status: buildTelegramDualStreamStatus(),
+        processorStatus: buildSignalProcessorStatus(),
+      });
+    }
+
+    const processed = await processAndTransmitTradingAlert({
+      source: source === 'MANUAL' ? 'MANUAL' : 'AUTOMATED',
+      rawAlertText: rawAlertText ? String(rawAlertText) : undefined,
+      symbol: cleanSym || undefined,
+      direction: direction ? (String(direction).toUpperCase() as 'BUY' | 'SELL') : undefined,
+      timeframe: timeframe ? String(timeframe) : '4h',
+      entryPrice: Number(entryPrice) > 0 ? Number(entryPrice) : undefined,
+      tp1: Number(tp1) > 0 ? Number(tp1) : undefined,
+      tp2: Number(tp2) > 0 ? Number(tp2) : undefined,
+      tp3: Number(tp3) > 0 ? Number(tp3) : undefined,
+      takeProfits: Array.isArray(takeProfits) ? takeProfits.map(Number) : undefined,
+      exitPrice: Number(exitPrice) > 0 ? Number(exitPrice) : undefined,
+      stopLoss: Number(stopLoss) > 0 ? Number(stopLoss) : undefined,
+      confidence: Number(confidence) > 0 ? Number(confidence) : 88,
+      rationale: rationale ? String(rationale) : undefined,
+      hitTpMilestones: Array.isArray(hitTpMilestones) ? (hitTpMilestones as TpMilestone[]) : undefined,
+      finalPnlUsd: typeof finalPnlUsd === 'number' ? finalPnlUsd : undefined,
+      finalPnlPercent: typeof finalPnlPercent === 'number' ? finalPnlPercent : undefined,
+      lifecycleStatus: lifecycleStatus ? (String(lifecycleStatus) as SignalLifecycleStatus) : undefined,
+    });
+
+    if (!processed.ok) {
+      return res.status(400).json({ ok: false, error: processed.error });
+    }
+
+    if (dedupeKey && !processed.filtered) {
+      addBoundedSetKey(sentTelegramKeys, String(dedupeKey), 500);
+    }
+
+    const post = telegramChannelFeed[0];
+    return res.json({
+      ok: true,
+      deduped: processed.filtered,
+      filtered: processed.filtered,
+      spamVerdict: processed.record.spamVerdict,
+      processedSignal: processed.record,
+      post,
+      structuredSignal: processed.structuredSignal || publicSignalStreamLog[0],
+      status: buildTelegramDualStreamStatus(),
+      processorStatus: processed.status,
+    });
+  });
+
+  app.get('/api/signal-processor/status', (_req, res) => {
+    return res.json(buildSignalProcessorStatus());
+  });
+
+  app.post('/api/signal-processor/process', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+    const body = req.body || {};
+    if (!body.rawAlertText && !body.symbol) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Provide either rawAlertText (manual alert) or structured trading signal parameters.',
+      });
+    }
+    const result = await processAndTransmitTradingAlert({
+      source: body.source === 'AUTOMATED' ? 'AUTOMATED' : body.source === 'MANUAL' ? 'MANUAL' : undefined,
+      rawAlertText: body.rawAlertText ? String(body.rawAlertText) : undefined,
+      symbol: body.symbol ? String(body.symbol) : undefined,
+      direction: body.direction ? (String(body.direction).toUpperCase() as 'BUY' | 'SELL' | 'LONG' | 'SHORT') : undefined,
+      timeframe: body.timeframe ? String(body.timeframe) : undefined,
+      entryPrice: Number(body.entryPrice) > 0 ? Number(body.entryPrice) : undefined,
+      tp1: Number(body.tp1) > 0 ? Number(body.tp1) : undefined,
+      tp2: Number(body.tp2) > 0 ? Number(body.tp2) : undefined,
+      tp3: Number(body.tp3) > 0 ? Number(body.tp3) : undefined,
+      takeProfits: Array.isArray(body.takeProfits) ? body.takeProfits.map(Number) : undefined,
+      exitPrice: Number(body.exitPrice) > 0 ? Number(body.exitPrice) : undefined,
+      stopLoss: Number(body.stopLoss) > 0 ? Number(body.stopLoss) : undefined,
+      confidence: Number(body.confidence) > 0 ? Number(body.confidence) : undefined,
+      rationale: body.rationale ? String(body.rationale) : undefined,
+      hitTpMilestones: Array.isArray(body.hitTpMilestones) ? (body.hitTpMilestones as TpMilestone[]) : undefined,
+      finalPnlUsd: typeof body.finalPnlUsd === 'number' ? body.finalPnlUsd : undefined,
+      finalPnlPercent: typeof body.finalPnlPercent === 'number' ? body.finalPnlPercent : undefined,
+      lifecycleStatus: body.lifecycleStatus ? (String(body.lifecycleStatus) as SignalLifecycleStatus) : undefined,
+    });
+    if (!result.ok) {
+      return res.status(400).json(result);
+    }
+    return res.json({
+      ok: true,
+      filtered: result.filtered,
+      record: result.record,
+      processorStatus: result.status,
+      telegramStatus: buildTelegramDualStreamStatus(),
+    });
+  });
+
+  app.post('/api/signal-processor/milestone', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+    const body = req.body || {};
+    const signalId = String(body.signalId || '').trim();
+    const base = signalId
+      ? processedSignalsLog.find((s) => s.signalId === signalId)
+      : undefined;
+
+    if (!base && !body.symbol) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Provide a valid signalId or trading pair symbol to transmit TP milestone & P&L update.',
+      });
+    }
+
+    const hitMilestones: TpMilestone[] = Array.isArray(body.hitTpMilestones)
+      ? (body.hitTpMilestones as TpMilestone[])
+      : base?.hitTpMilestones ?? [];
+
+    const nextLifecycle: SignalLifecycleStatus = body.lifecycleStatus
+      ? (String(body.lifecycleStatus) as SignalLifecycleStatus)
+      : hitMilestones.includes('TP3')
+      ? 'CLOSED_TP'
+      : hitMilestones.includes('TP2')
+      ? 'TP2_HIT'
+      : hitMilestones.includes('TP1')
+      ? 'TP1_HIT'
+      : 'CLOSED_MANUAL';
+
+    const result = await processAndTransmitTradingAlert({
+      source: base?.source || 'AUTOMATED',
+      symbol: base?.symbol || String(body.symbol),
+      direction: base?.direction || (String(body.direction || 'BUY').toUpperCase() as 'BUY' | 'SELL'),
+      timeframe: base?.timeframe || String(body.timeframe || '4h'),
+      entryPrice: base?.entryPrice || Number(body.entryPrice || 0),
+      takeProfits: base?.takeProfits || (Array.isArray(body.takeProfits) ? body.takeProfits.map(Number) : undefined),
+      exitPrice: base?.exitPrice || (Number(body.exitPrice) > 0 ? Number(body.exitPrice) : undefined),
+      stopLoss: base?.stopLoss || Number(body.stopLoss || 0),
+      confidence: base?.confidence || Number(body.confidence || 90),
+      hitTpMilestones: hitMilestones,
+      finalPnlUsd: typeof body.finalPnlUsd === 'number' ? body.finalPnlUsd : null,
+      finalPnlPercent: typeof body.finalPnlPercent === 'number' ? body.finalPnlPercent : null,
+      lifecycleStatus: nextLifecycle,
+      rationale: body.rationale
+        ? String(body.rationale)
+        : `Milestone Update (${hitMilestones.join(', ') || nextLifecycle}) transmitted via Signal Forge Webhook`,
+    });
+
+    if (!result.ok) {
+      return res.status(400).json(result);
+    }
+
+    return res.json({
+      ok: true,
+      filtered: result.filtered,
+      record: result.record,
+      processorStatus: result.status,
+      telegramStatus: buildTelegramDualStreamStatus(),
+    });
+  });
+
+  // Backend Offloaded Event Pipeline: Entry-Zone Gated Signals, Auto-Executed Order Logs, Pre-Pump Support Monitor & Telegram Stabilizer
+  app.get('/api/pipeline/dashboard-snapshot', (_req, res) => {
+    return res.json(buildBackendExecutionPipelineSnapshot());
+  });
+
+  app.post('/api/pipeline/entry-zone/execute', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+    const body = req.body || {};
+    const signalId = String(body.signalId || '').trim();
+    const forceOnCriteria = Boolean(body.forceEntryZoneMatch);
+    const notionalUsd = Math.max(100, Math.min(250_000, Number(body.notionalUsd || 1500)));
+
+    const candidate = activeEntryZoneSignals.find((s) => s.signalId === signalId);
+    if (!candidate) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Signal not found in active Entry Zone queue (may already be executed & archived).',
+      });
+    }
+
+    const liveMap = getLivePriceLookupMap();
+    const livePrice = liveMap[candidate.symbol] ?? candidate.entryPrice;
+    const evaluation = entryZoneValidator.evaluate({ candidate, livePrice });
+
+    if (!evaluation.inEntryZone && !forceOnCriteria) {
+      return res.status(409).json({
+        ok: false,
+        entryZoneBlocked: true,
+        evaluation,
+        error: `Entry Zone Guard: ${evaluation.rationale}`,
+        snapshot: buildBackendExecutionPipelineSnapshot(),
+      });
+    }
+
+    const fillPrice = evaluation.inEntryZone ? livePrice : candidate.entryZone.midpoint;
+    const executedOrder = await executeCandidateIntoBackendLog(candidate, fillPrice, notionalUsd);
+    return res.json({
+      ok: true,
+      executedOrder,
+      snapshot: buildBackendExecutionPipelineSnapshot(),
+    });
+  });
+
+  app.post('/api/pipeline/pre-pump/execute-support', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+    const body = req.body || {};
+    const symbol = String(body.symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const notionalUsd = Math.max(100, Math.min(250_000, Number(body.notionalUsd || 2000)));
+    if (!symbol) {
+      return res.status(400).json({ ok: false, error: 'Missing trading pair symbol for Pre-Pump Support execution.' });
+    }
+
+    const liveMap = getLivePriceLookupMap();
+    const activePosBySym: Record<string, BackendExecutedOrderLog> = {};
+    for (const ord of backendExecutedOrdersLog) {
+      if (!activePosBySym[ord.symbol] && ord.status === 'OPEN_EXECUTED') {
+        activePosBySym[ord.symbol] = ord;
+      }
+    }
+    const candidates = prePumpSupportEngine.process({
+      topGainers: topGainersCache,
+      livePriceMap: liveMap,
+      activePositionsBySymbol: activePosBySym,
+    });
+    const match = candidates.find((c) => c.symbol === symbol);
+    const livePrice = match?.livePrice ?? liveMap[symbol] ?? 0;
+    if (!Number.isFinite(livePrice) || livePrice <= 0) {
+      return res.status(404).json({ ok: false, error: `No validated live market price available for ${symbol}.` });
+    }
+
+    const supportPrice = match?.supportLevel ?? Number((livePrice * 0.996).toFixed(4));
+    const stopLoss = match?.stopLoss ?? Number((livePrice * 0.982).toFixed(4));
+    const takeProfits: [number, number, number] = match?.takeProfits ?? [
+      Number((livePrice * 1.036).toFixed(4)),
+      Number((livePrice * 1.063).toFixed(4)),
+      Number((livePrice * 1.094).toFixed(4)),
+    ];
+
+    const prePumpCandidate: EntryZoneSignalCandidate = {
+      signalId: `prepump_${symbol}_${Date.now()}`,
+      symbol,
+      coinName: match?.baseAsset ?? symbol.replace(/USDT$/i, ''),
+      direction: 'BUY',
+      timeframe: '15m',
+      entryPrice: supportPrice,
+      entryZone: computeEntryZoneBounds(supportPrice, 0.75),
+      stopLoss,
+      takeProfits,
+      confidence: match?.prePumpScore ?? 88,
+      sourceModule: 'PRE_PUMP_SUPPORT',
+      reason: `Immediate Support Execution @ $${livePrice} · Locked HOLD UNTIL MAX PROFIT TARGET ($${takeProfits[2]}).`,
+      isPrePump: true,
+      prePumpScore: match?.prePumpScore ?? 88,
+      supportPrice,
+      holdUntilMaxTarget: true,
+      createdAt: new Date().toISOString(),
     };
-    telegramChannelFeed.unshift(post);
-    if (telegramChannelFeed.length > 40) telegramChannelFeed.length = 40;
-    return res.json({ ok: true, post });
+
+    const executedOrder = await executeCandidateIntoBackendLog(prePumpCandidate, livePrice, notionalUsd);
+    return res.json({
+      ok: true,
+      executedOrder,
+      snapshot: buildBackendExecutionPipelineSnapshot(),
+    });
+  });
+
+  app.post('/api/pipeline/telegram-queue/retry', requireOperatorAuth, standardWriteRateLimit, async (_req, res) => {
+    const retriedCount = await flushTelegramStabilizerQueue();
+    return res.json({
+      ok: true,
+      retriedCount,
+      snapshot: buildBackendExecutionPipelineSnapshot(),
+    });
+  });
+
+  // --- RBAC Profile & Strictly Protected Test/Trust Console Debug Telemetry ---
+  app.get('/api/auth/rbac-profile', async (req, res) => {
+    const principal = await resolveCallerPrincipal(req);
+    const identity = buildRbacIdentity(principal, extraAdminEmailsFromEnv);
+    return res.json({
+      ok: true,
+      rbac: {
+        authenticated: identity.authenticated,
+        uid: identity.uid,
+        role: identity.role,
+        permissions: identity.permissions,
+        canAccessTestConsole: identity.canAccessTestConsole,
+        canAccessDebugEndpoints: identity.canAccessDebugEndpoints,
+      },
+    });
+  });
+
+  app.get('/api/debug/console-telemetry', requireRbacPermission('DEBUG_ENDPOINTS_ACCESS'), (_req, res) => {
+    const { health } = sampleSystemHealthAndLatencies();
+    return res.json({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      pgV4LogicVersion: PG_V4_LOGIC_VERSION,
+      pgV4LogicHash: computePgV4LogicHash(),
+      chainIntegrity: pgV4Store.verifyChainIntegrity(),
+      pipelineEpoch: backendPipelineEpoch,
+      pipelineTicks: backendPipelineTicks,
+      activeEntryZoneCount: activeEntryZoneSignals.length,
+      executedOrdersCount: backendExecutedOrdersLog.length,
+      systemHealth: health,
+      profitTakingEngineHealth: modularProfitTakingEngine.healthCheck(),
+      prePumpEngineHealth: prePumpSupportEngine.healthCheck(),
+    });
+  });
+
+  // --- Decoupled Per-Agent Modular Profit-Taking & Stop-Loss Endpoints ---
+  app.get('/api/profit-taking/policies', (_req, res) => {
+    return res.json({
+      ok: true,
+      updatedAt: new Date().toISOString(),
+      profiles: modularProfitTakingEngine.getAllProfiles(),
+      engineHealth: modularProfitTakingEngine.healthCheck(),
+    });
+  });
+
+  app.post('/api/profit-taking/policy', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const validAgents: ProfitAgentId[] = [
+      'AI_COORDINATOR',
+      'SMC_FRVP',
+      'PATTERN_SCANNER',
+      'PRE_PUMP_SUPPORT',
+      'MEAN_REVERSION',
+    ];
+    const agentId = String(body.agentId || '') as ProfitAgentId;
+    if (!validAgents.includes(agentId)) {
+      return res.status(400).json({ ok: false, error: 'Invalid agentId supplied.' });
+    }
+    const updated = modularProfitTakingEngine.updateAgentPolicy(agentId, {
+      takeProfit: body.takeProfit && typeof body.takeProfit === 'object' ? body.takeProfit : undefined,
+      stopLoss: body.stopLoss && typeof body.stopLoss === 'object' ? body.stopLoss : undefined,
+    });
+    return res.json({
+      ok: true,
+      updatedProfile: updated,
+      profiles: modularProfitTakingEngine.getAllProfiles(),
+    });
+  });
+
+  app.post('/api/profit-taking/evaluate', (req, res) => {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const validAgents: ProfitAgentId[] = [
+      'AI_COORDINATOR',
+      'SMC_FRVP',
+      'PATTERN_SCANNER',
+      'PRE_PUMP_SUPPORT',
+      'MEAN_REVERSION',
+    ];
+    const agentId = (validAgents.includes(body.agentId as ProfitAgentId)
+      ? body.agentId
+      : 'AI_COORDINATOR') as ProfitAgentId;
+    const symbol = String(body.symbol || 'BTCUSDT').toUpperCase();
+    const liveMap = getLivePriceLookupMap();
+    const livePrice = liveMap[symbol] ?? 90000;
+    const entryPrice = Number(body.entryPrice) > 0 ? Number(body.entryPrice) : livePrice;
+    const currentPrice = Number(body.currentPrice) > 0 ? Number(body.currentPrice) : livePrice;
+    const atr = Number(body.atr) > 0 ? Number(body.atr) : entryPrice * 0.018;
+    const direction = body.direction === 'SELL' ? 'SELL' : 'BUY';
+    const peakUnrealizedR = Number.isFinite(Number(body.peakUnrealizedR))
+      ? Number(body.peakUnrealizedR)
+      : undefined;
+
+    const evaluation = modularProfitTakingEngine.process({
+      agentId,
+      direction,
+      entryPrice,
+      currentPrice,
+      atr,
+      peakUnrealizedR,
+    });
+    return res.json({
+      ok: true,
+      symbol,
+      evaluation,
+    });
+  });
+
+  // --- Offloaded Parameterized 1,000-Trade Multi-Horizon Backtesting Matrix & Auto-Optimizer ---
+  app.post('/api/backtest/matrix', (req, res) => {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const symbol = String(body.symbol || 'BTCUSDT').toUpperCase();
+    const report = runComparativeSimulationMatrix(symbol, {
+      riskLimitPerTradePct: body.riskLimitPerTradePct,
+      atrTrailingStopMultiplier: body.atrTrailingStopMultiplier,
+      profitToLossRatio: body.profitToLossRatio,
+      tradeCount: body.tradeCount,
+      executionFeeBps: body.executionFeeBps,
+      slippageBps: body.slippageBps,
+      autonomousProfitLock: body.autonomousProfitLock,
+    });
+    return res.json({ ok: true, report });
+  });
+
+  app.post('/api/backtest/optimize', (req, res) => {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const symbol = String(body.symbol || 'BTCUSDT').toUpperCase();
+    const allowed: MatrixAgentStrategyId[] = [
+      'AUTONOMOUS_MASTER',
+      'SMC_1_5',
+      'PATTERN_SCANNER',
+      'PRE_PUMP_SUPPORT',
+    ];
+    const strategyId = (allowed.includes(body.strategyId as MatrixAgentStrategyId)
+      ? body.strategyId
+      : 'AUTONOMOUS_MASTER') as MatrixAgentStrategyId;
+    const optimization = optimizeBacktestParameters(symbol, strategyId, {
+      riskLimitPerTradePct: body.riskLimitPerTradePct,
+      atrTrailingStopMultiplier: body.atrTrailingStopMultiplier,
+      profitToLossRatio: body.profitToLossRatio,
+      tradeCount: body.tradeCount,
+      executionFeeBps: body.executionFeeBps,
+      slippageBps: body.slippageBps,
+      autonomousProfitLock: body.autonomousProfitLock,
+    });
+    return res.json({ ok: true, optimization });
+  });
+
+  // --- Live Backend Agent Transaction Loop Telemetry (for Cyber-AI Telemetry Panel) ---
+  app.get('/api/telemetry/agent-loops', (_req, res) => {
+    const { health } = sampleSystemHealthAndLatencies();
+    const tgSnap = telegramDispatchStabilizer.getSnapshot();
+    const profitProfiles = modularProfitTakingEngine.getAllProfiles();
+    const autonomousLockCount = profitProfiles.filter(
+      (p) => p.takeProfit.mode === 'AUTONOMOUS_PROFIT_LOCK'
+    ).length;
+
+    return res.json({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      pipelineEpoch: backendPipelineEpoch,
+      totalCycles: backendPipelineTicks,
+      avgLoopLatencyMs: backendPipelineAvgLatencyMs,
+      cpuUsagePct: health.cpuUsagePct,
+      wsConnected: health.wsConnected,
+      wsFrameAgeMs: health.wsFrameAgeMs,
+      stages: [
+        {
+          id: 'binance_ws_ingest',
+          label: 'Binance WS Ingest',
+          status: health.wsConnected ? 'ACTIVE' : 'CALIBRATING',
+          latencyMs: Math.max(0.4, Number((health.wsFrameAgeMs * 0.01 || 1.2).toFixed(2))),
+          metric: `${Object.keys(getLivePriceLookupMap()).length} pairs locked`,
+        },
+        {
+          id: 'cps_oracle_parity',
+          label: 'CPS Oracle & TV Parity',
+          status: 'ACTIVE',
+          latencyMs: 0.65,
+          metric: '0.0 bps drift guard',
+        },
+        {
+          id: 'entry_zone_gate',
+          label: 'Entry-Zone Validator',
+          status: 'ACTIVE',
+          latencyMs: 0.42,
+          metric: `${activeEntryZoneSignals.length} awaiting fill`,
+        },
+        {
+          id: 'risk_rr_kernel',
+          label: '1:5 R:R Risk Kernel',
+          status: 'ACTIVE',
+          latencyMs: 0.31,
+          metric: 'Floor >= 5.0R',
+        },
+        {
+          id: 'modular_profit_lock',
+          label: 'Modular TP/SL Engine',
+          status: 'ACTIVE',
+          latencyMs: modularProfitTakingEngine.healthCheck().avgLatencyMs || 0.28,
+          metric: `${autonomousLockCount}/${profitProfiles.length} auto-lock`,
+        },
+        {
+          id: 'execution_router',
+          label: 'Order Router & Logs',
+          status: 'ACTIVE',
+          latencyMs: 1.15,
+          metric: `${backendExecutedOrdersLog.length} archived`,
+        },
+        {
+          id: 'telegram_relay',
+          label: 'Telegram Stabilizer',
+          status: tgSnap.pendingCount > 0 || tgSnap.failedCount > 0 ? 'DEGRADED' : 'ACTIVE',
+          latencyMs: 2.4,
+          metric: `${tgSnap.reliabilityPct}% (${tgSnap.totalDelivered} ok)`,
+        },
+      ],
+    });
+  });
+
+  // --- Authoritative Multi-Agent Anti-Drift Synchronization Endpoints ---
+  app.get('/api/agents/sync-state', (_req, res) => {
+    const liveMap = getLivePriceLookupMap();
+    const anchorPrice = liveMap['BTCUSDT'] ?? Object.values(liveMap)[0] ?? 91500;
+    const current = multiAgentSyncEngine.getSnapshot();
+    const sync =
+      current.globalEpoch === 0
+        ? multiAgentSyncEngine.process({
+            symbol: 'BTCUSDT',
+            authoritativePrice: anchorPrice,
+            epoch: Math.max(1, backendPipelineEpoch),
+          })
+        : current;
+    return res.json({
+      ok: true,
+      sync,
+      engineHealth: multiAgentSyncEngine.healthCheck(),
+    });
+  });
+
+  app.post('/api/agents/sync-reconcile', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const symbol = String(body.symbol || 'BTCUSDT').toUpperCase();
+    const liveMap = getLivePriceLookupMap();
+    const anchorPrice = liveMap[symbol] ?? liveMap['BTCUSDT'] ?? 91500;
+    const sync = multiAgentSyncEngine.forceReconcileAll(symbol, anchorPrice);
+    return res.json({
+      ok: true,
+      sync,
+      engineHealth: multiAgentSyncEngine.healthCheck(),
+    });
+  });
+
+  // --- High-Frequency Profit Scooping, Immutable Locker Vault & Daily PnL Tracking ---
+  app.get('/api/vault/state', (_req, res) => {
+    return res.json({
+      ok: true,
+      vault: profitVaultEngine.getSnapshot(),
+      engineHealth: profitVaultEngine.healthCheck(),
+    });
+  });
+
+  app.post('/api/vault/config', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+    const principal = await resolveCallerPrincipal(req);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const modeRaw = typeof body.thresholdMode === 'string' ? body.thresholdMode.toUpperCase() : undefined;
+    const thresholdMode: ProfitThresholdMode | undefined =
+      modeRaw === 'PERCENT_OF_EQUITY'
+        ? 'PERCENT_OF_EQUITY'
+        : modeRaw === 'USD_FIXED'
+        ? 'USD_FIXED'
+        : undefined;
+    const actorLabel = principal.authenticated && principal.email ? principal.email : 'OPERATOR_SESSION';
+    const vault = profitVaultEngine.updateConfig(
+      {
+        enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
+        thresholdMode,
+        profitThresholdUsd:
+          typeof body.profitThresholdUsd === 'number' ? body.profitThresholdUsd : undefined,
+        profitThresholdPct:
+          typeof body.profitThresholdPct === 'number' ? body.profitThresholdPct : undefined,
+        scoopExcessRatioPct:
+          typeof body.scoopExcessRatioPct === 'number' ? body.scoopExcessRatioPct : undefined,
+      },
+      actorLabel
+    );
+    return res.json({
+      ok: true,
+      vault,
+      engineHealth: profitVaultEngine.healthCheck(),
+    });
+  });
+
+  app.post('/api/vault/record-gain', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const symbolRaw = String(body.symbol || 'BTCUSDT')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '')
+      .slice(0, 16);
+    const realizedPnlUsd = Number(body.realizedPnlUsd);
+    if (!Number.isFinite(realizedPnlUsd) || Math.abs(realizedPnlUsd) > 1_000_000) {
+      return res.status(400).json({
+        ok: false,
+        error: 'realizedPnlUsd must be a finite number within [-1,000,000, +1,000,000].',
+      });
+    }
+    const tradeId =
+      typeof body.tradeId === 'string' && body.tradeId.trim().length > 0
+        ? body.tradeId.trim().slice(0, 64)
+        : `trade_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const sourceAgent =
+      typeof body.sourceAgent === 'string' && body.sourceAgent.trim().length > 0
+        ? body.sourceAgent.trim().slice(0, 48)
+        : 'CORE_EXECUTION_ENGINE';
+
+    const outcome = profitVaultEngine.ingestRealizedTrade({
+      tradeId,
+      symbol: symbolRaw || 'BTCUSDT',
+      realizedPnlUsd,
+      sourceAgent,
+    });
+    if (outcome.scoopedNow && outcome.scoopedAmountUsd > 0) {
+      yearnProfitDegradation.reportGain(outcome.scoopedAmountUsd);
+    }
+    return res.json({
+      ok: true,
+      outcome,
+      vault: outcome.snapshot,
+      vaultDegradation: yearnProfitDegradation.getSnapshot(),
+    });
+  });
+
+  app.post('/api/vault/manual-override', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+    const principal = await resolveCallerPrincipal(req);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+
+    const requestedActorRaw = String(body.actorType || 'AUTHENTICATED_USER').toUpperCase();
+    const actorType: VaultActorType =
+      requestedActorRaw === 'AUTONOMOUS_AGENT'
+        ? 'AUTONOMOUS_AGENT'
+        : requestedActorRaw === 'SYSTEM_BOT'
+        ? 'SYSTEM_BOT'
+        : 'AUTHENTICATED_USER';
+
+    if (actorType !== 'AUTHENTICATED_USER') {
+      const denied = profitVaultEngine.executeManualUserOverride({
+        actorType,
+        actorId: String(body.actorId || actorType),
+        action: 'RELEASE_TO_TRADING',
+        amountUsd: Number(body.amountUsd) || 0,
+        confirmationPhrase: String(body.confirmationPhrase || ''),
+        reason: String(body.reason || 'Blocked autonomous request'),
+      });
+      return res.status(403).json({
+        ok: false,
+        code: denied.code,
+        error: denied.message,
+        vault: denied.snapshot,
+      });
+    }
+
+    const actionRaw = String(body.action || 'RELEASE_TO_TRADING').toUpperCase();
+    const action: VaultOverrideAction =
+      actionRaw === 'REBALANCE_EXTERNAL' ? 'REBALANCE_EXTERNAL' : 'RELEASE_TO_TRADING';
+    const amountUsd = Number(body.amountUsd);
+    const confirmationPhrase = String(body.confirmationPhrase || '');
+    const reason = String(body.reason || '').slice(0, 160);
+    const actorId = principal.authenticated && principal.uid ? principal.uid : 'verified_operator_user';
+    const actorEmail = principal.authenticated ? principal.email : null;
+
+    const outcome = profitVaultEngine.executeManualUserOverride({
+      actorType: 'AUTHENTICATED_USER',
+      actorId,
+      actorEmail,
+      action,
+      amountUsd,
+      confirmationPhrase,
+      reason,
+    });
+
+    if (!outcome.allowed) {
+      return res.status(outcome.code === 'AGENT_OVERRIDE_FORBIDDEN' ? 403 : 400).json({
+        ok: false,
+        code: outcome.code,
+        error: outcome.message,
+        vault: outcome.snapshot,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      code: outcome.code,
+      message: outcome.message,
+      ledgerEntry: outcome.ledgerEntry,
+      vault: outcome.snapshot,
+    });
+  });
+
+  // --- Self-Healing Probes, Token Bucket Telemetry, Yearn 6h Degradation & Gemini Debate/Grounding ---
+  const buildUnifiedHealthPayload = () => {
+    const vaultSnap = profitVaultEngine.getSnapshot();
+    const health = selfHealingSupervisor.buildHealthSnapshot({
+      cacheStoreHealthy: true,
+      binanceFeedLive: backendWsConnected || spotFeedSource === 'binance_spot',
+      geminiStatus: getGeminiConfigurationHealth(),
+      vaultHealthy:
+        vaultSnap.integrity.hashChainValid && vaultSnap.integrity.accountingInvariantValid,
+    });
+    return {
+      ok: true,
+      status: health.status,
+      checks: health.checks,
+      selfHealing: health,
+      tokenBucket: apiTokenBucketLimiter.getTelemetry(),
+      vaultDegradation: yearnProfitDegradation.getSnapshot(),
+    };
+  };
+
+  app.get('/health', (_req, res) => {
+    return res.json(buildUnifiedHealthPayload());
+  });
+
+  app.get('/api/self-healing/health', (_req, res) => {
+    return res.json(buildUnifiedHealthPayload());
+  });
+
+  app.get('/api/v1/vault/degradation', (_req, res) => {
+    return res.json({
+      ok: true,
+      degradation: yearnProfitDegradation.getSnapshot(),
+    });
+  });
+
+  app.post('/api/v1/signals/generate', requireOperatorAuth, tokenBucketRateLimit, async (req, res) => {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const symbol = String(body.symbol || 'BTCUSDT')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '')
+      .slice(0, 16) || 'BTCUSDT';
+    const timeframe = String(body.timeframe || '15m').slice(0, 8);
+    const liveMap = getLivePriceLookupMap();
+    const tickerEntry = spotFeedCache[symbol];
+    const livePrice =
+      Number(body.livePrice) > 0
+        ? Number(body.livePrice)
+        : liveMap[symbol] ?? tickerEntry?.price ?? 91500;
+    const context: MarketDebateContext = {
+      symbol,
+      timeframe,
+      livePrice,
+      change24hPercent:
+        typeof body.change24hPercent === 'number'
+          ? body.change24hPercent
+          : tickerEntry?.change24hPercent ?? 0,
+      volume24hUsd:
+        typeof body.volume24hUsd === 'number'
+          ? body.volume24hUsd
+          : tickerEntry?.volume24hUsd ?? 0,
+      notes: typeof body.notes === 'string' ? body.notes.slice(0, 280) : undefined,
+    };
+    const rounds = Number(body.rounds) || 2;
+
+    try {
+      const result = await runMultiAgentDebateDecision(context, rounds);
+      return res.json({ ok: true, result });
+    } catch (err) {
+      if (err instanceof GeminiServiceError) {
+        return res.status(err.httpStatus).json({
+          ok: false,
+          code: err.code,
+          error: err.message,
+        });
+      }
+      return res.status(502).json({
+        ok: false,
+        code: 'DEBATE_ENGINE_FAILED',
+        error: err instanceof Error ? err.message : 'Unexpected debate engine error.',
+      });
+    }
+  });
+
+  app.post('/api/v1/search/grounding', requireOperatorAuth, tokenBucketRateLimit, async (req, res) => {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const queryText = String(body.query || '').trim();
+    if (!queryText) {
+      return res.status(400).json({
+        ok: false,
+        code: 'INVALID_QUERY',
+        error: 'Provide a non-empty market search query.',
+      });
+    }
+    try {
+      const grounding = await runGroundedMarketSearch(queryText);
+      return res.json({ ok: true, grounding });
+    } catch (err) {
+      if (err instanceof GeminiServiceError) {
+        return res.status(err.httpStatus).json({
+          ok: false,
+          code: err.code,
+          error: err.message,
+        });
+      }
+      return res.status(502).json({
+        ok: false,
+        code: 'GROUNDING_FAILED',
+        error: err instanceof Error ? err.message : 'Unexpected Search grounding error.',
+      });
+    }
+  });
+
+  app.post('/api/telegram/audit/dispatch', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+    const kindRaw = String(req.body?.kind || 'CONTINUOUS_AUDIT').toUpperCase();
+    const kind: SystemAuditLogEntry['kind'] =
+      kindRaw === 'DAILY_DIGEST' ? 'DAILY_DIGEST' : 'CONTINUOUS_AUDIT';
+    const entry = await dispatchDeveloperSystemAudit(kind);
+    return res.json({
+      ok: true,
+      auditEntry: entry,
+      status: buildTelegramDualStreamStatus(),
+    });
+  });
+
+  app.post('/api/telegram/audit/schedule', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const { dailyAutoDeliveryEnabled, dailyScheduledUtcHour, developerChatId } = req.body || {};
+    if (typeof dailyAutoDeliveryEnabled === 'boolean') {
+      dailyAuditAutoDeliveryEnabled = dailyAutoDeliveryEnabled;
+    }
+    if (dailyScheduledUtcHour !== undefined) {
+      const hr = Number(dailyScheduledUtcHour);
+      if (!Number.isFinite(hr) || hr < 0 || hr > 23) {
+        return res.status(400).json({
+          ok: false,
+          error: 'dailyScheduledUtcHour must be an integer between 0 and 23 (UTC).',
+        });
+      }
+      dailyAuditScheduledUtcHour = Math.floor(hr);
+    }
+    if (typeof developerChatId === 'string') {
+      const trimmed = developerChatId.trim();
+      if (trimmed.length > 0) {
+        if (!/^-?\d{5,20}$/.test(trimmed)) {
+          return res.status(400).json({
+            ok: false,
+            error: 'Developer private chat ID must be a valid numeric Telegram user ID.',
+          });
+        }
+        if (trimmed === getPublicChannelChatId()) {
+          return res.status(409).json({
+            ok: false,
+            error:
+              'Developer private audit chat ID must be separate from the public Signal Forge channel CHAT_ID.',
+          });
+        }
+        boundDeveloperChatId = trimmed;
+        autoBoundDeveloperViaWebhook = false;
+      }
+    }
+    return res.json({
+      ok: true,
+      status: buildTelegramDualStreamStatus(),
+    });
+  });
+
+  app.post('/api/telegram/webhook/register', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+    const explicitUrl = typeof req.body?.webhookUrl === 'string' ? req.body.webhookUrl : undefined;
+    const outcome = await registerTelegramWebhook(explicitUrl);
+    return res.status(outcome.ok ? 200 : 400).json({
+      ...outcome,
+      status: buildTelegramDualStreamStatus(),
+    });
+  });
+
+  app.get('/api/telegram/webhook/info', async (_req, res) => {
+    const token = getTelegramBotToken();
+    if (!token) {
+      return res.json({
+        ok: false,
+        error: 'BOT_TOKEN not configured.',
+        status: buildTelegramDualStreamStatus(),
+      });
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    try {
+      const resp = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`, {
+        signal: controller.signal,
+      });
+      const json = await resp.json().catch(() => null);
+      if (resp.ok && json?.ok && json.result) {
+        telegramWebhookRegistered = Boolean(json.result.url);
+        if (json.result.url) telegramWebhookUrl = String(json.result.url);
+        telegramWebhookLastError = json.result.last_error_message
+          ? String(json.result.last_error_message)
+          : null;
+        return res.json({
+          ok: true,
+          webhookInfo: {
+            url: json.result.url || '',
+            pendingUpdateCount: Number(json.result.pending_update_count ?? 0),
+            lastErrorMessage: json.result.last_error_message || null,
+            maxConnections: Number(json.result.max_connections ?? 40),
+          },
+          status: buildTelegramDualStreamStatus(),
+        });
+      }
+      return res.json({
+        ok: false,
+        error: String(json?.description || `Telegram getWebhookInfo HTTP ${resp.status}`),
+        status: buildTelegramDualStreamStatus(),
+      });
+    } catch (err) {
+      return res.json({
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to reach Telegram API.',
+        status: buildTelegramDualStreamStatus(),
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  // Inbound Telegram Bot Webhook Receiver (Secret-token verified or authenticated operator test)
+  app.post('/api/telegram/webhook', standardWriteRateLimit, async (req, res) => {
+    const expectedSecret = getTelegramWebhookSecret();
+    const providedSecret = String(req.headers['x-telegram-bot-api-secret-token'] || '');
+    const isOperatorSimulated =
+      hasConfiguredOperatorToken(req) ||
+      verifyOperatorSessionToken(req.headers['x-signal-session']);
+
+    if (expectedSecret && !isOperatorSimulated && !timingSafeEqualStr(providedSecret, expectedSecret)) {
+      return res.status(401).json({
+        ok: false,
+        error: 'Invalid X-Telegram-Bot-Api-Secret-Token header.',
+      });
+    }
+
+    const parsed = parseTelegramWebhookUpdate(req.body);
+    if (!parsed.valid) {
+      return res.status(400).json({ ok: false, error: 'Malformed Telegram webhook update payload.' });
+    }
+
+    telegramWebhookTotalInbound += 1;
+    telegramWebhookLastInboundAt = new Date().toISOString();
+
+    let actionTaken = 'Update acknowledged';
+    if (parsed.chatType === 'private' && parsed.chatId) {
+      if (parsed.command === '/start' || parsed.command === '/bind_dev') {
+        if (parsed.chatId !== getPublicChannelChatId()) {
+          boundDeveloperChatId = parsed.chatId;
+          autoBoundDeveloperViaWebhook = true;
+          actionTaken = 'Bound developer private audit stream & replied with live telemetry';
+          await dispatchDeveloperSystemAudit('WEBHOOK_COMMAND', parsed.chatId);
+        }
+      } else if (parsed.command === '/audit' || parsed.command === '/status' || parsed.command === '/health') {
+        if (!boundDeveloperChatId && parsed.chatId !== getPublicChannelChatId()) {
+          boundDeveloperChatId = parsed.chatId;
+          autoBoundDeveloperViaWebhook = true;
+        }
+        actionTaken = `Dispatched live developer system audit for ${parsed.command}`;
+        await dispatchDeveloperSystemAudit('WEBHOOK_COMMAND', parsed.chatId);
+      } else if (parsed.command === '/daily') {
+        actionTaken = 'Dispatched on-demand daily system audit report';
+        await dispatchDeveloperSystemAudit('DAILY_DIGEST', parsed.chatId);
+      } else if (parsed.command === '/signals') {
+        const latest = publicSignalStreamLog.slice(0, 3);
+        const replyText =
+          latest.length > 0
+            ? latest.map((s) => s.formattedMessage).join('\n\n---\n\n')
+            : '[SIGNAL FORGE] No public trade signals dispatched yet in current session.';
+        await sendTelegramRawMessage({ chatId: parsed.chatId, text: replyText });
+        actionTaken = `Replied with ${latest.length} recent Signal Forge trade alerts`;
+      }
+    }
+
+    const inboundRecord: TelegramWebhookInboundEvent = {
+      id: `wh_${parsed.updateId || Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+      updateId: parsed.updateId,
+      chatId: parsed.chatId ? maskChatId(parsed.chatId) : 'unknown',
+      chatType: parsed.chatType,
+      senderLabel: parsed.senderLabel,
+      command: parsed.command,
+      textPreview: parsed.text.slice(0, 120) || '(no text)',
+      actionTaken,
+      timestamp: telegramWebhookLastInboundAt,
+    };
+    recentWebhookEventsLog.unshift(inboundRecord);
+    if (recentWebhookEventsLog.length > 25) recentWebhookEventsLog.length = 25;
+
+    return res.json({
+      ok: true,
+      event: inboundRecord,
+      status: buildTelegramDualStreamStatus(),
+    });
   });
 
   // Autonomous Backend Monitoring Agent Health & Sub-Second SSE Heartbeat Stream (Spot Priority)
@@ -6600,6 +8977,12 @@ async function startServer() {
     pos.pnlPercent = settlement.pnlPercent;
     pos.roePercent = settlement.roePercent;
     pos.closedAt = new Date().toISOString();
+    profitVaultEngine.ingestRealizedTrade({
+      tradeId: `manual_close_${pos.id}`,
+      symbol: pos.symbol,
+      realizedPnlUsd: settlement.netRealizedPnlUsd,
+      sourceAgent: 'MANUAL_EXECUTION_CLOSE',
+    });
 
     const crossMargin = summarizeCrossMarginWallet(
       crossWalletBalanceUsd,
@@ -6656,6 +9039,612 @@ async function startServer() {
     })
   );
 
+  // --- Multi-Agent Trading Architecture: TradingView Webhooks, Public Trade ID Verification & 30m Dev Audit ---
+  const serverVerifiedTrades: PublicVerifiedTradeRecord[] = [
+    createPublicVerifiedTradeRecord({
+      sequenceNumber: 1,
+      symbol: 'BTCUSDT',
+      direction: 'BUY',
+      market: 'SPOT',
+      stage: 'CONFIRMED_SETUP',
+      entryPrice: 63850,
+      stopLoss: 62700,
+      takeProfit: 81100,
+      confidence: 88,
+      patternLabel: 'EMA 21/50/200 Alignment + Institutional LVN Breakout',
+      createdAtIso: '2026-05-01T09:15:00.000Z',
+    }),
+    createPublicVerifiedTradeRecord({
+      sequenceNumber: 2,
+      symbol: 'SOLUSDT',
+      direction: 'BUY',
+      market: 'USD_M_FUTURES',
+      stage: 'EXECUTION_ENTRY',
+      entryPrice: 148.5,
+      stopLoss: 145.6,
+      takeProfit: 186.2,
+      confidence: 85,
+      patternLabel: '3/3 Pre-Pump Orderbook Accumulation',
+      createdAtIso: '2026-05-01T11:30:00.000Z',
+    }),
+  ];
+  const serverTradingViewSignals: TradingViewWebhookSignal[] = [];
+  let serverLast30mAuditSentAtMs = Date.now() - 10 * 60_000;
+
+  app.get('/api/trading-arch/state', (_req, res) => {
+    return res.json({
+      ok: true,
+      verifiedTradeCount: serverVerifiedTrades.length,
+      verifiedTrades: serverVerifiedTrades.slice(0, 25),
+      tradingViewSignals: serverTradingViewSignals.slice(0, 25),
+      auditBatchIntervalMinutes: DEVELOPER_AUDIT_BATCH_INTERVAL_MIN,
+      developerExclusiveAuditOnly: true,
+      publicChannelAuditBlocked: true,
+      last30mAuditSentAtIso: new Date(serverLast30mAuditSentAtMs).toISOString(),
+    });
+  });
+
+  // Public Community Trade ID Cryptographic Verification Protocol
+  app.get('/api/trading-arch/verify/:tradeId', (req, res) => {
+    const tradeId = String(req.params.tradeId || '').trim();
+    const verification = verifyPublicTradeId(tradeId, serverVerifiedTrades);
+    return res.status(verification.verified ? 200 : 404).json({
+      ok: verification.verified,
+      verification,
+    });
+  });
+
+  app.post('/api/trading-arch/verify/register', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const symbol = String(body.symbol || 'BTCUSDT').toUpperCase();
+    const direction = String(body.direction || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
+    const market =
+      String(body.market || 'SPOT').toUpperCase() === 'USD_M_FUTURES' ? 'USD_M_FUTURES' : 'SPOT';
+    const entryPrice = Number(body.entryPrice) || spotFeedCache[symbol]?.price || 100;
+    const stopLoss =
+      Number(body.stopLoss) ||
+      (direction === 'BUY' ? entryPrice * 0.985 : entryPrice * 1.015);
+    const rrMultiplier = Math.max(5, Number(body.rrMultiplier) || 5);
+    const riskDist = Math.max(entryPrice * 0.002, Math.abs(entryPrice - stopLoss));
+    const takeProfit =
+      Number(body.takeProfit) ||
+      (direction === 'BUY'
+        ? entryPrice + riskDist * rrMultiplier
+        : Math.max(entryPrice * 0.05, entryPrice - riskDist * rrMultiplier));
+    const record = createPublicVerifiedTradeRecord({
+      sequenceNumber: serverVerifiedTrades.length + 1,
+      symbol,
+      direction,
+      market,
+      stage:
+        body.stage === 'EXECUTION_ENTRY' || body.stage === 'FINAL_PNL_RESULT'
+          ? body.stage
+          : 'CONFIRMED_SETUP',
+      entryPrice,
+      stopLoss,
+      takeProfit,
+      confidence: Math.min(99, Math.max(50, Number(body.confidence) || 84)),
+      patternLabel: String(body.patternLabel || 'Multi-Agent Confirmed Setup'),
+      realizedPnlUsd: typeof body.realizedPnlUsd === 'number' ? body.realizedPnlUsd : null,
+      realizedPnlPct: typeof body.realizedPnlPct === 'number' ? body.realizedPnlPct : null,
+    });
+    serverVerifiedTrades.unshift(record);
+    if (serverVerifiedTrades.length > 100) serverVerifiedTrades.length = 100;
+    return res.status(201).json({ ok: true, record });
+  });
+
+  // TradingView Webhook Integration for Technical Indicator Synchronization
+  app.post('/api/tradingview/webhook', standardWriteRateLimit, (req, res) => {
+    const signal = normalizeTradingViewWebhook((req.body ?? {}) as Record<string, unknown>);
+    if (!signal) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Invalid TradingView webhook payload: requires valid symbol, price > 0, and action.',
+      });
+    }
+    serverTradingViewSignals.unshift(signal);
+    if (serverTradingViewSignals.length > 50) serverTradingViewSignals.length = 50;
+    return res.json({
+      ok: true,
+      signal,
+      totalReceived: serverTradingViewSignals.length,
+    });
+  });
+
+  // Autonomous System Audit & 30-Minute Batched Developer-Exclusive Routing
+  app.post('/api/trading-arch/audit/run', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const forceElapsed = Boolean(body.forceElapsed);
+    const nowIso = new Date().toISOString();
+    const rawEvents: Array<{
+      id: string;
+      source: 'EXECUTION_LOG' | 'BROKER_API' | 'NOTIFICATION_PAYLOAD' | 'FEED_PIPELINE';
+      httpStatus?: number;
+      message: string;
+      timestampIso: string;
+    }> = [];
+
+    if (Array.isArray(body.events)) {
+      for (let i = 0; i < body.events.length; i++) {
+        const item = body.events[i] as Record<string, unknown>;
+        rawEvents.push({
+          id: String(item.id || `evt_${i}`),
+          source:
+            item.source === 'EXECUTION_LOG' ||
+            item.source === 'BROKER_API' ||
+            item.source === 'NOTIFICATION_PAYLOAD' ||
+            item.source === 'FEED_PIPELINE'
+              ? item.source
+              : 'BROKER_API',
+          httpStatus: typeof item.httpStatus === 'number' ? item.httpStatus : undefined,
+          message: String(item.message || 'Unknown audit event'),
+          timestampIso: typeof item.timestampIso === 'string' ? item.timestampIso : nowIso,
+        });
+      }
+    } else {
+      for (const errLog of forgeCapitalState.apiErrorLogs.slice(0, 6)) {
+        rawEvents.push({
+          id: errLog.id,
+          source: 'BROKER_API',
+          httpStatus: errLog.httpStatus,
+          message: `${errLog.endpoint}: ${errLog.message}`,
+          timestampIso: errLog.timestamp,
+        });
+      }
+    }
+
+    const findings = diagnoseSystemAuditEvents(rawEvents);
+    const nowMs = Date.now();
+    const criticalFindingsCount = findings.filter((f) => f.severity === 'CRITICAL').length;
+    const dispatchDecision = evaluateDeveloperAuditDispatch({
+      policy: {
+        developerExclusiveOnly: true,
+        suppressHeartbeatSpam: true,
+        batchIntervalMinutes: DEVELOPER_AUDIT_BATCH_INTERVAL_MIN,
+        lastBatchSentAtMs: forceElapsed
+          ? nowMs - (DEVELOPER_AUDIT_BATCH_INTERVAL_MIN + 1) * 60_000
+          : serverLast30mAuditSentAtMs,
+        pendingMetricsCount: findings.length,
+        anomalyLatencyThresholdMs: 2500,
+      },
+      nowMs,
+      currentPeakLatencyMs: lastSpotPollLatencyMs,
+      criticalFindingsCount,
+    });
+    if (dispatchDecision.shouldDispatchNow) {
+      serverLast30mAuditSentAtMs = nowMs;
+    }
+    return res.json({
+      ok: true,
+      findings,
+      dispatchDecision,
+    });
+  });
+
+  // Agentic CLI Loop, Unified AI Model Gateway & Confirmed Local Script Editor
+  app.get('/api/agentic-cli/status', (_req, res) => {
+    return res.json({
+      ok: true,
+      snapshot: agenticCliGateway.getSnapshot(),
+    });
+  });
+
+  app.post('/api/agentic-cli/toggle', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (typeof body.enabled !== 'boolean') {
+      return res.status(400).json({
+        ok: false,
+        error: 'Boolean field "enabled" is required.',
+      });
+    }
+    const snapshot = agenticCliGateway.setLoopEnabled(body.enabled);
+    return res.json({ ok: true, snapshot });
+  });
+
+  app.post('/api/agentic-cli/gateway/select', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const connectorId = String(body.connectorId || '').trim();
+    if (!connectorId) {
+      return res.status(400).json({ ok: false, error: 'connectorId is required.' });
+    }
+    const result = agenticCliGateway.selectConnector(connectorId);
+    return res.status(result.ok ? 200 : 400).json(result);
+  });
+
+  app.get('/api/agentic-cli/file-preview', (req, res) => {
+    const targetPath = String(req.query.path || 'src/config/agenticCliRuntimeConfig.ts');
+    const result = agenticCliGateway.readAllowlistedFile(targetPath);
+    return res.status(result.ok ? 200 : 400).json(result);
+  });
+
+  app.post('/api/agentic-cli/propose', standardWriteRateLimit, async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const command = String(body.command || '').trim();
+    const inputSource = body.inputSource === 'VOICE' ? 'VOICE' : 'CLI_TEXT';
+    const connectorId =
+      typeof body.connectorId === 'string' && body.connectorId.trim()
+        ? body.connectorId.trim()
+        : undefined;
+
+    let explicitFilePatch:
+      | {
+          readonly targetPath: string;
+          readonly searchText: string;
+          readonly replaceText: string;
+          readonly rationale?: string;
+        }
+      | undefined;
+
+    if (body.explicitFilePatch && typeof body.explicitFilePatch === 'object') {
+      const fp = body.explicitFilePatch as Record<string, unknown>;
+      explicitFilePatch = {
+        targetPath: String(fp.targetPath || ''),
+        searchText: String(fp.searchText || ''),
+        replaceText: String(fp.replaceText ?? ''),
+        rationale: typeof fp.rationale === 'string' ? fp.rationale : undefined,
+      };
+    }
+
+    const result = await agenticCliGateway.createProposal({
+      command,
+      inputSource,
+      connectorId,
+      explicitFilePatch,
+    });
+    return res.status(result.statusCode).json(result);
+  });
+
+  app.post('/api/agentic-cli/confirm', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const proposalId = String(body.proposalId || '').trim();
+    const confirmationToken = String(body.confirmationToken || '').trim();
+    const approved = body.approved === true;
+    const result = agenticCliGateway.confirmProposal({
+      proposalId,
+      confirmationToken,
+      approved,
+    });
+    return res.status(result.statusCode).json(result);
+  });
+
+  app.post('/api/agentic-cli/reject', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const proposalId = String(body.proposalId || '').trim();
+    const result = agenticCliGateway.rejectProposal(proposalId);
+    return res.status(result.statusCode).json(result);
+  });
+
+  app.post('/api/agentic-cli/revert', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const proposalId = String(body.proposalId || '').trim();
+    const result = agenticCliGateway.revertProposalFile(proposalId);
+    return res.status(result.statusCode).json(result);
+  });
+
+  // Fable 5.2 Multi-Agent 8-Layer Self-Improving Trading Orchestrator Routes
+  app.get('/api/fable/status', (_req, res) => {
+    return res.json({
+      ok: true,
+      snapshot: fableOrchestrator.getSnapshot(),
+    });
+  });
+
+  app.post('/api/fable/evolve', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const paramRaw = String(body.parameterToMutate || 'stopAtrMult');
+    const parameterToMutate =
+      paramRaw === 'lookback' || paramRaw === 'entryZscore' || paramRaw === 'stopAtrMult'
+        ? paramRaw
+        : 'stopAtrMult';
+    const newValue = Number(body.newValue);
+    if (!Number.isFinite(newValue) || newValue <= 0) {
+      return res.status(400).json({ ok: false, error: 'Positive numeric newValue is required.' });
+    }
+    const regime = body.regime === 'HIGH_VOLATILITY' ? 'HIGH_VOLATILITY' : 'QUIET';
+    const spotPrice = spotFeedCache['BTCUSDT']?.price || 91_400;
+    const result = fableOrchestrator.runPhase5Evolution({
+      parameterToMutate,
+      newValue,
+      regime,
+      spotPrice,
+    });
+    return res.json(result);
+  });
+
+  app.post('/api/fable/risk/evaluate', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const familyRaw = String(body.family || 'MOMENTUM').toUpperCase();
+    const family =
+      familyRaw === 'BREAKOUT' || familyRaw === 'MEAN_REVERSION' || familyRaw === 'MOMENTUM'
+        ? familyRaw
+        : 'MOMENTUM';
+    const regime = body.regime === 'HIGH_VOLATILITY' ? 'HIGH_VOLATILITY' : 'QUIET';
+    const side = String(body.side || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
+    const activeCorrelations = Array.isArray(body.activeCorrelations)
+      ? body.activeCorrelations.map((v) => Number(v)).filter((v) => Number.isFinite(v))
+      : [0.2];
+    const result = fableOrchestrator.evaluateRisk({
+      side,
+      bid: Number(body.bid) || 91_395,
+      ask: Number(body.ask) || 91_405,
+      atr: Number(body.atr) || 840,
+      regime,
+      currentEquityUsd: Number(body.currentEquityUsd) || 100_000,
+      startOfDayEquityUsd: Number(body.startOfDayEquityUsd) || 100_000,
+      highWaterMarkEquityUsd: Number(body.highWaterMarkEquityUsd) || 100_000,
+      family,
+      sharpeOverride:
+        typeof body.sharpeOverride === 'number' && Number.isFinite(body.sharpeOverride)
+          ? body.sharpeOverride
+          : undefined,
+      activeCorrelations,
+    });
+    return res.json(result);
+  });
+
+  app.post('/api/fable/options/price', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const optionType = String(body.optionType || 'PUT').toUpperCase() === 'CALL' ? 'CALL' : 'PUT';
+    const spotPrice = Number(body.spotPrice) || 91_400;
+    const strikePrice = Number(body.strikePrice) || spotPrice;
+    const timeToExpiryYears = Number(body.timeToExpiryYears) || 30 / 365;
+    const riskFreeRate = Number.isFinite(Number(body.riskFreeRate)) ? Number(body.riskFreeRate) : 0.045;
+    const volatility = Number(body.volatility) || 0.46;
+    const marketPrice =
+      typeof body.marketPrice === 'number' && Number.isFinite(body.marketPrice) && body.marketPrice > 0
+        ? body.marketPrice
+        : undefined;
+    const result = fableOrchestrator.evaluateOption({
+      symbol: String(body.symbol || `BTC-OPT-${optionType}`).slice(0, 40),
+      optionType,
+      spotPrice,
+      strikePrice,
+      timeToExpiryYears,
+      riskFreeRate,
+      volatility,
+      marketPrice,
+    });
+    return res.json(result);
+  });
+
+  app.post('/api/fable/deployment/approve-live', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = fableOrchestrator.approveLiveDeployment({
+      versionId: String(body.versionId || '').trim(),
+      approvalToken: String(body.approvalToken || '').trim(),
+      operatorName: String(body.operatorName || 'Lead Operator').trim(),
+    });
+    return res.status(result.statusCode).json(result);
+  });
+
+  app.get('/api/fable/python-source', (req, res) => {
+    const fileId = String(req.query.file || 'main_orchestrator').trim();
+    const result = fableOrchestrator.readAllowlistedPythonFile(fileId);
+    return res.status(result.ok ? 200 : 400).json(result);
+  });
+
+  // Signal Forge × Freqtrade Unified CCXT, SQLite Dry-Run, 50-Win Live Gate & Telegram RPC Routes
+  app.get('/api/freqtrade/state', (_req, res) => {
+    return res.json({
+      ok: true,
+      snapshot: freqtradeCore.getSnapshot(),
+    });
+  });
+
+  app.post('/api/freqtrade/mode', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const mode = String(body.mode || '').trim().toUpperCase();
+    const result = freqtradeCore.setTradingMode(mode);
+    return res.status(result.statusCode).json({
+      ...result,
+      snapshot: freqtradeCore.getSnapshot(),
+    });
+  });
+
+  app.post('/api/freqtrade/signal/execute', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const rawExchange = String(body.exchange || 'binance').trim().toLowerCase();
+    if (!isSupportedExchange(rawExchange)) {
+      return res.status(400).json({
+        ok: false,
+        message: `Unsupported CCXT exchange "${rawExchange}". Allowed: binance, bybit, okx, kraken.`,
+        snapshot: freqtradeCore.getSnapshot(),
+      });
+    }
+    const symbol = String(body.symbol || 'BTC/USDT').trim().toUpperCase();
+    const compactKey = symbol.replace('/', '');
+    const marketType = String(body.marketType || 'FUTURES').toUpperCase() === 'SPOT' ? 'SPOT' : 'FUTURES';
+    const side = String(body.side || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
+    const rawEntry = Number(body.entryPrice);
+    const liveSpotFallback = spotFeedCache[compactKey]?.price || (compactKey === 'BTCUSDT' ? 91_400 : 3_250);
+    const entryPrice = Number.isFinite(rawEntry) && rawEntry > 0 ? rawEntry : liveSpotFallback;
+    const stakeUsd = Number(body.stakeUsd) || 500;
+    const leverage = Number(body.leverage) || (marketType === 'SPOT' ? 1 : 3);
+    const confidencePct = Number(body.confidencePct) || 84;
+    const signalId = String(body.signalId || `sf_sig_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
+
+    const result = freqtradeCore.executeStandardizedSignal({
+      signalId,
+      exchange: rawExchange,
+      symbol,
+      marketType,
+      side,
+      entryPrice,
+      stakeUsd,
+      leverage,
+      confidencePct,
+      strategyName: String(body.strategyName || 'SignalForge_CCXT_Unified').slice(0, 64),
+    });
+    return res.status(result.statusCode).json({
+      ...result,
+      snapshot: freqtradeCore.getSnapshot(),
+    });
+  });
+
+  app.post('/api/freqtrade/positions/:tradeId/close', standardWriteRateLimit, (req, res) => {
+    const tradeId = Number.parseInt(String(req.params.tradeId || ''), 10);
+    if (!Number.isInteger(tradeId) || tradeId <= 0) {
+      return res.status(400).json({ ok: false, message: 'Valid integer tradeId is required.' });
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const rawExit = Number(body.exitPrice);
+    const exitPrice = Number.isFinite(rawExit) && rawExit > 0 ? rawExit : undefined;
+    const reason = String(body.reason || 'MANUAL_CLOSE').slice(0, 48);
+    const result = freqtradeCore.closePosition(tradeId, exitPrice, reason);
+    return res.status(result.statusCode).json({
+      ...result,
+      snapshot: freqtradeCore.getSnapshot(),
+    });
+  });
+
+  app.post('/api/freqtrade/tick', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const mergedPrices: Record<string, number> = {};
+    for (const [sym, entry] of Object.entries(spotFeedCache)) {
+      if (entry && Number.isFinite(entry.price) && entry.price > 0) {
+        mergedPrices[sym] = entry.price;
+      }
+    }
+    if (body.prices && typeof body.prices === 'object') {
+      for (const [k, v] of Object.entries(body.prices as Record<string, unknown>)) {
+        const num = Number(v);
+        if (Number.isFinite(num) && num > 0) {
+          mergedPrices[k] = num;
+        }
+      }
+    }
+    const events = freqtradeCore.applyMarketPriceTick(mergedPrices);
+    return res.json({
+      ok: true,
+      events,
+      snapshot: freqtradeCore.getSnapshot(),
+    });
+  });
+
+  app.post('/api/freqtrade/rpc/command', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const command = String(body.command || '/status').trim().slice(0, 32);
+    const result = freqtradeCore.handleTelegramRpcCommand(command);
+    return res.json({
+      ...result,
+      snapshot: freqtradeCore.getSnapshot(),
+    });
+  });
+
+  app.post('/api/freqtrade/audit/dispatch', standardWriteRateLimit, (_req, res) => {
+    const latency = Number.isFinite(monitorState.eventLoopLagMs) && monitorState.eventLoopLagMs > 0
+      ? monitorState.eventLoopLagMs
+      : 8.4;
+    const audit = freqtradeCore.recordSystemAudit(latency);
+    return res.json({
+      ok: true,
+      audit,
+      snapshot: freqtradeCore.getSnapshot(),
+    });
+  });
+
+  app.get('/api/freqtrade/source', (req, res) => {
+    const fileId = String(req.query.file || 'ccxt_router').trim();
+    const result = freqtradeCore.readAllowlistedCoreSource(fileId);
+    return res.status(result.statusCode).json(result);
+  });
+
+  // Signal Forge 6-Phase Hybrid Production Architecture (Python Control Plane + Rust Execution Core)
+  app.get('/api/hybrid/state', (_req, res) => {
+    return res.json({
+      ok: true,
+      state: hybridArchitecture.getStateSnapshot(),
+    });
+  });
+
+  app.post('/api/hybrid/clones/scale', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const marketVolatilityPct = Number(body.marketVolatilityPct);
+    const computeNodes = Number(body.computeNodes);
+    const baseClonesPerNode =
+      body.baseClonesPerNode !== undefined ? Number(body.baseClonesPerNode) : 64;
+    const targetStreams = body.targetStreams !== undefined ? Number(body.targetStreams) : 28;
+
+    if (
+      !Number.isFinite(marketVolatilityPct) ||
+      marketVolatilityPct < 0.5 ||
+      marketVolatilityPct > 100
+    ) {
+      return res.status(400).json({
+        ok: false,
+        message: 'marketVolatilityPct must be a number between 0.5 and 100.',
+      });
+    }
+    if (!Number.isFinite(computeNodes) || computeNodes < 1 || computeNodes > 512) {
+      return res.status(400).json({
+        ok: false,
+        message: 'computeNodes must be an integer between 1 and 512.',
+      });
+    }
+
+    const plan = hybridArchitecture.scaleWorkerClones({
+      marketVolatilityPct,
+      computeNodes,
+      baseClonesPerNode,
+      targetStreams,
+    });
+    return res.json({
+      ok: true,
+      plan,
+      state: hybridArchitecture.getStateSnapshot(),
+    });
+  });
+
+  app.post('/api/hybrid/backtest/run', standardWriteRateLimit, (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      const record = hybridArchitecture.runBacktestAndTrack({
+        assetClass: String(body.assetClass ?? 'CRYPTO'),
+        strategyFamily: String(body.strategyFamily ?? 'BREAKOUT_MOMENTUM'),
+        startDate: String(body.startDate ?? '2024-01-01'),
+        endDate: String(body.endDate ?? '2024-12-31'),
+        regime: String(body.regime ?? 'TRENDING_BULL'),
+        liveVolatilityPct: Number(body.liveVolatilityPct ?? 24),
+        fastWindow: body.fastWindow !== undefined ? Number(body.fastWindow) : undefined,
+        slowWindow: body.slowWindow !== undefined ? Number(body.slowWindow) : undefined,
+        tickCount: body.tickCount !== undefined ? Number(body.tickCount) : 12000,
+        slippageBps: body.slippageBps !== undefined ? Number(body.slippageBps) : 1.8,
+      });
+      return res.json({
+        ok: true,
+        record,
+        state: hybridArchitecture.getStateSnapshot(),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Backtest validation failed.';
+      return res.status(400).json({ ok: false, message });
+    }
+  });
+
+  app.get('/api/hybrid/strategies/:strategyId', (req, res) => {
+    const strategyId = String(req.params.strategyId || '').trim();
+    const record = hybridArchitecture.getStrategyById(strategyId);
+    if (!record) {
+      return res.status(404).json({ ok: false, message: 'Tracked strategy not found.' });
+    }
+    return res.json({ ok: true, record });
+  });
+
+  app.get('/api/hybrid/source', (req, res) => {
+    const fileKey = String(req.query.file || 'rust_main').trim();
+    try {
+      const result = hybridArchitecture.readAllowlistedSource(fileKey);
+      return res.json({
+        ok: true,
+        descriptor: result.descriptor,
+        content: result.content,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Source file blocked.';
+      return res.status(400).json({ ok: false, message });
+    }
+  });
+
   // Strict 3-Hour Batched Signal Digest + Daily/Weekly/Monthly Performance Reports (gated by App Live)
   const ONE_DAY_MS = 24 * 60 * 60 * 1000;
   setInterval(() => {
@@ -6680,6 +9669,29 @@ async function startServer() {
       dispatchPerformanceReport('MONTHLY').catch(() => undefined);
     }
   }, ONE_DAY_MS);
+
+  // Dual-Stream Telegram Continuous Developer Audit Loop (60s) + Automated Daily UTC Audit Delivery
+  setTimeout(() => {
+    dispatchDeveloperSystemAudit('CONTINUOUS_AUDIT').catch(() => undefined);
+    if (process.env.APP_URL && /^https:\/\//i.test(process.env.APP_URL) && getTelegramBotToken()) {
+      registerTelegramWebhook(process.env.APP_URL).catch(() => undefined);
+    }
+  }, 4500);
+
+  setInterval(() => {
+    if (!appLiveEnabled) return;
+    dispatchDeveloperSystemAudit('CONTINUOUS_AUDIT').catch(() => undefined);
+    if (
+      shouldTriggerDailyAudit({
+        nowMs: Date.now(),
+        lastSentDateUtc: lastDailyAuditDateUtc,
+        scheduledUtcHour: dailyAuditScheduledUtcHour,
+        enabled: dailyAuditAutoDeliveryEnabled,
+      })
+    ) {
+      dispatchDeveloperSystemAudit('DAILY_DIGEST').catch(() => undefined);
+    }
+  }, CONTINUOUS_AUDIT_INTERVAL_SEC * 1000);
 
   // Flush coalesced backend Binance Spot WebSocket ticks to SSE subscribers every 250ms
   setInterval(() => {
@@ -6829,6 +9841,17 @@ async function startServer() {
       console.error('[Autonomous Loop Error]', err);
     }
   }, 5000);
+
+  // Self-Healing 30-Second Probe Loop (Telegram Webhook -> Polling Auto-Failover & Subsystem Health)
+  setInterval(() => {
+    try {
+      const tgSnap = telegramDispatchStabilizer.getSnapshot();
+      const webhookHealthy = tgSnap.failedCount === 0 && tgSnap.pendingCount < 5;
+      selfHealingSupervisor.recordTelegramWebhookProbe(webhookHealthy);
+    } catch {
+      // non-fatal probe error
+    }
+  }, 30_000);
 
   if (process.env.NODE_ENV === 'production') {
     const distPath = path.resolve(__dirname, 'dist');

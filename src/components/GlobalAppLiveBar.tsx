@@ -1,10 +1,8 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Mic, MicOff, Power, Radio, ShieldAlert, Wifi, WifiOff } from 'lucide-react';
+import { Power, ShieldAlert, Wifi, WifiOff } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export function GlobalAppLiveBar() {
-  const navigate = useNavigate();
   const {
     appLiveEnabled,
     setAppLiveEnabled,
@@ -14,11 +12,6 @@ export function GlobalAppLiveBar() {
     wsVerification,
     reconciliationTelemetry,
     refreshWsVerification,
-    voiceAgent,
-    setVoiceMode,
-    startPushToTalk,
-    stopVoiceListening,
-    executeVoiceCommand,
   } = useApp();
 
   const [verifyingWs, setVerifyingWs] = useState(false);
@@ -32,24 +25,14 @@ export function GlobalAppLiveBar() {
     }
   };
 
-  const handleEmergencyVoiceStop = async () => {
-    const res = await executeVoiceCommand('emergency stop');
-    if (res.routeTarget) navigate(res.routeTarget);
-  };
-
-  const handleVoiceResume = async () => {
-    const res = await executeVoiceCommand('resume app live');
-    if (res.routeTarget) navigate(res.routeTarget);
-  };
-
-  const isAlwaysListening = voiceAgent.mode === 'ALWAYS_LISTENING';
   const backendWsActive = Boolean(wsVerification?.spotWsConnected);
   const wsActive = wsConnected || backendWsActive;
 
   return (
     <div
       role="region"
-      aria-label="Global App Live & Voice Emergency Bar"
+      aria-label="Global App Live & Telemetry Bar"
+      data-testid="global-app-live-bar"
       className={`border-b transition-colors ${
         appLiveEnabled
           ? 'border-slate-800/90 bg-[#0b101d]'
@@ -136,74 +119,20 @@ export function GlobalAppLiveBar() {
           </div>
         </div>
 
-        {/* Dedicated Hands-Free Voice Command Controls & Emergency Stop */}
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <button
-            type="button"
-            data-testid="voice-ptt-btn"
-            onClick={() => (voiceAgent.listening && !isAlwaysListening ? stopVoiceListening() : startPushToTalk())}
-            className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap ${
-              voiceAgent.listening
-                ? 'border-blue-400 bg-blue-500/20 text-blue-200'
-                : 'border-slate-700 bg-[#0d1323] text-slate-200 hover:border-[#3b82f6]'
-            }`}
-          >
-            {voiceAgent.listening ? (
-              <Mic className="h-3.5 w-3.5 text-blue-300" aria-hidden="true" />
-            ) : (
-              <MicOff className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
-            )}
-            <span>{voiceAgent.listening ? 'Listening...' : 'Push-to-Talk'}</span>
-          </button>
-
-          <button
-            type="button"
-            data-testid="voice-always-listening-btn"
-            onClick={() => setVoiceMode(isAlwaysListening ? 'STANDBY' : 'ALWAYS_LISTENING')}
-            className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap ${
-              isAlwaysListening
-                ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
-                : 'border-slate-800 bg-[#0d1323] text-slate-400 hover:text-white'
-            }`}
-          >
-            <Radio className="h-3 w-3" aria-hidden="true" />
-            <span>{isAlwaysListening ? 'Always-Listening ON' : 'Always-Listening'}</span>
-          </button>
-
-          <div
-            data-testid="runtime-guard-profile-pill"
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-[#0d1323] px-2.5 py-1 font-mono text-[11px] text-slate-300"
-          >
-            <span className="text-emerald-400 font-semibold">
-              {forgeCapitalState.activeGuardProfile}
-            </span>
-            <span className="text-slate-600" aria-hidden="true">
-              ·
-            </span>
-            <span className="text-slate-400">
-              Mandate: {forgeCapitalState.liveMandateStatus}
-            </span>
-          </div>
-
-          {appLiveEnabled ? (
-            <button
-              type="button"
-              data-testid="voice-emergency-stop-btn"
-              onClick={handleEmergencyVoiceStop}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/60 bg-rose-600/20 px-2.5 py-1 text-[11px] font-bold text-rose-200 hover:bg-rose-600/35 cursor-pointer whitespace-nowrap"
-            >
-              <span>Voice Stop</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              data-testid="voice-resume-btn"
-              onClick={handleVoiceResume}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/60 bg-emerald-600/20 px-2.5 py-1 text-[11px] font-bold text-emerald-200 hover:bg-emerald-600/35 cursor-pointer whitespace-nowrap"
-            >
-              <span>Voice Resume</span>
-            </button>
-          )}
+        {/* Runtime Guard Profile Readout (voice controls consolidated in bottom voice widget) */}
+        <div
+          data-testid="runtime-guard-profile-pill"
+          className="inline-flex items-center gap-2 font-mono text-[11px] text-slate-300 shrink-0"
+        >
+          <span className="text-emerald-400 font-semibold">
+            {forgeCapitalState.activeGuardProfile}
+          </span>
+          <span className="text-slate-600" aria-hidden="true">
+            ·
+          </span>
+          <span className="text-slate-400">
+            Mandate: {forgeCapitalState.liveMandateStatus}
+          </span>
         </div>
       </div>
 

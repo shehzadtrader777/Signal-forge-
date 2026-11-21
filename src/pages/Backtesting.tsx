@@ -29,8 +29,10 @@ import {
   runSystematicWalkForwardReport,
 } from '../lib/backtest';
 import { useApp } from '../context/AppContext';
+import { useRbacIdentity } from '../hooks/useRbacIdentity';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { TrustConsolePanel } from '../components/TrustConsolePanel';
+import { ModularBacktestMatrixPanel } from '../components/ModularBacktestMatrixPanel';
 
 const BAR_RADIUS: [number, number, number, number] = [6, 6, 0, 0];
 const AREA_CHART_MARGIN = { top: 8, right: 12, left: 4, bottom: 0 };
@@ -317,11 +319,15 @@ export function Backtesting() {
     await syncLiveFeedAndCandles(selectedSymbol, selectedTimeframe);
   };
 
+  const { rbac } = useRbacIdentity();
   const liveMark =
     liveWsPrice ?? simulation.latestMarkPrice ?? 0;
 
   return (
     <div className="mx-auto max-w-[1440px] px-4 py-8 sm:px-6 lg:px-8 space-y-8">
+      {/* Decoupled Parameterized 1,000-Trade Multi-Horizon Simulation Matrix & Auto-Optimizer */}
+      <ModularBacktestMatrixPanel symbol={simSeed.symbol} />
+
       {/* Page Header & Backtest Runner */}
       <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between border-b border-slate-800/80 pb-6">
         <div>
@@ -721,8 +727,8 @@ export function Backtesting() {
         </div>
       </section>
 
-      {/* L4 PG_v4 14-Conjunct Certification Gate & Trust Console */}
-      <TrustConsolePanel initialSymbol={simSeed.symbol} />
+      {/* L4 PG_v4 14-Conjunct Certification Gate & Test Console (RBAC-Protected: Admin / Super Admin Only) */}
+      {rbac.canAccessTestConsole && <TrustConsolePanel initialSymbol={simSeed.symbol} />}
 
       {/* Active Window Backtest KPI Strip */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import {
   createChart,
   CandlestickSeries,
@@ -12,7 +12,7 @@ import {
   type ISeriesApi,
   type UTCTimestamp,
 } from 'lightweight-charts';
-import { Search, Star } from 'lucide-react';
+import { Search, SlidersHorizontal, Star } from 'lucide-react';
 import {
   TRACKED_COINS,
   fetchCoinCandles,
@@ -21,14 +21,21 @@ import {
   type Candle,
   type Timeframe,
 } from '../lib/marketData';
-import { calculateEMA } from '../lib/signals';
+import { calculateEMA, calculateRSI } from '../lib/signals';
 import { type SmcAgentAnalysis } from '../lib/smcAgent';
 import { createLiveFeedKlineChannel } from '../lib/pitFeed';
 import {
   DEFAULT_DRIFT_THRESHOLD_PCT,
   reconcileCandleSeriesToLivePrice,
 } from '../lib/wsDataEngine';
+import {
+  TradingViewBinanceSyncArbiter,
+  reanchorSeriesToBinanceWs,
+  stitchBinanceTickToTradingViewBar,
+  type PriceSyncTelemetry,
+} from '../lib/priceSyncArbiter';
 import { useApp } from '../context/AppContext';
+import { useTradingArchitectureStore } from '../store/useTradingArchitectureStore';
 
 const TIMEFRAMES: Timeframe[] = ['15m', '1h', '4h', '1d'];
 
@@ -39,7 +46,7 @@ interface CandleChartProps {
   smcAnalysis?: SmcAgentAnalysis | null;
 }
 
-export function CandleChart({
+export const CandleChart = memo(function CandleChart({
   timeframe,
   onTimeframeChange,
   onCandlesLoaded,
@@ -56,24 +63,35 @@ export function CandleChart({
     liveFeedModulesEnabled,
     reportPriceReconciliation,
   } = useApp();
+  const indicatorSuite = useTradingArchitectureStore((s) => s.indicatorSuite);
+  const updateIndicatorSuite = useTradingArchitectureStore((s) => s.updateIndicatorSuite);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
-  const [showEma, setShowEma] = useState(true);
-  const [showSmc, setShowSmc] = useState(true);
+  const [indicatorsPopoverOpen, setIndicatorsPopoverOpen] = useState(false);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [dataSource, setDataSource] = useState<'binance' | 'cache'>('cache');
   const [loading, setLoading] = useState(true);
+  const [syncTelemetry, setSyncTelemetry] = useState<PriceSyncTelemetry | null>(null);
+
+  const showEma = indicatorSuite.showEmaRibbon;
+  const showSmc = indicatorSuite.showSmcOverlay;
 
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
-  const ema21SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
-  const ema50SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const emaFastSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const emaMidSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const emaSlowSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const vwapSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const bbUpperSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const bbLowerSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const smcPriceLinesRef = useRef<IPriceLine[]>([]);
   const lastKlinePriceRef = useRef<number | undefined>(undefined);
   const lastReconcileKeyRef = useRef<string>('');
   const upgradedCacheKeyRef = useRef<string>('');
+  const syncArbiterRef = useRef<TradingViewBinanceSyncArbiter>(new TradingViewBinanceSyncArbiter());
 
   const currentTicker = tickers[selectedSymbol];
   const currentCoin =
@@ -157,16 +175,47 @@ export function CandleChart({
       scaleMargins: { top: 0.8, bottom: 0 },
     });
 
-    const ema21Series = chart.addSeries(LineSeries, {
+    const emaFastSeries = chart.addSeries(LineSeries, {
       color: '#3b82f6',
       lineWidth: 2,
       priceLineVisible: false,
       lastValueVisible: false,
     });
 
-    const ema50Series = chart.addSeries(LineSeries, {
+    const emaMidSeries = chart.addSeries(LineSeries, {
       color: '#f59e0b',
       lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+
+    const emaSlowSeries = chart.addSeries(LineSeries, {
+      color: '#a855f7',
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+
+    const vwapSeries = chart.addSeries(LineSeries, {
+      color: '#06b6d4',
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+
+    const bbUpperSeries = chart.addSeries(LineSeries, {
+      color: 'rgba(148, 163, 184, 0.55)',
+      lineWidth: 1,
+      lineStyle: LineStyle.Dotted,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+
+    const bbLowerSeries = chart.addSeries(LineSeries, {
+      color: 'rgba(148, 163, 184, 0.55)',
+      lineWidth: 1,
+      lineStyle: LineStyle.Dotted,
       priceLineVisible: false,
       lastValueVisible: false,
     });
@@ -174,8 +223,12 @@ export function CandleChart({
     chartRef.current = chart;
     candleSeriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
-    ema21SeriesRef.current = ema21Series;
-    ema50SeriesRef.current = ema50Series;
+    emaFastSeriesRef.current = emaFastSeries;
+    emaMidSeriesRef.current = emaMidSeries;
+    emaSlowSeriesRef.current = emaSlowSeries;
+    vwapSeriesRef.current = vwapSeries;
+    bbUpperSeriesRef.current = bbUpperSeries;
+    bbLowerSeriesRef.current = bbLowerSeries;
 
     const handleResize = () => {
       if (!chartContainerRef.current || !chartRef.current) return;
@@ -240,13 +293,17 @@ export function CandleChart({
     };
   }, [selectedSymbol, timeframe, syncVersion]);
 
-  // Push candle + indicator data to Lightweight Charts series
+  // Push candle + expanded indicator suite data to Lightweight Charts series
   useEffect(() => {
     if (
       !candleSeriesRef.current ||
       !volumeSeriesRef.current ||
-      !ema21SeriesRef.current ||
-      !ema50SeriesRef.current ||
+      !emaFastSeriesRef.current ||
+      !emaMidSeriesRef.current ||
+      !emaSlowSeriesRef.current ||
+      !vwapSeriesRef.current ||
+      !bbUpperSeriesRef.current ||
+      !bbLowerSeriesRef.current ||
       candles.length === 0
     ) {
       return;
@@ -267,39 +324,82 @@ export function CandleChart({
     }));
 
     const closes = candles.map((c) => c.close);
-    const ema21 = calculateEMA(closes, 21);
-    const ema50 = calculateEMA(closes, 50);
+    const emaFast = calculateEMA(closes, indicatorSuite.emaFastPeriod);
+    const emaMid = calculateEMA(closes, indicatorSuite.emaMidPeriod);
+    const emaSlow = calculateEMA(closes, indicatorSuite.emaSlowPeriod);
 
     const lastClose = candles[candles.length - 1]?.close ?? 1;
     const precision = lastClose >= 100 ? 2 : lastClose >= 1 ? 4 : lastClose >= 0.01 ? 5 : 6;
     const minMove = Number((1 / Math.pow(10, precision)).toFixed(precision));
-    candleSeriesRef.current.applyOptions({
-      priceFormat: { type: 'price', precision, minMove },
-    });
-    ema21SeriesRef.current.applyOptions({
-      priceFormat: { type: 'price', precision, minMove },
-    });
-    ema50SeriesRef.current.applyOptions({
-      priceFormat: { type: 'price', precision, minMove },
-    });
+    const priceFmt = { type: 'price' as const, precision, minMove };
+    candleSeriesRef.current.applyOptions({ priceFormat: priceFmt });
+    emaFastSeriesRef.current.applyOptions({ priceFormat: priceFmt });
+    emaMidSeriesRef.current.applyOptions({ priceFormat: priceFmt });
+    emaSlowSeriesRef.current.applyOptions({ priceFormat: priceFmt });
+    vwapSeriesRef.current.applyOptions({ priceFormat: priceFmt });
+    bbUpperSeriesRef.current.applyOptions({ priceFormat: priceFmt });
+    bbLowerSeriesRef.current.applyOptions({ priceFormat: priceFmt });
 
     candleSeriesRef.current.setData(formattedCandles);
     volumeSeriesRef.current.setData(formattedVolume);
 
-    if (showEma) {
-      ema21SeriesRef.current.setData(
-        candles.map((c, idx) => ({ time: c.time as UTCTimestamp, value: ema21[idx] }))
+    if (indicatorSuite.showEmaRibbon) {
+      emaFastSeriesRef.current.setData(
+        candles.map((c, idx) => ({ time: c.time as UTCTimestamp, value: emaFast[idx] }))
       );
-      ema50SeriesRef.current.setData(
-        candles.map((c, idx) => ({ time: c.time as UTCTimestamp, value: ema50[idx] }))
+      emaMidSeriesRef.current.setData(
+        candles.map((c, idx) => ({ time: c.time as UTCTimestamp, value: emaMid[idx] }))
+      );
+      emaSlowSeriesRef.current.setData(
+        candles.map((c, idx) => ({ time: c.time as UTCTimestamp, value: emaSlow[idx] }))
       );
     } else {
-      ema21SeriesRef.current.setData([]);
-      ema50SeriesRef.current.setData([]);
+      emaFastSeriesRef.current.setData([]);
+      emaMidSeriesRef.current.setData([]);
+      emaSlowSeriesRef.current.setData([]);
+    }
+
+    if (indicatorSuite.showVwapOverlay) {
+      let cumPv = 0;
+      let cumVol = 0;
+      const vwapPoints = candles.map((c) => {
+        const typical = (c.high + c.low + c.close) / 3;
+        const vol = Math.max(c.volume, 1e-6);
+        cumPv += typical * vol;
+        cumVol += vol;
+        return { time: c.time as UTCTimestamp, value: cumPv / cumVol };
+      });
+      vwapSeriesRef.current.setData(vwapPoints);
+    } else {
+      vwapSeriesRef.current.setData([]);
+    }
+
+    if (indicatorSuite.showBollingerBands && candles.length >= 20) {
+      const bbPeriod = 20;
+      const upperPoints: Array<{ time: UTCTimestamp; value: number }> = [];
+      const lowerPoints: Array<{ time: UTCTimestamp; value: number }> = [];
+      for (let i = bbPeriod - 1; i < candles.length; i++) {
+        let sum = 0;
+        for (let j = i - bbPeriod + 1; j <= i; j++) sum += closes[j];
+        const mean = sum / bbPeriod;
+        let sqSum = 0;
+        for (let j = i - bbPeriod + 1; j <= i; j++) {
+          const diff = closes[j] - mean;
+          sqSum += diff * diff;
+        }
+        const sd = Math.sqrt(sqSum / bbPeriod);
+        upperPoints.push({ time: candles[i].time as UTCTimestamp, value: mean + 2 * sd });
+        lowerPoints.push({ time: candles[i].time as UTCTimestamp, value: mean - 2 * sd });
+      }
+      bbUpperSeriesRef.current.setData(upperPoints);
+      bbLowerSeriesRef.current.setData(lowerPoints);
+    } else {
+      bbUpperSeriesRef.current.setData([]);
+      bbLowerSeriesRef.current.setData([]);
     }
 
     chartRef.current?.timeScale().fitContent();
-  }, [candles, showEma]);
+  }, [candles, indicatorSuite]);
 
   const smcLevelSignature = useMemo(() => {
     if (!showSmc || !smcAnalysis || candles.length === 0) return '';
@@ -417,7 +517,7 @@ export function CandleChart({
     }
   }, [smcLevelSignature, showSmc, smcAnalysis, candles.length]);
 
-  // Route live kline updates strictly through L1 PITFeed LiveKlineChannel (zero raw sockets in UI)
+  // Route live kline updates strictly through L1 PITFeed LiveKlineChannel, anchored to Binance WS parity
   useEffect(() => {
     if (!liveFeedModulesEnabled) {
       return;
@@ -428,19 +528,27 @@ export function CandleChart({
       initialLastPrice: lastKlinePriceRef.current,
       onBarUpdate: (bar) => {
         if (!candleSeriesRef.current) return;
-        lastKlinePriceRef.current = bar.close;
-        const ts = bar.time as UTCTimestamp;
+        const authoritativeWsPrice = referencePriceRef.current;
+        const effectiveBar =
+          Number.isFinite(authoritativeWsPrice) && authoritativeWsPrice > 0
+            ? stitchBinanceTickToTradingViewBar(bar, authoritativeWsPrice).updatedBar
+            : bar;
+        lastKlinePriceRef.current = effectiveBar.close;
+        const ts = effectiveBar.time as UTCTimestamp;
         candleSeriesRef.current.update({
           time: ts,
-          open: bar.open,
-          high: bar.high,
-          low: bar.low,
-          close: bar.close,
+          open: effectiveBar.open,
+          high: effectiveBar.high,
+          low: effectiveBar.low,
+          close: effectiveBar.close,
         });
         volumeSeriesRef.current?.update({
           time: ts,
-          value: bar.volume,
-          color: bar.close >= bar.open ? 'rgba(16, 185, 129, 0.25)' : 'rgba(239, 68, 68, 0.25)',
+          value: effectiveBar.volume,
+          color:
+            effectiveBar.close >= effectiveBar.open
+              ? 'rgba(16, 185, 129, 0.25)'
+              : 'rgba(239, 68, 68, 0.25)',
         });
       },
     });
@@ -506,17 +614,32 @@ export function CandleChart({
 
     if (!liveFeedModulesEnabled || !candleSeriesRef.current) return;
     const last = candles[candles.length - 1];
-    try {
-      candleSeriesRef.current.update({
-        time: last.time as UTCTimestamp,
-        open: last.open,
-        high: Math.max(last.high, livePrice),
-        low: Math.min(last.low, livePrice),
-        close: livePrice,
-      });
-    } catch {
-      // ignore if chart series disposed
+    const stitched = stitchBinanceTickToTradingViewBar(last, livePrice);
+    if (stitched.requiresFullReanchor) {
+      const reanchored = reanchorSeriesToBinanceWs(candles, livePrice);
+      setCandles(reanchored);
+      onCandlesLoadedRef.current?.(selectedSymbol, reanchored);
+    } else {
+      try {
+        candleSeriesRef.current.update({
+          time: stitched.updatedBar.time as UTCTimestamp,
+          open: stitched.updatedBar.open,
+          high: stitched.updatedBar.high,
+          low: stitched.updatedBar.low,
+          close: stitched.updatedBar.close,
+        });
+      } catch {
+        // ignore if chart series disposed
+      }
     }
+    lastKlinePriceRef.current = livePrice;
+    const nextTelemetry = syncArbiterRef.current.recordTick(
+      selectedSymbol,
+      last.close,
+      livePrice,
+      stitched.parityStatus !== 'LOCKED'
+    );
+    setSyncTelemetry(nextTelemetry);
   }, [
     candles,
     currentTicker?.price,
@@ -532,8 +655,18 @@ export function CandleChart({
   const displayPrice = currentTicker?.price ?? latestCandle?.close ?? currentCoin.referencePrice;
   const changePct = currentTicker?.change24hPercent ?? 0;
 
+  const liveRsiValue = useMemo(() => {
+    if (candles.length < indicatorSuite.rsiPeriod + 1) return null;
+    return Number(
+      calculateRSI(
+        candles.map((c) => c.close),
+        indicatorSuite.rsiPeriod
+      ).toFixed(1)
+    );
+  }, [candles, indicatorSuite.rsiPeriod]);
+
   return (
-    <div className="rounded-xl border border-slate-800/90 bg-[#111827] overflow-hidden">
+    <div className="cyber-surface rounded-xl border overflow-hidden">
       {/* Top Toolbar: Coin Info, Search Bar, Timeframe Switcher */}
       <div className="flex flex-col gap-3 border-b border-slate-800/80 p-4 xl:flex-row xl:items-center xl:justify-between">
         <div className="min-w-0">
@@ -579,6 +712,13 @@ export function CandleChart({
                 : dataSource === 'binance' || currentTicker?.isLiveWs
                 ? 'Binance Spot'
                 : 'Spot Sync'}
+            </span>
+            <span aria-hidden="true">·</span>
+            <span
+              data-testid="tv-ws-parity-badge"
+              className="font-mono text-[11px] text-cyan-300 tabular-nums whitespace-nowrap"
+            >
+              TV↔WS {syncTelemetry ? `${syncTelemetry.discrepancyBps.toFixed(1)} bps · ${syncTelemetry.parityStatus}` : '0.0 bps · LOCKED'}
             </span>
           </div>
         </div>
@@ -666,19 +806,19 @@ export function CandleChart({
 
           <button
             type="button"
-            onClick={() => setShowEma((v) => !v)}
+            onClick={() => updateIndicatorSuite({ showEmaRibbon: !showEma })}
             className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               showEma
                 ? 'border-[#3b82f6]/60 bg-[#3b82f6]/15 text-blue-300'
                 : 'border-slate-800 bg-[#0a0e1a] text-slate-400 hover:text-white'
             }`}
           >
-            EMA 21/50
+            EMA {indicatorSuite.emaFastPeriod}/{indicatorSuite.emaMidPeriod}/{indicatorSuite.emaSlowPeriod}
           </button>
 
           <button
             type="button"
-            onClick={() => setShowSmc((v) => !v)}
+            onClick={() => updateIndicatorSuite({ showSmcOverlay: !showSmc })}
             className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               showSmc
                 ? 'border-amber-500/60 bg-amber-500/15 text-amber-300'
@@ -687,6 +827,125 @@ export function CandleChart({
           >
             SMC / FRVP
           </button>
+
+          <div className="relative">
+            <button
+              type="button"
+              data-testid="chart-indicators-btn"
+              onClick={() => setIndicatorsPopoverOpen((v) => !v)}
+              aria-expanded={indicatorsPopoverOpen}
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                indicatorsPopoverOpen
+                  ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-200'
+                  : 'border-slate-800 bg-[#0a0e1a] text-slate-300 hover:border-cyan-500/40 hover:text-white'
+              }`}
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>Indicators</span>
+            </button>
+
+            {indicatorsPopoverOpen && (
+              <div
+                data-testid="chart-indicators-popover"
+                className="absolute right-0 top-full z-30 mt-1.5 w-72 rounded-xl border border-cyan-500/30 bg-[#0a1020] p-3.5 shadow-2xl space-y-3"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-mono uppercase tracking-wider text-cyan-300 font-semibold">
+                    Indicator Suite
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIndicatorsPopoverOpen(false)}
+                    className="text-[11px] text-slate-400 hover:text-white cursor-pointer"
+                  >
+                    Done
+                  </button>
+                </div>
+
+                {/* Custom EMA Period Selectors */}
+                <div className="grid grid-cols-3 gap-2">
+                  <label className="space-y-1">
+                    <span className="block text-[10px] font-mono text-blue-400">EMA Fast</span>
+                    <select
+                      aria-label="EMA Fast Period"
+                      value={indicatorSuite.emaFastPeriod}
+                      onChange={(e) =>
+                        updateIndicatorSuite({ emaFastPeriod: Number(e.target.value) })
+                      }
+                      className="w-full rounded-md border border-slate-700 bg-[#070d1b] px-2 py-1 font-mono text-xs text-white"
+                    >
+                      <option value={9}>9</option>
+                      <option value={12}>12</option>
+                      <option value={21}>21</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="block text-[10px] font-mono text-amber-400">EMA Mid</span>
+                    <select
+                      aria-label="EMA Mid Period"
+                      value={indicatorSuite.emaMidPeriod}
+                      onChange={(e) =>
+                        updateIndicatorSuite({ emaMidPeriod: Number(e.target.value) })
+                      }
+                      className="w-full rounded-md border border-slate-700 bg-[#070d1b] px-2 py-1 font-mono text-xs text-white"
+                    >
+                      <option value={34}>34</option>
+                      <option value={50}>50</option>
+                      <option value={55}>55</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="block text-[10px] font-mono text-purple-400">EMA Slow</span>
+                    <select
+                      aria-label="EMA Slow Period"
+                      value={indicatorSuite.emaSlowPeriod}
+                      onChange={(e) =>
+                        updateIndicatorSuite({ emaSlowPeriod: Number(e.target.value) })
+                      }
+                      className="w-full rounded-md border border-slate-700 bg-[#070d1b] px-2 py-1 font-mono text-xs text-white"
+                    >
+                      <option value={100}>100</option>
+                      <option value={150}>150</option>
+                      <option value={200}>200</option>
+                    </select>
+                  </label>
+                </div>
+
+                {/* Overlay Toggles */}
+                <div className="space-y-1.5 text-xs">
+                  <label className="flex items-center justify-between rounded-md border border-slate-800 bg-[#070d1b] px-2.5 py-1.5 cursor-pointer">
+                    <span className="text-slate-200">RSI ({indicatorSuite.rsiPeriod}) Momentum Strip</span>
+                    <input
+                      type="checkbox"
+                      checked={indicatorSuite.showRsiStrip}
+                      onChange={(e) => updateIndicatorSuite({ showRsiStrip: e.target.checked })}
+                      className="accent-cyan-400"
+                    />
+                  </label>
+                  <label className="flex items-center justify-between rounded-md border border-slate-800 bg-[#070d1b] px-2.5 py-1.5 cursor-pointer">
+                    <span className="text-slate-200">Session VWAP Overlay</span>
+                    <input
+                      type="checkbox"
+                      checked={indicatorSuite.showVwapOverlay}
+                      onChange={(e) => updateIndicatorSuite({ showVwapOverlay: e.target.checked })}
+                      className="accent-cyan-400"
+                    />
+                  </label>
+                  <label className="flex items-center justify-between rounded-md border border-slate-800 bg-[#070d1b] px-2.5 py-1.5 cursor-pointer">
+                    <span className="text-slate-200">Bollinger Bands (20, 2σ)</span>
+                    <input
+                      type="checkbox"
+                      checked={indicatorSuite.showBollingerBands}
+                      onChange={(e) =>
+                        updateIndicatorSuite({ showBollingerBands: e.target.checked })
+                      }
+                      className="accent-cyan-400"
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -704,14 +963,50 @@ export function CandleChart({
         />
       </div>
 
-      {/* Clean Legend Footer */}
+      {/* Clean Legend Footer with Extended EMA + Live RSI(14) + VWAP/BB Readout */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/80 px-4 py-2.5 text-xs text-slate-400">
         <div className="flex flex-wrap items-center gap-3">
           <span>Candles: {selectedSymbol}</span>
-          <span aria-hidden="true">·</span>
-          <span className="text-blue-400">EMA 21</span>
-          <span aria-hidden="true">·</span>
-          <span className="text-amber-400">EMA 50</span>
+          {showEma && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="text-blue-400 font-mono">EMA {indicatorSuite.emaFastPeriod}</span>
+              <span aria-hidden="true">·</span>
+              <span className="text-amber-400 font-mono">EMA {indicatorSuite.emaMidPeriod}</span>
+              <span aria-hidden="true">·</span>
+              <span className="text-purple-400 font-mono">EMA {indicatorSuite.emaSlowPeriod}</span>
+            </>
+          )}
+          {indicatorSuite.showVwapOverlay && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="text-cyan-400 font-mono">VWAP</span>
+            </>
+          )}
+          {indicatorSuite.showBollingerBands && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="text-slate-300 font-mono">BB(20,2)</span>
+            </>
+          )}
+          {indicatorSuite.showRsiStrip && liveRsiValue !== null && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span
+                data-testid="chart-rsi-readout"
+                className={`font-mono font-semibold tabular-nums ${
+                  liveRsiValue >= 70
+                    ? 'text-rose-400'
+                    : liveRsiValue <= 30
+                    ? 'text-emerald-400'
+                    : 'text-cyan-300'
+                }`}
+              >
+                RSI({indicatorSuite.rsiPeriod}) {liveRsiValue.toFixed(1)}
+                {liveRsiValue >= 70 ? ' OB' : liveRsiValue <= 30 ? ' OS' : ''}
+              </span>
+            </>
+          )}
           {showSmc && smcAnalysis && (
             <>
               <span aria-hidden="true">·</span>
@@ -736,4 +1031,4 @@ export function CandleChart({
       </div>
     </div>
   );
-}
+});

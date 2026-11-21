@@ -164,5 +164,184 @@ export type {
   WatchdogEvaluationResult,
 } from '../lib/dataIntegrityRuntime';
 
+export type {
+  DesignSystemVariant,
+  WidgetDensity,
+  WidgetElevation,
+  WidgetStatusTone,
+  WidgetGridSpan,
+  WidgetMetadataSegment,
+  WidgetMetricItem,
+  WidgetLayoutContract,
+  Motion120HzSpringConfig,
+  MotionCompositorTransition,
+  DesignSystemVariantSpec,
+} from '../lib/designSystem';
 
+export type {
+  SyncedAgentId,
+  AgentSyncHealth,
+  AgentSyncRecord,
+  AgentSyncCommitInput,
+  MultiAgentSyncSnapshot,
+} from '../lib/agentSyncEngine';
 
+export type {
+  PriceParityStatus,
+  PriceSyncTelemetry,
+  IntrabarStitchResult,
+} from '../lib/priceSyncArbiter';
+
+export type {
+  RbacRole,
+  RbacPermission,
+  RbacIdentity,
+  RbacAccessDecision,
+} from '../lib/rbac';
+
+export type {
+  ProfitAgentId,
+  ProfitTakingMode,
+  VolatilityRegime,
+  TakeProfitPolicy,
+  StopLossPolicy,
+  AgentProfitTakingProfile,
+  VolatilityAdaptationInput,
+  AdaptedExecutionThresholds,
+} from '../lib/modularProfitTaking';
+
+export type {
+  MatrixAgentStrategyId,
+  BacktestTradeHorizon,
+  ModularBacktestParams,
+  AgentMatrixProfileResult,
+  ComparativeSimulationMatrixReport,
+  ParameterOptimizationResult,
+} from '../lib/modularBacktestEngine';
+
+export type {
+  ProfitThresholdMode,
+  VaultOverrideAction,
+  VaultActorType,
+  VaultLedgerEventKind,
+  ProfitScoopConfig,
+  RealizedTradeSettlementInput,
+  VaultLedgerEntry,
+  DailyPnlHistoryRecord,
+  ManualVaultOverrideRequest,
+  ManualVaultOverrideOutcome,
+  VaultIntegrityAudit,
+  ProfitVaultSnapshot,
+  ProfitScoopOutcome,
+} from '../lib/profitVaultEngine';
+
+export type {
+  TokenBucketConfig,
+  TokenBucketCheckResult,
+  TokenBucketTelemetry,
+} from '../lib/tokenBucketLimiter';
+
+export type {
+  KernelAgentRole,
+  MarketDebateContext,
+  KernelAgentProposal,
+  DebateRoundRecord,
+  CoordinatorSignalDecision,
+  MultiAgentDebateResult,
+  SearchGroundingCitation,
+  SearchGroundingResult,
+  YearnDegradationSnapshot,
+  TelegramTransportMode,
+  SubsystemHealthChecks,
+  SelfHealingHealthSnapshot,
+} from '../lib/multiAgentDebateEngine';
+
+export type {
+  CommandDomainId,
+  MasterOverrideMode,
+  GlobalMasterOverride,
+  CommandModuleKind,
+  EffectiveResolutionSource,
+  CommandPresetId,
+  TapToTopDisplayMode,
+  DockPreferences,
+  CommandDomainDescriptor,
+  CommandModuleDescriptor,
+  CommandControlHubState,
+  EvaluatedCommandModule,
+  CommandDomainSummary,
+  CommandControlEvaluationSnapshot,
+  CommandModuleFilterOptions,
+} from '../lib/commandControlHub';
+
+export type {
+  AccountVolumeTierId,
+  SubscriptionPlanId,
+  ExecutionControlMode,
+  NotificationStage,
+  LifecycleDirective,
+  AuditFailureCategory,
+  AccountVolumeTierSpec,
+  SubscriptionPlanSpec,
+  UserVolumeHistoryInput,
+  AssessedAccountRiskProfile,
+  MomentumMultiplierInput,
+  DynamicProfitMultiplierResult,
+  ManualOverrideOrderRequest,
+  ManualOverrideValidationResult,
+  PrePumpLifecycleInput,
+  AgentRoleAssignment,
+  PrePumpLifecycleEvaluation,
+  PublicVerifiedTradeRecord,
+  PublicTradeVerificationResult,
+  SystemAuditFinding,
+  DeveloperAuditBatchPolicy,
+  DeveloperAuditDispatchDecision,
+  IndicatorSuiteConfig,
+  AutoOptimizationReport,
+  TradingViewWebhookSignal,
+} from '../lib/multiAgentTradingArchitecture';
+
+export type {
+  SearchDocumentCategory,
+  SearchableDocument,
+  RankedSearchResult,
+} from '../lib/globalSearchIndex';
+
+export type {
+  ModelProviderId,
+  GatewayConnectorStatus,
+  GatewayModelConnector,
+  UiModificationFunctionName,
+  UiModificationAction,
+  FilePatchProposal,
+  ProposalStatus,
+  ProposalKind,
+  AgenticCliProposal,
+  AgenticCliLogEntry,
+  PathValidationResult,
+  UnifiedDiffResult,
+  ApplyPatchResult,
+  DeterministicOrchestrationPlan,
+} from '../lib/agenticCliEngine';
+
+export type {
+  FableVolatilityRegime,
+  FableStrategyFamily,
+  FableOptionType,
+  FableDeploymentStage,
+  FablePropFirmLimits,
+  FableStrategyFamilyProfile,
+  FableInverseVarianceWeight,
+  FablePreTradeRiskInput,
+  FablePreTradeRiskDecision,
+  BlackScholesInput,
+  BlackScholesValuation,
+  IvSurfacePoint,
+  FableStrategyParams,
+  FableStrategyVersion,
+  FablePerformanceMetrics,
+  FableFourGateValidationReport,
+  FableStrategicMemoryEntry,
+  FableLayerStatusItem,
+} from '../lib/fableOrchestratorEngine';

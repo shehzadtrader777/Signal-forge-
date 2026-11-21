@@ -19,7 +19,6 @@ import { SystemControlsBar } from '../components/SystemControlsBar';
 import { LiveTestnetLedger } from '../components/LiveTestnetLedger';
 import { OrderBookDepthPanel } from '../components/OrderBookDepthPanel';
 import { SentinelAgentPanel } from '../components/SentinelAgentPanel';
-import { VoiceCommandAgentPanel } from '../components/VoiceCommandAgentPanel';
 import { AutonomousOperationsHub } from '../components/AutonomousOperationsHub';
 import { formatCryptoPrice, type Timeframe } from '../lib/marketData';
 import {
@@ -887,7 +886,6 @@ export function Signals() {
       {/* Dedicated Sentinel Agent & Multi-Exchange L2 Order Book Depth */}
       <SentinelAgentPanel />
       <AutonomousOperationsHub />
-      <VoiceCommandAgentPanel />
       <OrderBookDepthPanel />
 
       {/* Real-Time Binance Top Gainers Feeder & Surge Alerts */}

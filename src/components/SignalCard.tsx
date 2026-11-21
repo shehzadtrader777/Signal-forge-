@@ -1,4 +1,6 @@
-import { ArrowDownRight, ArrowUpRight, Calculator, Lock, Star, Zap } from 'lucide-react';
+import { memo } from 'react';
+import { ArrowDownRight, ArrowUpRight, Calculator, Expand, Lock, Star, Zap } from 'lucide-react';
+import { motion } from 'motion/react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { type TradingSignal } from '../lib/signals';
 import { formatCryptoPrice } from '../lib/marketData';
@@ -10,14 +12,17 @@ interface SignalCardProps {
   rank: number;
   pinnedRecord?: PinnedSignalRecord;
   onOpenRiskCalc: (signal: TradingSignal) => void;
+  onInspectDetail?: (signal: TradingSignal, layoutId: string, pinnedRecord?: PinnedSignalRecord) => void;
 }
 
-export function SignalCard({
+export const SignalCard = memo(function SignalCard({
   signal,
   rank,
   pinnedRecord,
   onOpenRiskCalc,
+  onInspectDetail,
 }: SignalCardProps) {
+  const sharedLayoutId = `signal-card-morph-${signal.symbol}-${signal.direction}`;
   const {
     watchlist,
     toggleWatchlist,
@@ -86,14 +91,17 @@ export function SignalCard({
     : null;
 
   return (
-    <article
+    <motion.article
+      layout
+      layoutId={sharedLayoutId}
+      transition={{ type: 'spring', stiffness: 420, damping: 34, mass: 0.72 }}
       data-testid={`signal-card-${signal.symbol}`}
-      className={`flex flex-col justify-between rounded-xl border bg-[#111827] p-4 transition-colors ${
+      className={`cyber-surface flex flex-col justify-between rounded-xl border p-4 transition-colors ${
         resolved
-          ? 'border-emerald-500/40'
+          ? 'border-emerald-500/45'
           : pinnedRecord
-          ? 'border-[#3b82f6]/45 hover:border-[#3b82f6]/75'
-          : 'border-slate-800/90 hover:border-slate-700'
+          ? 'border-cyan-500/40 hover:border-cyan-400/75'
+          : 'border-slate-800/90 hover:border-cyan-500/45'
       }`}
       aria-label={`${signal.symbol} ${signal.direction} signal`}
     >
@@ -277,9 +285,10 @@ export function SignalCard({
         </p>
       </div>
 
-      {/* Actions: Primary Functional BUY + Risk Calc + Watchlist Star */}
-      <div className="mt-4 flex items-center gap-2 pt-1">
-        <button
+      {/* Actions: Primary Functional BUY + Shared-Element Inspect + Risk Calc + Watchlist Star */}
+      <div className="mt-4 flex items-center gap-1.5 pt-1">
+        <motion.button
+          whileTap={{ scale: 0.96 }}
           type="button"
           data-testid={`signal-buy-${signal.symbol}`}
           onClick={handleBuyExecutionRedirect}
@@ -287,31 +296,46 @@ export function SignalCard({
         >
           <Zap className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           <span>BUY</span>
-        </button>
+        </motion.button>
 
-        <button
+        {onInspectDetail && (
+          <motion.button
+            whileTap={{ scale: 0.94 }}
+            type="button"
+            data-testid={`signal-inspect-${signal.symbol}`}
+            onClick={() => onInspectDetail(signal, sharedLayoutId, pinnedRecord)}
+            aria-label={`Inspect ${signal.symbol} signal detail`}
+            className="inline-flex items-center justify-center rounded-lg border border-cyan-500/35 bg-cyan-500/10 px-2.5 py-2 text-xs font-semibold text-cyan-200 hover:border-cyan-400 hover:bg-cyan-500/20 transition-colors cursor-pointer"
+          >
+            <Expand className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          </motion.button>
+        )}
+
+        <motion.button
+          whileTap={{ scale: 0.95 }}
           type="button"
           onClick={() => onOpenRiskCalc(signal)}
           aria-label={`Open risk calculator for ${signal.symbol}`}
-          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-[#0d1323] px-3 py-2 text-xs font-semibold text-white hover:border-[#3b82f6] transition-colors cursor-pointer whitespace-nowrap"
+          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-[#0d1323] px-2.5 py-2 text-xs font-semibold text-white hover:border-cyan-400 transition-colors cursor-pointer whitespace-nowrap"
         >
-          <Calculator className="h-3.5 w-3.5 text-[#3b82f6] shrink-0" aria-hidden="true" />
-          <span>Risk Calc</span>
-        </button>
+          <Calculator className="h-3.5 w-3.5 text-cyan-400 shrink-0" aria-hidden="true" />
+          <span>Risk</span>
+        </motion.button>
 
-        <button
+        <motion.button
+          whileTap={{ scale: 0.92 }}
           type="button"
           onClick={() => toggleWatchlist(signal.symbol)}
           aria-label={isWatched ? `Remove ${signal.symbol} from watchlist` : `Save ${signal.symbol} to watchlist`}
-          className={`inline-flex items-center justify-center rounded-lg border px-2.5 py-2 text-xs font-medium transition-colors cursor-pointer ${
+          className={`inline-flex items-center justify-center rounded-lg border px-2 py-2 text-xs font-medium transition-colors cursor-pointer ${
             isWatched
               ? 'border-amber-500/40 bg-amber-500/15 text-amber-400'
               : 'border-slate-700 bg-[#0d1323] text-slate-300 hover:text-white'
           }`}
         >
           <Star className={`h-3.5 w-3.5 ${isWatched ? 'fill-amber-400' : ''}`} />
-        </button>
+        </motion.button>
       </div>
-    </article>
+    </motion.article>
   );
-}
+});

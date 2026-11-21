@@ -58,7 +58,7 @@ test('src/lib modules enforce explicit relative imports and zero unresolvable pa
         .filter(Boolean);
       for (const sym of specifiers) {
         const exportCheck = new RegExp(
-          `export\\s+(?:async\\s+)?(?:function|const|let|var|class|interface|type|enum)\\s+${sym}\\b|export\\s*\\{[^}]*\\b${sym}\\b`
+          `export\\s+(?:async\\s+|abstract\\s+)?(?:function|const|let|var|class|interface|type|enum)\\s+${sym}\\b|export\\s*\\{[^}]*\\b${sym}\\b`
         );
         assert.ok(
           exportCheck.test(targetContent),

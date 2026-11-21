@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Layers, RefreshCw } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { formatCryptoPrice } from '../lib/marketData';
@@ -6,7 +6,7 @@ import type { MultiExchangeDepthAnalysis } from '../lib/orderBookDepth';
 
 const DEPTH_COINS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'AVAXUSDT'];
 
-export function OrderBookDepthPanel() {
+export const OrderBookDepthPanel = memo(function OrderBookDepthPanel() {
   const { selectedSymbol, setSelectedSymbol, orderBookDepth, refreshOrderBookDepth, tickers } =
     useApp();
   const [refreshing, setRefreshing] = useState(false);
@@ -294,4 +294,4 @@ export function OrderBookDepthPanel() {
       )}
     </section>
   );
-}
+});

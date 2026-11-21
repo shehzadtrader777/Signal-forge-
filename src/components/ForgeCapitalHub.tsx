@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -39,7 +39,7 @@ import {
 
 type HubBottomTab = 'POSITIONS' | 'AUDIT' | 'API_ERRORS';
 
-export function ForgeCapitalHub() {
+export const ForgeCapitalHub = memo(function ForgeCapitalHub() {
   const {
     selectedSymbol,
     allKnownCoins,
@@ -1123,4 +1123,4 @@ export function ForgeCapitalHub() {
       </div>
     </section>
   );
-}
+});

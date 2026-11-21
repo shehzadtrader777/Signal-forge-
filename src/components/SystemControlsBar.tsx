@@ -1,7 +1,8 @@
+import { memo } from 'react';
 import { SlidersHorizontal } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
-export function SystemControlsBar() {
+export const SystemControlsBar = memo(function SystemControlsBar() {
   const {
     appLiveEnabled,
     testnetExecutionEnabled,
@@ -140,4 +141,4 @@ export function SystemControlsBar() {
       </div>
     </section>
   );
-}
+});

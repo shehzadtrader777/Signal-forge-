@@ -1,20 +1,22 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
-import { Menu, X } from 'lucide-react';
+import { Menu, Search, Settings as SettingsIcon, X } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { signOutUser } from '../lib/firebase';
+import { useRbacIdentity } from '../hooks/useRbacIdentity';
+import { useTradingArchitectureStore } from '../store/useTradingArchitectureStore';
 import { NotificationCenter } from './NotificationCenter';
 
 const NAV_ITEMS = [
-  { to: '/', label: 'Dashboard' },
-  { to: '/portfolio', label: 'Portfolio' },
-  { to: '/signals', label: 'Signals' },
-  { to: '/signal-history', label: 'Signal History' },
-  { to: '/backtesting', label: 'Backtesting' },
-  { to: '/trust-console', label: 'Trust Console' },
-  { to: '/watchlist', label: 'Watchlist' },
-  { to: '/alerts', label: 'Alerts' },
-  { to: '/about', label: 'About Us' },
+  { to: '/', label: 'Dashboard', requiresConsoleRbac: false },
+  { to: '/portfolio', label: 'Portfolio', requiresConsoleRbac: false },
+  { to: '/signals', label: 'Signals', requiresConsoleRbac: false },
+  { to: '/signal-history', label: 'Signal History', requiresConsoleRbac: false },
+  { to: '/backtesting', label: 'Backtesting', requiresConsoleRbac: false },
+  { to: '/trust-console', label: 'Test Console', requiresConsoleRbac: true },
+  { to: '/watchlist', label: 'Watchlist', requiresConsoleRbac: false },
+  { to: '/alerts', label: 'Alerts', requiresConsoleRbac: false },
+  { to: '/about', label: 'About Us', requiresConsoleRbac: false },
 ];
 
 interface NavbarProps {
@@ -23,8 +25,15 @@ interface NavbarProps {
 
 export function Navbar({ onOpenSideMenu }: NavbarProps) {
   const { user } = useApp();
+  const { rbac } = useRbacIdentity();
+  const setGlobalSearchOpen = useTradingArchitectureStore((s) => s.setGlobalSearchOpen);
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  const visibleNavItems = useMemo(
+    () => NAV_ITEMS.filter((item) => !item.requiresConsoleRbac || rbac.canAccessTestConsole),
+    [rbac.canAccessTestConsole]
+  );
 
   const handleAuthAction = async () => {
     if (user) {
@@ -81,7 +90,7 @@ export function Navbar({ onOpenSideMenu }: NavbarProps) {
           aria-label="Primary Navigation"
           className="hidden lg:flex items-center gap-3 xl:gap-4 text-[13px] font-medium"
         >
-          {NAV_ITEMS.map((item) => (
+          {visibleNavItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -89,7 +98,7 @@ export function Navbar({ onOpenSideMenu }: NavbarProps) {
               className={({ isActive }) =>
                 `whitespace-nowrap shrink-0 py-1 border-b-2 transition-colors duration-150 ${
                   isActive
-                    ? 'border-[#3b82f6] text-white'
+                    ? 'border-cyan-400 text-white'
                     : 'border-transparent text-slate-400 hover:text-slate-100 hover:border-slate-700'
                 }`
               }
@@ -99,8 +108,40 @@ export function Navbar({ onOpenSideMenu }: NavbarProps) {
           ))}
         </nav>
 
-        {/* Zone 3: Notification Center & Primary Action */}
-        <div className="flex items-center gap-2.5 shrink-0">
+        {/* Zone 3: Global Search, Settings Hub, Notification Center & Primary Action */}
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            data-testid="nav-global-search-btn"
+            onClick={() => setGlobalSearchOpen(true)}
+            aria-label="Open Global Search Panel (Cmd/Ctrl + K)"
+            title="Global Search · Features, Trades & Trade IDs (⌘K)"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-[#111827] px-2.5 py-2 text-xs font-semibold text-slate-300 hover:border-cyan-500/50 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+          >
+            <Search className="h-3.5 w-3.5 text-cyan-400 shrink-0" aria-hidden="true" />
+            <span className="hidden xl:inline">Search</span>
+            <kbd className="hidden xl:inline rounded border border-slate-700 bg-slate-900 px-1 py-0.5 font-mono text-[10px] text-slate-400">
+              ⌘K
+            </kbd>
+          </button>
+
+          <NavLink
+            to="/settings"
+            data-testid="nav-settings-link"
+            aria-label="Settings and Command Control Hub"
+            title="Settings · Command & Control Hub"
+            className={({ isActive }) =>
+              `inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${
+                isActive
+                  ? 'border-cyan-400 bg-cyan-500/15 text-cyan-200'
+                  : 'border-slate-800 bg-[#111827] text-slate-300 hover:border-cyan-500/50 hover:text-white'
+              }`
+            }
+          >
+            <SettingsIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className="hidden xl:inline">Settings</span>
+          </NavLink>
+
           <NotificationCenter />
 
           <button
@@ -127,7 +168,7 @@ export function Navbar({ onOpenSideMenu }: NavbarProps) {
       {mobileOpen && (
         <div className="lg:hidden border-t border-slate-800 bg-[#0d1323] px-4 py-4 space-y-2">
           <nav className="flex flex-col gap-1" aria-label="Mobile Navigation">
-            {NAV_ITEMS.map((item) => (
+            {visibleNavItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -144,6 +185,30 @@ export function Navbar({ onOpenSideMenu }: NavbarProps) {
                 {item.label}
               </NavLink>
             ))}
+              <NavLink
+                to="/settings"
+                onClick={() => setMobileOpen(false)}
+                className={({ isActive }) =>
+                  `rounded-lg px-3 py-2.5 text-sm font-medium ${
+                    isActive
+                      ? 'bg-cyan-500/15 text-cyan-200'
+                      : 'text-slate-300 hover:bg-slate-800/70'
+                  }`
+                }
+              >
+                Settings · Command Hub
+              </NavLink>
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileOpen(false);
+                  setGlobalSearchOpen(true);
+                }}
+                className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-cyan-300 hover:bg-slate-800/70"
+              >
+                <Search className="h-4 w-4" aria-hidden="true" />
+                <span>Global Search &amp; Trade IDs (⌘K)</span>
+              </button>
           </nav>
           <button
             type="button"

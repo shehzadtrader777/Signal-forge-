@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -75,7 +75,7 @@ function toRiskCalculatorSignal(item: PatternScanResult): TradingSignal {
   };
 }
 
-export function PatternScannerPanel({
+export const PatternScannerPanel = memo(function PatternScannerPanel({
   summary,
   params,
   onChangeParams,
@@ -475,4 +475,4 @@ export function PatternScannerPanel({
       )}
     </section>
   );
-}
+});

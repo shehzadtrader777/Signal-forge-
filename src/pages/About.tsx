@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Mail, MessageCircle, ShieldCheck } from 'lucide-react';
+import { DedicatedEmailIconLink, CONTACT_EMAIL_ADDRESS } from '../components/FooterSocialAndContact';
 import founderPortrait from '../assets/images/founder_amir_shehzad_1794687451706.jpg';
 
 export function About() {
@@ -48,13 +49,11 @@ export function About() {
               <p className="mt-0.5 text-sm font-semibold text-white">Amir Shehzad</p>
             </div>
             <div>
-              <span className="text-slate-400">Direct Support Email</span>
-              <a
-                href="mailto:amirshehzad2647tcs@gmail.com"
-                className="mt-0.5 block font-mono text-sm font-semibold text-[#3b82f6] hover:underline"
-              >
-                amirshehzad2647tcs@gmail.com
-              </a>
+              <span className="text-slate-400">Direct Support</span>
+              <div className="mt-1 flex items-center gap-2">
+                <DedicatedEmailIconLink testId="about-email-icon-link" />
+                <span className="text-xs text-slate-300">Direct Email Desk</span>
+              </div>
             </div>
           </div>
 
@@ -70,7 +69,8 @@ export function About() {
             </a>
 
             <a
-              href="mailto:amirshehzad2647tcs@gmail.com"
+              href={`mailto:${CONTACT_EMAIL_ADDRESS}`}
+              aria-label="Send email to Amir Shehzad"
               className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-[#0d1323] px-5 py-2.5 text-xs font-semibold text-white hover:border-[#3b82f6] transition-colors whitespace-nowrap"
             >
               <Mail className="h-4 w-4 text-[#3b82f6]" aria-hidden="true" />

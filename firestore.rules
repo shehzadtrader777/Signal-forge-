@@ -22,6 +22,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidDateKey(dateKey) {
+      return dateKey is string && dateKey.size() == 10 && dateKey.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -230,6 +234,94 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
+    function isValidDailyPnlRecord(data, userId, dateKey) {
+      return data.keys().hasAll([
+          'dateKey', 'userId', 'startingEquityUsd', 'endingEquityUsd', 'realizedPnlUsd',
+          'returnPct', 'scoopedToVaultUsd', 'manualReleasedUsd', 'tradeCount',
+          'winningTrades', 'losingTrades', 'winRatePct', 'recordHash', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'dateKey', 'userId', 'startingEquityUsd', 'endingEquityUsd', 'realizedPnlUsd',
+          'returnPct', 'scoopedToVaultUsd', 'manualReleasedUsd', 'tradeCount',
+          'winningTrades', 'losingTrades', 'winRatePct', 'recordHash', 'createdAt', 'updatedAt'
+        ])
+        && isValidDateKey(data.dateKey)
+        && data.dateKey == dateKey
+        && data.userId is string
+        && data.userId.size() >= 1
+        && data.userId.size() <= 128
+        && data.userId == userId
+        && data.userId == request.auth.uid
+        && data.startingEquityUsd is number
+        && data.startingEquityUsd >= 0
+        && data.endingEquityUsd is number
+        && data.endingEquityUsd >= 0
+        && data.realizedPnlUsd is number
+        && data.returnPct is number
+        && data.scoopedToVaultUsd is number
+        && data.scoopedToVaultUsd >= 0
+        && data.manualReleasedUsd is number
+        && data.manualReleasedUsd >= 0
+        && data.tradeCount is number
+        && data.tradeCount >= 0
+        && data.winningTrades is number
+        && data.winningTrades >= 0
+        && data.losingTrades is number
+        && data.losingTrades >= 0
+        && data.winRatePct is number
+        && data.winRatePct >= 0
+        && data.winRatePct <= 100
+        && data.recordHash is string
+        && data.recordHash.size() >= 8
+        && data.recordHash.size() <= 32
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVaultLockerState(data, userId, vaultId) {
+      return data.keys().hasAll([
+          'id', 'userId', 'thresholdMode', 'profitThresholdUsd', 'profitThresholdPct',
+          'scoopExcessRatioPct', 'enabled', 'lockedVaultBalanceUsd', 'totalScoopedLifetimeUsd',
+          'stateVersion', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'userId', 'thresholdMode', 'profitThresholdUsd', 'profitThresholdPct',
+          'scoopExcessRatioPct', 'enabled', 'lockedVaultBalanceUsd', 'totalScoopedLifetimeUsd',
+          'stateVersion', 'createdAt', 'updatedAt'
+        ])
+        && data.id is string
+        && data.id == vaultId
+        && data.id.size() >= 1
+        && data.id.size() <= 64
+        && data.userId is string
+        && data.userId.size() >= 1
+        && data.userId.size() <= 128
+        && data.userId == userId
+        && data.userId == request.auth.uid
+        && data.thresholdMode is string
+        && data.thresholdMode.size() >= 9
+        && data.thresholdMode.size() <= 18
+        && (data.thresholdMode == 'USD_FIXED' || data.thresholdMode == 'PERCENT_OF_EQUITY')
+        && data.profitThresholdUsd is number
+        && data.profitThresholdUsd >= 10
+        && data.profitThresholdUsd <= 100000
+        && data.profitThresholdPct is number
+        && data.profitThresholdPct >= 0.25
+        && data.profitThresholdPct <= 50
+        && data.scoopExcessRatioPct is number
+        && data.scoopExcessRatioPct >= 25
+        && data.scoopExcessRatioPct <= 100
+        && data.enabled is bool
+        && data.lockedVaultBalanceUsd is number
+        && data.lockedVaultBalanceUsd >= 0
+        && data.totalScoopedLifetimeUsd is number
+        && data.totalScoopedLifetimeUsd >= 0
+        && data.stateVersion is number
+        && data.stateVersion >= 1
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     match /users/{userId} {
       allow get: if isValidId(userId) && isOwner(userId);
       allow create: if isValidId(userId)
@@ -346,6 +438,62 @@ service cloud.firestore {
           && incoming().createdAt == request.time;
         allow update: if false;
         allow delete: if isValidId(userId) && isValidId(logId) && isVerified() && isOwner(userId);
+      }
+
+      match /dailyPnlRecords/{dateKey} {
+        allow get: if isValidId(userId) && isValidDateKey(dateKey) && isOwner(userId);
+        allow list: if isValidId(userId) && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidDateKey(dateKey)
+          && isVerified()
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidDailyPnlRecord(incoming(), userId, dateKey)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidDateKey(dateKey)
+          && isVerified()
+          && isOwner(userId)
+          && isValidDailyPnlRecord(incoming(), userId, dateKey)
+          && incoming().dateKey == existing().dateKey
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'startingEquityUsd', 'endingEquityUsd', 'realizedPnlUsd', 'returnPct',
+            'scoopedToVaultUsd', 'manualReleasedUsd', 'tradeCount', 'winningTrades',
+            'losingTrades', 'winRatePct', 'recordHash', 'updatedAt'
+          ]);
+        allow delete: if false;
+      }
+
+      match /vaultLocker/{vaultId} {
+        allow get: if isValidId(userId) && isValidId(vaultId) && isOwner(userId);
+        allow list: if isValidId(userId) && isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(vaultId)
+          && isVerified()
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidVaultLockerState(incoming(), userId, vaultId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(vaultId)
+          && isVerified()
+          && isOwner(userId)
+          && isValidVaultLockerState(incoming(), userId, vaultId)
+          && incoming().id == existing().id
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'thresholdMode', 'profitThresholdUsd', 'profitThresholdPct',
+            'scoopExcessRatioPct', 'enabled', 'lockedVaultBalanceUsd',
+            'totalScoopedLifetimeUsd', 'stateVersion', 'updatedAt'
+          ]);
+        allow delete: if false;
       }
     }
   }

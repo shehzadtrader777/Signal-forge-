@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { type User } from 'firebase/auth';
+import { useWorkspaceStore } from '../store/useWorkspaceStore';
 import {
   TRACKED_COINS,
   fetchCoinCandles,
@@ -2805,7 +2806,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           body: JSON.stringify({
             symbol: plan.symbol,
             direction: plan.direction,
+            entryPrice: plan.entryPrice,
+            exitPrice: plan.riskPlan.takeProfits[2] || plan.riskPlan.trailingTakeProfit5xAtr,
+            stopLoss: plan.riskPlan.initialStopLoss,
             confidence: plan.confidence,
+            timeframe: signalTimeframe,
+            rationale: `${plan.sourceLabel} · ${plan.skeptic.verdict}`,
             message: plan.telegramMessage,
             dedupeKey,
           }),
@@ -2832,7 +2838,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
       return false;
     },
-    [pushNotification]
+    [pushNotification, signalTimeframe]
   );
 
   const switchExecutionMode = useCallback(
@@ -3674,15 +3680,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const flushBufferedFramesRef = useRef(flushBufferedFrames);
   flushBufferedFramesRef.current = flushBufferedFrames;
 
+  const wsBatchIntervalMs = useWorkspaceStore((s) => s.cyber.wsBatchIntervalMs);
+
   useEffect(() => {
     if (!appLiveEnabled || !liveFeedModulesEnabled) return;
+    const effectiveIntervalMs =
+      typeof wsBatchIntervalMs === 'number' && wsBatchIntervalMs >= 8
+        ? wsBatchIntervalMs
+        : WS_FLUSH_INTERVAL_MS;
     const flushTimer = window.setInterval(() => {
       flushBufferedFramesRef.current();
-    }, WS_FLUSH_INTERVAL_MS);
+    }, effectiveIntervalMs);
     return () => {
       window.clearInterval(flushTimer);
     };
-  }, [appLiveEnabled, liveFeedModulesEnabled]);
+  }, [appLiveEnabled, liveFeedModulesEnabled, wsBatchIntervalMs]);
 
   // Decoupled LiveWsFeedController orchestration (zero React lifecycle inside socket message handler)
   useEffect(() => {

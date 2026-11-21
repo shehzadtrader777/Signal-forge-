@@ -5,6 +5,7 @@ import {
   signInWithEmail,
   signUpWithEmail,
 } from '../lib/firebase';
+import { formatFirebaseAuthError } from '../lib/firebaseAuthErrors';
 import { useApp } from '../context/AppContext';
 
 export function Auth() {
@@ -25,8 +26,13 @@ export function Auth() {
     try {
       await signInWithGoogle();
       navigate('/');
-    } catch (err: any) {
-      setError(err?.message || 'Google sign-in failed. Please try again.');
+    } catch (err: unknown) {
+      const formatted = formatFirebaseAuthError(err);
+      if (formatted.severity === 'info') {
+        setInfo(formatted.message);
+      } else {
+        setError(formatted.message);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -57,14 +63,12 @@ export function Auth() {
           navigate('/');
         }
       }
-    } catch (err: any) {
-      const code = String(err?.code || '');
-      if (code === 'auth/operation-not-allowed') {
-        setError(
-          'Email/Password sign-in is not yet enabled in the Firebase Console for this project. Enable Email/Password under Authentication → Sign-in method, or use Continue with Google above.'
-        );
+    } catch (err: unknown) {
+      const formatted = formatFirebaseAuthError(err);
+      if (formatted.severity === 'info') {
+        setInfo(formatted.message);
       } else {
-        setError(err?.message || 'Authentication failed.');
+        setError(formatted.message);
       }
     } finally {
       setSubmitting(false);

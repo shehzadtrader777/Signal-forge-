@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { ArrowDownRight, ArrowUpRight, Bot, Calculator, Clock, Layers } from 'lucide-react';
 import { formatCompactUsd, formatCryptoPrice, type Timeframe } from '../lib/marketData';
 import { type TradingSignal } from '../lib/signals';
@@ -11,7 +12,7 @@ interface SmcVolumeProfilePanelProps {
   onSendToCoordinator?: (analysis: SmcAgentAnalysis) => void;
 }
 
-export function SmcVolumeProfilePanel({
+export const SmcVolumeProfilePanel = memo(function SmcVolumeProfilePanel({
   analysis,
   timeframe,
   livePrice,
@@ -515,4 +516,4 @@ export function SmcVolumeProfilePanel({
       </div>
     </section>
   );
-}
+});

@@ -39,7 +39,7 @@ export const PRIVILEGED_CAPABILITIES: readonly ('TELEMETRY' | 'AGENT_OVERRIDE' |
   'EXECUTION',
 ] as const;
 
-export const UNAUTHENTICATED_PRINCIPAL: SubscriptionPrincipal = {
+export const UNAUTHENTICATED_PRINCIPAL: SubscriptionPrincipal = Object.freeze({
   authenticated: false,
   uid: null,
   email: null,
@@ -49,7 +49,7 @@ export const UNAUTHENTICATED_PRINCIPAL: SubscriptionPrincipal = {
   expiresAtMs: null,
   entitlementId: null,
   planLabel: 'Guest Read-Only',
-};
+});
 
 export function isPremiumSubscriber(
   principal: SubscriptionPrincipal | null | undefined,

@@ -1,6 +1,11 @@
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
+  initializeAuth,
+  browserLocalPersistence,
+  browserSessionPersistence,
+  indexedDBLocalPersistence,
+  browserPopupRedirectResolver,
   GoogleAuthProvider,
   signInWithPopup,
   signInWithEmailAndPassword,
@@ -9,6 +14,7 @@ import {
   updateProfile,
   signOut,
   onAuthStateChanged,
+  type Auth,
   type User,
 } from 'firebase/auth';
 import {
@@ -26,11 +32,36 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+import { isRetryableAuthNetworkError } from './firebaseAuthErrors';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
+
+/**
+ * Initialize Firebase Auth without eagerly registering browserPopupRedirectResolver.
+ * Eagerly attaching browserPopupRedirectResolver via getAuth() causes Firebase Auth to
+ * proactively inject and ping https://<authDomain>/__/auth/iframe on page load on
+ * Mobile/Safari/iOS and embedded preview frames, throwing unhandled auth/network-request-failed
+ * errors before the user ever initiates sign-in. Instead, pass browserPopupRedirectResolver
+ * on demand inside signInWithGoogle().
+ */
+function createAuthInstance(): Auth {
+  try {
+    return initializeAuth(app, {
+      persistence: [
+        indexedDBLocalPersistence,
+        browserLocalPersistence,
+        browserSessionPersistence,
+      ],
+    });
+  } catch {
+    return getAuth(app);
+  }
+}
+
+export const auth = createAuthInstance();
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 export enum OperationType {
   CREATE = 'create',
@@ -168,8 +199,18 @@ export async function syncUserProfile(user: User): Promise<void> {
 }
 
 export async function signInWithGoogle(): Promise<User> {
-  const result = await signInWithPopup(auth, googleProvider);
-  await syncUserProfile(result.user);
+  let result;
+  try {
+    result = await signInWithPopup(auth, googleProvider, browserPopupRedirectResolver);
+  } catch (firstErr) {
+    if (isRetryableAuthNetworkError(firstErr)) {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      result = await signInWithPopup(auth, googleProvider, browserPopupRedirectResolver);
+    } else {
+      throw firstErr;
+    }
+  }
+  await syncUserProfile(result.user).catch(() => undefined);
   return result.user;
 }
 
@@ -479,4 +520,152 @@ export async function saveErrorAuditToFirestore(
     handleFirestoreError(error, OperationType.CREATE, path);
   }
 }
+
+export interface PersistedDailyPnlRecord {
+  dateKey: string;
+  userId: string;
+  startingEquityUsd: number;
+  endingEquityUsd: number;
+  realizedPnlUsd: number;
+  returnPct: number;
+  scoopedToVaultUsd: number;
+  manualReleasedUsd: number;
+  tradeCount: number;
+  winningTrades: number;
+  losingTrades: number;
+  winRatePct: number;
+  recordHash: string;
+}
+
+export interface PersistedVaultLockerState {
+  id: string;
+  userId: string;
+  thresholdMode: 'USD_FIXED' | 'PERCENT_OF_EQUITY';
+  profitThresholdUsd: number;
+  profitThresholdPct: number;
+  scoopExcessRatioPct: number;
+  enabled: boolean;
+  lockedVaultBalanceUsd: number;
+  totalScoopedLifetimeUsd: number;
+  stateVersion: number;
+}
+
+export function subscribeDailyPnlRecords(
+  userId: string,
+  onData: (records: PersistedDailyPnlRecord[]) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  const path = `users/${userId}/dailyPnlRecords`;
+  const q = query(collection(db, path), where('userId', '==', userId));
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const records: PersistedDailyPnlRecord[] = snapshot.docs
+        .map((d) => {
+          const data = d.data();
+          return {
+            dateKey: String(data.dateKey || d.id),
+            userId: String(data.userId || userId),
+            startingEquityUsd: Number(data.startingEquityUsd) || 0,
+            endingEquityUsd: Number(data.endingEquityUsd) || 0,
+            realizedPnlUsd: Number(data.realizedPnlUsd) || 0,
+            returnPct: Number(data.returnPct) || 0,
+            scoopedToVaultUsd: Number(data.scoopedToVaultUsd) || 0,
+            manualReleasedUsd: Number(data.manualReleasedUsd) || 0,
+            tradeCount: Number(data.tradeCount) || 0,
+            winningTrades: Number(data.winningTrades) || 0,
+            losingTrades: Number(data.losingTrades) || 0,
+            winRatePct: Number(data.winRatePct) || 0,
+            recordHash: String(data.recordHash || ''),
+          };
+        })
+        .sort((a, b) => a.dateKey.localeCompare(b.dateKey));
+      onData(records);
+    },
+    (error) => {
+      logFirestoreSnapshotError(error, OperationType.LIST, path);
+      if (onError) onError(error);
+    }
+  );
+}
+
+export async function saveDailyPnlRecordToFirestore(
+  userId: string,
+  record: Omit<PersistedDailyPnlRecord, 'userId'>
+): Promise<void> {
+  if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(record.dateKey)) return;
+  const path = `users/${userId}/dailyPnlRecords/${record.dateKey}`;
+  const ref = doc(db, 'users', userId, 'dailyPnlRecords', record.dateKey);
+  const payload = {
+    startingEquityUsd: Math.max(0, Number(record.startingEquityUsd) || 0),
+    endingEquityUsd: Math.max(0, Number(record.endingEquityUsd) || 0),
+    realizedPnlUsd: Number(record.realizedPnlUsd) || 0,
+    returnPct: Number(record.returnPct) || 0,
+    scoopedToVaultUsd: Math.max(0, Number(record.scoopedToVaultUsd) || 0),
+    manualReleasedUsd: Math.max(0, Number(record.manualReleasedUsd) || 0),
+    tradeCount: Math.max(0, Number(record.tradeCount) || 0),
+    winningTrades: Math.max(0, Number(record.winningTrades) || 0),
+    losingTrades: Math.max(0, Number(record.losingTrades) || 0),
+    winRatePct: Math.min(100, Math.max(0, Number(record.winRatePct) || 0)),
+    recordHash: String(record.recordHash || '00000000').slice(0, 32),
+  };
+  try {
+    const snap = await getDocFromServer(ref);
+    if (!snap.exists()) {
+      await setDoc(ref, {
+        dateKey: record.dateKey,
+        userId,
+        ...payload,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await updateDoc(ref, {
+        ...payload,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function saveVaultLockerSnapshotToFirestore(
+  userId: string,
+  state: Omit<PersistedVaultLockerState, 'id' | 'userId'>
+): Promise<void> {
+  const vaultId = 'primaryVault';
+  const path = `users/${userId}/vaultLocker/${vaultId}`;
+  const ref = doc(db, 'users', userId, 'vaultLocker', vaultId);
+  const payload = {
+    thresholdMode: state.thresholdMode === 'PERCENT_OF_EQUITY' ? 'PERCENT_OF_EQUITY' : 'USD_FIXED',
+    profitThresholdUsd: Math.min(100000, Math.max(10, Number(state.profitThresholdUsd) || 250)),
+    profitThresholdPct: Math.min(50, Math.max(0.25, Number(state.profitThresholdPct) || 1.5)),
+    scoopExcessRatioPct: Math.min(100, Math.max(25, Number(state.scoopExcessRatioPct) || 100)),
+    enabled: Boolean(state.enabled),
+    lockedVaultBalanceUsd: Math.max(0, Number(state.lockedVaultBalanceUsd) || 0),
+    totalScoopedLifetimeUsd: Math.max(0, Number(state.totalScoopedLifetimeUsd) || 0),
+    stateVersion: Math.max(1, Math.floor(Number(state.stateVersion) || 1)),
+  };
+  try {
+    const snap = await getDocFromServer(ref);
+    if (!snap.exists()) {
+      await setDoc(ref, {
+        id: vaultId,
+        userId,
+        ...payload,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await updateDoc(ref, {
+        ...payload,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
 

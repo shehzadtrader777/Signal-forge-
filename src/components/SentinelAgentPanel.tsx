@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { AlertTriangle, Play, RefreshCw, ShieldAlert, ShieldCheck, Zap } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { formatCryptoPrice } from '../lib/marketData';
 
-export function SentinelAgentPanel() {
+export const SentinelAgentPanel = memo(function SentinelAgentPanel() {
   const {
     selectedSymbol,
     sentinelBySymbol,
@@ -311,4 +311,4 @@ export function SentinelAgentPanel() {
       </div>
     </section>
   );
-}
+});

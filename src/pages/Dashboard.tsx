@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Lock, RefreshCw } from 'lucide-react';
-import { LivePriceStrip } from '../components/LivePriceStrip';
 import { CandleChart } from '../components/CandleChart';
 import { SmcVolumeProfilePanel } from '../components/SmcVolumeProfilePanel';
 import { TopGainersPanel } from '../components/TopGainersPanel';
@@ -12,13 +11,29 @@ import { LiveTestnetLedger } from '../components/LiveTestnetLedger';
 import { SystemControlsBar } from '../components/SystemControlsBar';
 import { OrderBookDepthPanel } from '../components/OrderBookDepthPanel';
 import { SentinelAgentPanel } from '../components/SentinelAgentPanel';
-import { VoiceCommandAgentPanel } from '../components/VoiceCommandAgentPanel';
 import { AutonomousOperationsHub } from '../components/AutonomousOperationsHub';
 import { PortfolioManagementHub } from '../components/portfolio/PortfolioManagementHub';
 import { ForgeCapitalHub } from '../components/ForgeCapitalHub';
+import { TelegramDualStreamMonitor } from '../components/TelegramDualStreamMonitor';
+import { MultiScreenWorkspaceBar } from '../components/MultiScreenWorkspaceBar';
+import { EntryZoneAndExecutionPanel } from '../components/EntryZoneAndExecutionPanel';
+import { AgentLoopTelemetryPanel } from '../components/AgentLoopTelemetryPanel';
+import { AgentSyncAndRenderAuditPanel } from '../components/AgentSyncAndRenderAuditPanel';
+import { ModularProfitTakingPanel } from '../components/ModularProfitTakingPanel';
+import { ProfitVaultAndDailyPnlPanel } from '../components/ProfitVaultAndDailyPnlPanel';
+import { MultiAgentDebateAndSelfHealingPanel } from '../components/MultiAgentDebateAndSelfHealingPanel';
+import { MultiAgentCommandOrchestratorPanel } from '../components/MultiAgentCommandOrchestratorPanel';
+import { AgenticCliOrchestratorPanel } from '../components/AgenticCliOrchestratorPanel';
+import { FableOrchestratorPanel } from '../components/FableOrchestratorPanel';
+import { FreqtradeUnifiedTerminal } from '../components/FreqtradeUnifiedTerminal';
+import { HybridArchitectureConsole } from '../components/HybridArchitectureConsole';
+import { SignalDetailModal } from '../components/SignalDetailModal';
+import { useWorkspaceStore, type MonitorId } from '../store/useWorkspaceStore';
+import { AnimatePresence, motion } from 'motion/react';
 import { useApp } from '../context/AppContext';
 import { generateDeterministicCandles } from '../lib/marketData';
 import { apiFetch } from '../lib/apiClient';
+import type { BackendExecutionPipelineSnapshot } from '../lib/executionPipeline';
 import { generateTopSignals, type TradingSignal } from '../lib/signals';
 import { runSmcVolumeProfileAgent, type SmcAgentAnalysis } from '../lib/smcAgent';
 import {
@@ -43,7 +58,9 @@ import {
 
 export function Dashboard() {
   const {
+    appLiveEnabled,
     selectedSymbol,
+    setSelectedSymbol,
     tickers,
     signalTickers,
     liveFeedModulesEnabled,
@@ -73,8 +90,89 @@ export function Dashboard() {
     registerChartCandles: handleChartCandlesLoaded,
     orderBookDepth,
     sentinelBySymbol,
+    setExecutionRouteDraft,
   } = useApp();
+  const activeMonitorId = useWorkspaceStore((s) => s.activeMonitorId);
+  const setActiveMonitor = useWorkspaceStore((s) => s.setActiveMonitor);
+  const panels = useWorkspaceStore((s) => s.monitors[s.activeMonitorId].panels);
+  const [pipelineSnapshot, setPipelineSnapshot] =
+    useState<BackendExecutionPipelineSnapshot | null>(null);
   const [initialWsGraceElapsed, setInitialWsGraceElapsed] = useState(false);
+  const [inspectedSignalState, setInspectedSignalState] = useState<{
+    signal: TradingSignal;
+    layoutId: string;
+    pinnedRecord?: (typeof pinnedSignals)[number];
+  } | null>(null);
+
+  const handleInspectSignalDetail = useCallback(
+    (signal: TradingSignal, layoutId: string, pinnedRecord?: (typeof pinnedSignals)[number]) => {
+      setInspectedSignalState({ signal, layoutId, pinnedRecord });
+    },
+    []
+  );
+
+  const handleSlideDisplay = useCallback(
+    (delta: -1 | 1) => {
+      const order: MonitorId[] = ['DISPLAY_1', 'DISPLAY_2', 'DISPLAY_3'];
+      const curIdx = order.indexOf(activeMonitorId);
+      const nextIdx = (curIdx + delta + order.length) % order.length;
+      setActiveMonitor(order[nextIdx]);
+    },
+    [activeMonitorId, setActiveMonitor]
+  );
+
+  const handleModalBuyRoute = useCallback(
+    (sig: TradingSignal) => {
+      setSelectedSymbol(sig.symbol);
+      setExecutionRouteDraft({
+        symbol: sig.symbol,
+        direction: sig.direction,
+        market: futuresTradingEnabled ? 'USD_M_FUTURES' : 'SPOT',
+        moduleId: futuresTradingEnabled ? 'FUTURES_COORDINATOR' : 'SPOT_MOMENTUM',
+        leverage: futuresTradingEnabled ? sig.recommendedLeverage ?? 5 : 1,
+        notionalUsd: 1500,
+        stopLoss: sig.stopLoss,
+        trailingStopLoss: sig.trailingStop ?? sig.stopLoss,
+        trailingAtrMultiplier: sig.trailingAtrMultiplier ?? 1.5,
+        takeProfits: sig.takeProfits,
+        prePumpScore: sig.prePumpScore,
+        sourceLabel: 'Shared Element Detail Route',
+        requestedAt: Date.now(),
+      });
+      document
+        .getElementById('forge-execution-hub')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+    [futuresTradingEnabled, setExecutionRouteDraft, setSelectedSymbol]
+  );
+
+  const fetchPipelineSnapshot = useCallback(async () => {
+    try {
+      const res = await fetch('/api/pipeline/dashboard-snapshot');
+      if (!res.ok) return;
+      const data = (await res.json()) as BackendExecutionPipelineSnapshot & {
+        snapshot?: BackendExecutionPipelineSnapshot;
+      };
+      const resolved = data?.snapshot ?? data;
+      if (resolved?.ok && Array.isArray(resolved.activeAwaitingSignals)) {
+        setPipelineSnapshot(resolved);
+      }
+    } catch {
+      // Keep last known snapshot on transient poll errors
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchPipelineSnapshot();
+  }, [fetchPipelineSnapshot]);
+
+  useEffect(() => {
+    if (!appLiveEnabled) return;
+    const id = window.setInterval(() => {
+      fetchPipelineSnapshot();
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [appLiveEnabled, fetchPipelineSnapshot]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setInitialWsGraceElapsed(true), 1200);
@@ -127,7 +225,9 @@ export function Dashboard() {
     return map;
   }, [backendEvaluations]);
 
+  const needsSmcComputation = panels.smcProfile || panels.priceChart || panels.coordinatorHub;
   const activeSmcAnalysis = useMemo(() => {
+    if (!needsSmcComputation) return null;
     const candles =
       liveCandlesMap[selectedSymbol] ||
       generateDeterministicCandles(selectedSymbol, timeframe, 120);
@@ -143,7 +243,7 @@ export function Dashboard() {
       Math.floor(Date.now() / 60_000) * 60,
       liveWsPrice
     );
-  }, [liveCandlesMap, selectedSymbol, timeframe, allKnownCoins, signalTickers]);
+  }, [needsSmcComputation, liveCandlesMap, selectedSymbol, timeframe, allKnownCoins, signalTickers]);
 
   // Generate 6-12 strongest AI & Top Gainer candidates anchored to live WebSocket feed snapshots
   const topSignals = useMemo(() => {
@@ -162,9 +262,19 @@ export function Dashboard() {
     [patternParams, timeframe]
   );
 
+  const needsPatternComputation = panels.patternScanner || panels.coordinatorHub;
   const patternScanSummary = useMemo(() => {
+    if (!needsPatternComputation) {
+      return {
+        scannedCount: 0,
+        confirmedSignals: [] as PatternScanResult[],
+        filteredFakeouts: [] as PatternScanResult[],
+        watchingCoils: [] as PatternScanResult[],
+        scannedAt: '',
+      };
+    }
     return scanMarketPatterns(liveCandlesMap, syncedPatternParams, allKnownCoins);
-  }, [liveCandlesMap, syncedPatternParams, allKnownCoins]);
+  }, [needsPatternComputation, liveCandlesMap, syncedPatternParams, allKnownCoins]);
 
   // Synchronize top 3–5 strongest signals into persistent pinned slots (locked until final TP3/SL outcome)
   const combinedCandidateSignals = useMemo(() => {
@@ -238,6 +348,7 @@ export function Dashboard() {
 
   // Direct Multi-Module Coordinator Integration: Spot Priority Default + Optional Manual Futures Toggle
   const coordinatedPlans = useMemo(() => {
+    if (!panels.coordinatorHub) return [];
     const planOptions = {
       futuresEnabled: futuresTradingEnabled,
       notionalUsd,
@@ -325,6 +436,7 @@ export function Dashboard() {
 
     return allPlans;
   }, [
+    panels.coordinatorHub,
     topSignals,
     activeSmcAnalysis,
     patternScanSummary,
@@ -536,139 +648,229 @@ export function Dashboard() {
 
   return (
     <div>
-      <LivePriceStrip />
-
       <div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8 space-y-8">
-        {/* Master Performance & System On/Off Controls */}
-        <SystemControlsBar />
+        {/* Multi-Screen Workspace Synchronization, Cyber-AI Theme Controls & Backend AI Pulse */}
+        <MultiScreenWorkspaceBar pipelineSnapshot={pipelineSnapshot} />
+
+        {/* Gesture-Driven Horizontal Display Transition Stage (Swipe left/right across Displays 1-3 at 120Hz) */}
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={activeMonitorId}
+            initial={{ opacity: 0, x: 14 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -14 }}
+            transition={{ type: 'spring', stiffness: 420, damping: 36, mass: 0.7 }}
+            drag="x"
+            dragConstraints={{ left: 0, right: 0 }}
+            dragElastic={0.12}
+            onDragEnd={(_, info) => {
+              if (info.offset.x < -120 || info.velocity.x < -600) {
+                handleSlideDisplay(1);
+              } else if (info.offset.x > 120 || info.velocity.x > 600) {
+                handleSlideDisplay(-1);
+              }
+            }}
+            className="space-y-8"
+          >
+            {/* Signal Forge 6-Phase Hybrid Production Core (Python Control Plane + Rust Execution Engine) */}
+            {panels.hybridArchitecture && <HybridArchitectureConsole />}
+
+            {/* Signal Forge × Freqtrade Unified CCXT Execution, SQLite Dry-Run, 50-Win Live Gate & Telegram RPC Terminal */}
+            {panels.freqtradeTerminal && <FreqtradeUnifiedTerminal />}
+
+            {/* Master Performance & System On/Off Controls */}
+            {panels.systemControls && <SystemControlsBar />}
+
+            {/* Fable 5.2 Multi-Agent 8-Layer Self-Improving Trading Orchestrator (Half-Kelly, Risk Parity, Black-Scholes, Phase 5) */}
+            {panels.fableOrchestrator && <FableOrchestratorPanel />}
+
+            {/* Agentic CLI Loop, Unified Model API Gateway & Confirmed Local Script Editor */}
+            {panels.agenticCliLoop && <AgenticCliOrchestratorPanel />}
+
+            {/* Multi-Agent Trading Architecture: 1:5–1:25+ R:R, Volume Tiers, Pre-Pump Lifecycle, Cryptographic Trade IDs & 30m Dev Audit */}
+            {panels.multiAgentArchitecture && <MultiAgentCommandOrchestratorPanel />}
+
+            {/* Visible Telemetry Mapping Backend Agent Transaction Loops */}
+            {panels.agentLoopTelemetry && <AgentLoopTelemetryPanel />}
+
+            {/* Multi-Agent State Synchronization & 120Hz Render Pipeline Audit */}
+            {panels.agentSyncAudit && <AgentSyncAndRenderAuditPanel />}
+
+            {/* Entry-Zone Validated Signal Cards & Zero-Clutter Backend Execution Logs */}
+            {(panels.activeEntryZoneSignals || panels.backendExecutionLogs) && (
+              <EntryZoneAndExecutionPanel
+                snapshot={pipelineSnapshot}
+                showActiveSignals={panels.activeEntryZoneSignals}
+                showExecutionLogs={panels.backendExecutionLogs}
+                onSnapshotUpdated={setPipelineSnapshot}
+                onSelectSymbol={setSelectedSymbol}
+              />
+            )}
+
+            {/* Modular Decoupled Per-Agent Profit-Taking & Autonomous Profit Locking Studio */}
+            {panels.modularProfitTaking && <ModularProfitTakingPanel />}
+
+            {/* Overhauled Pre-Pump Support Desk & Top Gainers (Immediate Support Execution + Hold Until Max Profit TP3) */}
+            {panels.prePumpSupportDesk && (
+              <TopGainersPanel
+                prioritizedSymbols={topSignals.map((s) => s.symbol)}
+                prePumpMonitor={pipelineSnapshot?.prePumpSupportMonitor}
+                onPipelineSnapshotUpdated={setPipelineSnapshot}
+              />
+            )}
+
+        {/* Dual-Stream Telegram Webhook, Public Signal Forge Alerts & Private Developer System Audit Oversight */}
+        {panels.telegramMonitor && <TelegramDualStreamMonitor />}
 
         {/* Multi-Asset Portfolio Exposure Meter, Volatility Gauges & Auto-Rebalancer */}
-        <PortfolioManagementHub compact />
+        {panels.portfolioHub && <PortfolioManagementHub compact />}
+
+        {/* High-Frequency Profit Scooping, Immutable Locker Vault & Daily PnL Tracker */}
+        {panels.profitVault && <ProfitVaultAndDailyPnlPanel />}
+
+        {/* Multi-Agent Debate Coordinator, Google Search Grounding & Self-Healing Health Hub */}
+        {panels.debateCoordinator && <MultiAgentDebateAndSelfHealingPanel />}
 
         {/* Forge Capital Hub — 10-15% Hard Drawdown Fail-Safe & Dual Binance Spot/Futures Execution Router */}
-        <ForgeCapitalHub />
+        {panels.forgeCapital && <ForgeCapitalHub />}
 
         {/* Full-Width Pure Execution Live Price Chart (Fundamentals & Whale Intel Offloaded to Backend) */}
-        <CandleChart
-          timeframe={timeframe}
-          onTimeframeChange={setTimeframe}
-          onCandlesLoaded={handleChartCandlesLoaded}
-          smcAnalysis={activeSmcAnalysis}
-        />
+        {panels.priceChart && (
+          <CandleChart
+            timeframe={timeframe}
+            onTimeframeChange={setTimeframe}
+            onCandlesLoaded={handleChartCandlesLoaded}
+            smcAnalysis={activeSmcAnalysis}
+          />
+        )}
 
         {/* Active Signals Multi-Column Grid (6–12 Pre-Pump & AI Coordinator Signals) */}
-        <section
-          aria-label="Pinned Top AI Signals"
-          data-testid="active-signals-grid-section"
-          className="space-y-4"
-        >
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <span className="text-xs text-slate-400">
-                Permanently Pinned Until Final Outcome (TP3 Win or Wide ATR Trailing Stop) · Offloaded Intel Verified
-              </span>
-              <h2 className="mt-0.5 font-display text-2xl font-bold text-white tracking-tight flex items-center gap-2">
-                <Lock className="h-5 w-5 text-[#3b82f6] shrink-0" aria-hidden="true" />
-                <span>
-                  Active Top {Math.max(MIN_PINNED_SIGNALS, displayedSignalCards.length)} Pre-Pump &amp; AI Signals ({timeframe})
+        {panels.activeEntryZoneSignals && (
+          <section
+            aria-label="Pinned Top AI Signals"
+            data-testid="active-signals-grid-section"
+            className="space-y-4"
+          >
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <span className="text-xs text-slate-400">
+                  Permanently Pinned Until Final Outcome (TP3 Win or Wide ATR Trailing Stop) · Offloaded Intel Verified
                 </span>
-              </h2>
-            </div>
+                <h2 className="mt-0.5 font-display text-2xl font-bold text-white tracking-tight flex items-center gap-2">
+                  <Lock className="h-5 w-5 text-cyan-400 shrink-0" aria-hidden="true" />
+                  <span>
+                    Active Top {Math.max(MIN_PINNED_SIGNALS, displayedSignalCards.length)} Pre-Pump &amp; AI Signals ({timeframe})
+                  </span>
+                </h2>
+              </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              {resolvedPinnedCount > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                {resolvedPinnedCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => rotateResolvedPinned(combinedCandidateSignals, liveCandlesMap)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <span>Rotate {resolvedPinnedCount} Resolved Signal{resolvedPinnedCount > 1 ? 's' : ''}</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
-                  onClick={() => rotateResolvedPinned(combinedCandidateSignals, liveCandlesMap)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 transition-colors cursor-pointer whitespace-nowrap"
+                  onClick={() => runSignalScan(timeframe)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-[#0d1527] px-3.5 py-2 text-xs font-semibold text-white hover:border-cyan-400 transition-colors cursor-pointer whitespace-nowrap"
                 >
-                  <span>Rotate {resolvedPinnedCount} Resolved Signal{resolvedPinnedCount > 1 ? 's' : ''}</span>
+                  <RefreshCw className={`h-3.5 w-3.5 ${scanning ? 'animate-spin' : ''}`} />
+                  <span>{scanning ? 'Scanning Markets...' : 'Rescan Signals'}</span>
                 </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => runSignalScan(timeframe)}
-                className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-[#111827] px-3.5 py-2 text-xs font-semibold text-white hover:border-[#3b82f6] transition-colors cursor-pointer whitespace-nowrap"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${scanning ? 'animate-spin' : ''}`} />
-                <span>{scanning ? 'Scanning Markets...' : 'Rescan Signals'}</span>
-              </button>
+              </div>
             </div>
-          </div>
 
-          <div
-            data-testid="active-signals-grid"
-            className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-          >
-            {displayedSignalCards.map((item, idx) => (
-              <SignalCard
-                key={`${item.signal.symbol}_${item.signal.direction}`}
-                signal={item.signal}
-                rank={idx + 1}
-                pinnedRecord={item.record}
-                onOpenRiskCalc={setActiveRiskSignal}
-              />
-            ))}
-          </div>
-        </section>
+            <div
+              data-testid="active-signals-grid"
+              className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+            >
+              {displayedSignalCards.map((item, idx) => (
+                <SignalCard
+                  key={`${item.signal.symbol}_${item.signal.direction}`}
+                  signal={item.signal}
+                  rank={idx + 1}
+                  pinnedRecord={item.record}
+                  onOpenRiskCalc={setActiveRiskSignal}
+                  onInspectDetail={handleInspectSignalDetail}
+                />
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Dedicated Always-Visible Live Testnet Execution Ledger */}
-        <LiveTestnetLedger candlesMap={liveCandlesMap} />
+        {panels.liveLedger && <LiveTestnetLedger candlesMap={liveCandlesMap} />}
 
         {/* Autonomous AI Crypto Trading Coordinator (Spot Priority Default + Optional Futures Toggle) */}
-        <div ref={coordinatorSectionRef} className="scroll-mt-20">
-          <CoordinatorHub
-            plans={coordinatedPlans}
-            candlesMap={liveCandlesMap}
-            notionalUsd={notionalUsd}
-            onChangeNotionalUsd={setNotionalUsd}
-            scalingMode={scalingMode}
-            onChangeScalingMode={setScalingMode}
-            manualLeverage={manualLeverage}
-            onChangeManualLeverage={setManualLeverage}
-            marginMode={marginMode}
-            onChangeMarginMode={setMarginMode}
-          />
-        </div>
+        {panels.coordinatorHub && (
+          <div ref={coordinatorSectionRef} className="scroll-mt-20">
+            <CoordinatorHub
+              plans={coordinatedPlans}
+              candlesMap={liveCandlesMap}
+              notionalUsd={notionalUsd}
+              onChangeNotionalUsd={setNotionalUsd}
+              scalingMode={scalingMode}
+              onChangeScalingMode={setScalingMode}
+              manualLeverage={manualLeverage}
+              onChangeManualLeverage={setManualLeverage}
+              marginMode={marginMode}
+              onChangeMarginMode={setMarginMode}
+            />
+          </div>
+        )}
 
         {/* Dedicated Sentinel Agent (Market Panic, FUD & Breaking Anomaly Protection) */}
-        <SentinelAgentPanel />
+        {panels.sentinelAgent && <SentinelAgentPanel />}
 
         {/* Autonomous RL Auto-Tuner, Flash-Crash Liquidation Shield, Arbitrage & Institutional Copy Desk */}
-        <AutonomousOperationsHub />
-
-        {/* Dedicated Hands-Free Voice Command Agent */}
-        <VoiceCommandAgentPanel />
+        {panels.autonomousOps && <AutonomousOperationsHub />}
 
         {/* Multi-Exchange L2 Order Book Depth & Whale Liquidity Shifts (Binance · Bybit · OKX) */}
-        <OrderBookDepthPanel />
+        {panels.orderBookDepth && <OrderBookDepthPanel />}
 
         {/* Smart Money Concepts & Fixed Range Volume Profile AI Agent (Directly Connected to Coordinator) */}
-        <SmcVolumeProfilePanel
-          analysis={activeSmcAnalysis}
-          timeframe={timeframe}
-          livePrice={tickers[selectedSymbol]?.price}
-          onOpenRiskCalc={setActiveRiskSignal}
-          onSendToCoordinator={handleSendSmcToCoordinator}
-        />
+        {panels.smcProfile && (
+          <SmcVolumeProfilePanel
+            analysis={activeSmcAnalysis}
+            timeframe={timeframe}
+            livePrice={tickers[selectedSymbol]?.price}
+            onOpenRiskCalc={setActiveRiskSignal}
+            onSendToCoordinator={handleSendSmcToCoordinator}
+          />
+        )}
 
         {/* Continuous Chart Pattern Breakout/Breakdown & Anti-Fakeout Scanner (Directly Connected to Coordinator) */}
-        <PatternScannerPanel
-          summary={patternScanSummary}
-          params={syncedPatternParams}
-          onChangeParams={setPatternParams}
-          autoScanEnabled={autoScanEnabled}
-          onToggleAutoScan={() => setAutoScanEnabled((prev) => !prev)}
-          scanning={scanning}
-          onManualScan={() => runSignalScan(timeframe)}
-          onOpenRiskCalc={setActiveRiskSignal}
-          onSendToCoordinator={handleSendPatternToCoordinator}
-        />
-
-        {/* Binance Top Gainers Feeder & Real-Time Alerts */}
-        <TopGainersPanel prioritizedSymbols={topSignals.map((s) => s.symbol)} />
+        {panels.patternScanner && (
+          <PatternScannerPanel
+            summary={patternScanSummary}
+            params={syncedPatternParams}
+            onChangeParams={setPatternParams}
+            autoScanEnabled={autoScanEnabled}
+            onToggleAutoScan={() => setAutoScanEnabled((prev) => !prev)}
+            scanning={scanning}
+            onManualScan={() => runSignalScan(timeframe)}
+            onOpenRiskCalc={setActiveRiskSignal}
+            onSendToCoordinator={handleSendPatternToCoordinator}
+          />
+        )}
+          </motion.div>
+        </AnimatePresence>
       </div>
+
+      <SignalDetailModal
+        signal={inspectedSignalState?.signal ?? null}
+        layoutId={inspectedSignalState?.layoutId ?? null}
+        pinnedRecord={inspectedSignalState?.pinnedRecord}
+        onClose={() => setInspectedSignalState(null)}
+        onExecuteBuy={handleModalBuyRoute}
+        onOpenRiskCalc={setActiveRiskSignal}
+      />
 
       <RiskCalculatorModal
         signal={activeRiskSignal}

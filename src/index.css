@@ -4,15 +4,17 @@
   --font-display: "Outfit", system-ui, sans-serif;
   --font-sans: "Plus Jakarta Sans", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
-  --color-forge-bg: #0a0e1a;
-  --color-forge-surface: #111827;
-  --color-forge-elevated: #161f33;
+  --color-forge-bg: #050914;
+  --color-forge-surface: #0b1224;
+  --color-forge-elevated: #101a33;
   --color-forge-accent: #3b82f6;
+  --color-cyber-cyan: #06b6d4;
+  --color-cyber-emerald: #10b981;
 }
 
 @layer base {
   html {
-    background-color: #0a0e1a;
+    background-color: #050914;
     color: #f1f5f9;
     font-family: var(--font-sans);
   }
@@ -26,6 +28,148 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Multi-Design Theme Tokens (Cyber-AI, Institutional Slate, High-Contrast Terminal) */
+:root,
+[data-design-variant="CYBER_AI"] {
+  --forge-canvas-bg: #050914;
+  --forge-surface-bg: rgba(11, 18, 36, 0.92);
+  --forge-surface-border: rgba(30, 58, 95, 0.72);
+  --forge-surface-rim: rgba(6, 182, 212, 0.14);
+}
+
+[data-design-variant="INSTITUTIONAL_SLATE"] {
+  --forge-canvas-bg: #0b1120;
+  --forge-surface-bg: rgba(15, 23, 42, 0.94);
+  --forge-surface-border: rgba(51, 65, 85, 0.78);
+  --forge-surface-rim: rgba(148, 163, 184, 0.08);
+}
+
+[data-design-variant="HIGH_CONTRAST_TERMINAL"] {
+  --forge-canvas-bg: #020408;
+  --forge-surface-bg: rgba(5, 9, 18, 0.98);
+  --forge-surface-border: rgba(71, 85, 105, 0.9);
+  --forge-surface-rim: rgba(16, 185, 129, 0.2);
+}
+
+/* GPU-Composited Dynamic Grid Backdrop (zero scroll repaint overhead for 120Hz displays) */
+.cyber-grid-backdrop {
+  position: relative;
+  isolation: isolate;
+  background-color: var(--forge-canvas-bg);
+}
+
+.cyber-grid-backdrop::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  transform: translateZ(0);
+  will-change: transform;
+  background-image:
+    radial-gradient(ellipse 80% 45% at 50% -10%, rgba(6, 182, 212, 0.11), transparent 70%),
+    linear-gradient(to right, rgba(6, 182, 212, 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(59, 130, 246, 0.045) 1px, transparent 1px);
+  background-size: 100% 100%, 44px 44px, 44px 44px;
+}
+
+.cyber-surface,
+.forge-surface {
+  background-color: var(--forge-surface-bg);
+  border-color: var(--forge-surface-border);
+  box-shadow: inset 0 1px 0 0 var(--forge-surface-rim);
+}
+
+/* 120Hz Layout & Paint Containment for Modular UI Widgets */
+.forge-widget-contain {
+  contain: layout style;
+}
+
+/* Pulse-Synchronized Data Stream Sweep (compositor-only transform + opacity) */
+@keyframes cyberStreamSweep {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.75;
+  }
+  80% {
+    opacity: 0.75;
+  }
+  100% {
+    transform: translateX(220%);
+    opacity: 0;
+  }
+}
+
+.cyber-stream-rail {
+  position: relative;
+  overflow: hidden;
+}
+
+.cyber-stream-rail::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 45%;
+  background: linear-gradient(90deg, transparent, rgba(6, 182, 212, 0.55), rgba(59, 130, 246, 0.6), transparent);
+  animation: cyberStreamSweep 2.6s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  will-change: transform, opacity;
+  pointer-events: none;
+}
+
+@keyframes cyberPulseNode {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scale(1.22);
+    opacity: 1;
+  }
+}
+
+.cyber-ai-wave {
+  animation: cyberPulseNode 1.8s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  will-change: transform, opacity;
+}
+
+/* Continuous GPU-Composited Top Ticker Bar Marquee (seamless 2x track loop) */
+@keyframes forgeTickerScroll {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+.forge-ticker-mask {
+  mask-image: linear-gradient(to right, transparent 0%, black 3%, black 97%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 3%, black 97%, transparent 100%);
+}
+
+.forge-ticker-track {
+  display: flex;
+  width: max-content;
+  animation: forgeTickerScroll 34s linear infinite;
+  will-change: transform;
+}
+
+.forge-ticker-marquee:hover .forge-ticker-track,
+.forge-ticker-marquee:focus-within .forge-ticker-track {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cyber-stream-rail::after,
+  .cyber-ai-wave,
+  .forge-ticker-track {
+    animation: none;
+  }
+}
+
 /* Custom sleek dark scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
@@ -33,7 +177,7 @@
 }
 
 ::-webkit-scrollbar-track {
-  background: #0a0e1a;
+  background: #050914;
 }
 
 ::-webkit-scrollbar-thumb {
@@ -42,5 +186,5 @@
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: #06b6d4;
 }

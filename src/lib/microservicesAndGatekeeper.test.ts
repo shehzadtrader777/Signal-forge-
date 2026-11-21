@@ -61,7 +61,8 @@ test('Control Matrix parses safely, computes deterministic checksums, and maps t
 });
 
 test('Subscription Gatekeeper strictly locks TELEMETRY, AGENT_OVERRIDE, and EXECUTION to authenticated verified PREMIUM_INSTITUTIONAL subscribers', () => {
-  // 1. Unauthenticated guest
+  // 1. Unauthenticated guest (frozen immutable singleton)
+  assert.equal(Object.isFrozen(UNAUTHENTICATED_PRINCIPAL), true);
   for (const cap of ['TELEMETRY', 'AGENT_OVERRIDE', 'EXECUTION'] as const) {
     const res = evaluateSubscriptionGate(UNAUTHENTICATED_PRINCIPAL, cap);
     assert.equal(res.allowed, false);

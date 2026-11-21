@@ -276,6 +276,105 @@
         "recoveryAction",
         "createdAt"
       ]
+    },
+    "DailyPnlRecord": {
+      "title": "DailyPnlRecord",
+      "description": "High-precision daily realized PnL and percentage return ledger scoped strictly to verified owner.",
+      "type": "object",
+      "properties": {
+        "dateKey": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "startingEquityUsd": { "type": "number" },
+        "endingEquityUsd": { "type": "number" },
+        "realizedPnlUsd": { "type": "number" },
+        "returnPct": { "type": "number" },
+        "scoopedToVaultUsd": { "type": "number" },
+        "manualReleasedUsd": { "type": "number" },
+        "tradeCount": { "type": "number" },
+        "winningTrades": { "type": "number" },
+        "losingTrades": { "type": "number" },
+        "winRatePct": { "type": "number" },
+        "recordHash": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 32
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "dateKey",
+        "userId",
+        "startingEquityUsd",
+        "endingEquityUsd",
+        "realizedPnlUsd",
+        "returnPct",
+        "scoopedToVaultUsd",
+        "manualReleasedUsd",
+        "tradeCount",
+        "winningTrades",
+        "losingTrades",
+        "winRatePct",
+        "recordHash",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VaultLockerState": {
+      "title": "VaultLockerState",
+      "description": "User-scoped immutable Locker Vault balance and scooping threshold configuration snapshot.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "thresholdMode": {
+          "type": "string",
+          "enum": ["USD_FIXED", "PERCENT_OF_EQUITY"]
+        },
+        "profitThresholdUsd": { "type": "number" },
+        "profitThresholdPct": { "type": "number" },
+        "scoopExcessRatioPct": { "type": "number" },
+        "enabled": { "type": "boolean" },
+        "lockedVaultBalanceUsd": { "type": "number" },
+        "totalScoopedLifetimeUsd": { "type": "number" },
+        "stateVersion": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "userId",
+        "thresholdMode",
+        "profitThresholdUsd",
+        "profitThresholdPct",
+        "scoopExcessRatioPct",
+        "enabled",
+        "lockedVaultBalanceUsd",
+        "totalScoopedLifetimeUsd",
+        "stateVersion",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -302,6 +401,14 @@
     "/users/{userId}/errorLogs/{logId}": {
       "schema": { "$ref": "#/entities/ErrorAuditRecord" },
       "description": "Structured PII-masked microservice error logs."
+    },
+    "/users/{userId}/dailyPnlRecords/{dateKey}": {
+      "schema": { "$ref": "#/entities/DailyPnlRecord" },
+      "description": "High-precision daily realized PnL & percentage return historical records."
+    },
+    "/users/{userId}/vaultLocker/{vaultId}": {
+      "schema": { "$ref": "#/entities/VaultLockerState" },
+      "description": "User-scoped immutable Locker Vault snapshot and profit scooping thresholds."
     }
   }
 }
