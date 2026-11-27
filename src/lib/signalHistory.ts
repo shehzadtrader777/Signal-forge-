@@ -32,6 +32,7 @@ export interface UnifiedSignalAuditRecord {
   exitOrMarkPrice: number;
   stopLoss: number;
   takeProfit: number;
+  takeProfits?: [number,number,number];
   confidence: number;
   riskRewardRatio: number;
   status: SignalHistoryOutcome;
@@ -219,6 +220,7 @@ export function buildUnifiedSignalHistory(input: {
       exitOrMarkPrice: markPrice,
       stopLoss: pos.trailingStopLoss,
       takeProfit: pos.takeProfits[2],
+      takeProfits: [...pos.takeProfits] as [number,number,number],
       confidence: 88,
       riskRewardRatio: rr > 0 ? rr : 3.0,
       status: outcome,
@@ -264,6 +266,7 @@ export function buildUnifiedSignalHistory(input: {
       exitOrMarkPrice: exitOrMark,
       stopLoss: pin.trailingStopLoss,
       takeProfit: sig.takeProfits[2],
+      takeProfits: [...sig.takeProfits] as [number,number,number],
       confidence: sig.confidence,
       riskRewardRatio: rr,
       status: outcome,
