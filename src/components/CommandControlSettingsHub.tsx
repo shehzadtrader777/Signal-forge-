@@ -151,6 +151,11 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
 
   const snapshot = useMemo(() => evaluateCommandControlSnapshot(hub), [hub]);
 
+  const pendingBackendDiffs = useMemo(() => computeControlMatrixDelta(
+    architectureState.controlMatrix,
+    snapshot.derivedControlMatrix
+  ).length, [architectureState.controlMatrix, snapshot.derivedControlMatrix]);
+
   const filteredModules = useMemo(() => {
     const domainFilter: CommandDomainId | 'ALL' =
       activeTab === 'ALL' || activeTab === 'DOCK_WORKSPACE' ? 'ALL' : activeTab;
@@ -166,7 +171,7 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
       const nextSnap = evaluateCommandControlSnapshot(nextHubState);
       if (!subscriptionSummary.premiumUnlocked) {
         setSyncNotice(
-          `${contextLabel} applied across Command Hub & displays (Checksum ${nextSnap.matrixChecksum}).`
+          `${contextLabel} saved in this browser only (Checksum ${nextSnap.matrixChecksum}). Backend sync NOT authorized/verified; execution control is not confirmed.`
         );
         return;
       }
@@ -236,13 +241,21 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
     async (mod: EvaluatedCommandModule) => {
       const nextEnabled = !mod.granularEnabled;
       const next = setGranularToggle(mod.descriptor.id, nextEnabled);
+      let backendConfirmed = false;
       if (mod.descriptor.controlMatrixKey && subscriptionSummary.premiumUnlocked && !mod.isOverridden) {
-        await toggleControlMatrixKey(mod.descriptor.controlMatrixKey, nextEnabled);
+        try {
+          const outcome = await toggleControlMatrixKey(mod.descriptor.controlMatrixKey, nextEnabled);
+          backendConfirmed = outcome.ok;
+        } catch {
+          backendConfirmed = false;
+        }
       }
       setSyncNotice(
         mod.isOverridden
-          ? `Saved granular preference for ${mod.descriptor.label} (${nextEnabled ? 'ON' : 'OFF'}). Release Master Override to apply.`
-          : `${mod.descriptor.label} switched ${nextEnabled ? 'ACTIVE' : 'PAUSED'} (${evaluateCommandControlSnapshot(next).matrixChecksum}).`
+          ? `Saved granular preference for ${mod.descriptor.label}. Master Override remains in effect.`
+          : backendConfirmed
+          ? `${mod.descriptor.label}: backend confirmed ${nextEnabled ? 'ON' : 'OFF'} (${evaluateCommandControlSnapshot(next).matrixChecksum}).`
+          : `${mod.descriptor.label}: local preference saved; backend change NOT confirmed. Check permissions and resync.`
       );
     },
     [setGranularToggle, subscriptionSummary.premiumUnlocked, toggleControlMatrixKey]
@@ -379,6 +392,11 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
         <div className="space-y-5">
           <ForgeMetricStrip items={metrics} columns={4} />
           <ForgeHaltServerStatus />
+          {pendingBackendDiffs > 0 && (
+            <div role="status" className="rounded-lg border border-amber-500/40 bg-amber-950/30 p-3 text-xs text-amber-100">
+              Maintenance reconciliation needed: {pendingBackendDiffs} command toggles differ from the last reported backend matrix. This is not a confirmed backend configuration; inspect and resync before relying on it.
+            </div>
+          )}
           <p className="rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs text-amber-100">
             Maintenance/Force ON/OFF controls are workspace preferences only. They do not confirm or clear the server-side 423 Emergency Halt. Enabling modules or resetting defaults never authorizes LIVE trading; use the dedicated authenticated Forge Capital emergency control for actual server halt.
           </p>
