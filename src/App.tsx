@@ -19,6 +19,7 @@ import { GlobalSearchModal } from './components/GlobalSearchModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Dashboard } from './pages/Dashboard';
 import { PremiumLanding } from './pages/PremiumLanding';
+import { PlansPreview } from './pages/PlansPreview';
 import { Portfolio } from './pages/Portfolio';
 import { Signals } from './pages/Signals';
 import { SignalHistory } from './pages/SignalHistory';
@@ -60,6 +61,7 @@ function AppShell() {
 
   // Keep the public pre-login experience separate from the dark terminal shell.
   if (location.pathname === '/welcome') return <PremiumLanding />;
+  if (location.pathname === '/pricing') return <PlansPreview />;
 
   if (!activeProfile) {
     return (
@@ -176,6 +178,9 @@ function AppShell() {
             </div>
 
             <nav aria-label="Footer Navigation" className="flex flex-wrap items-center gap-4">
+              <Link to="/welcome" className="hover:text-white transition-colors whitespace-nowrap">Welcome</Link>
+              <Link to="/pricing" className="hover:text-white transition-colors whitespace-nowrap">Plans</Link>
+              <Link to="/welcome#guide" className="hover:text-white transition-colors whitespace-nowrap">Super Guide</Link>
               <Link to="/portfolio" className="hover:text-white transition-colors whitespace-nowrap">
                 Portfolio
               </Link>
