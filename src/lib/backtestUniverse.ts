@@ -17,7 +17,12 @@ export function buildBacktestResearchUniverse(
   for(const coin of [...allKnownCoins,...topGainers]) {
     const symbol=String(coin.symbol||'').toUpperCase();
     if(!/^[A-Z0-9]{2,16}USDT$/.test(symbol))continue;
-    if(!result.has(symbol))result.set(symbol,{...coin,symbol,origin:'LIVE_MARKET'});
+    if(!result.has(symbol))result.set(symbol,{
+      symbol,baseAsset:coin.baseAsset,name:coin.name,
+      referencePrice:'referencePrice' in coin ? Number(coin.referencePrice) : Number(coin.price),
+      dailyVolatility:'dailyVolatility' in coin ? Number(coin.dailyVolatility) : 0,
+      origin:'LIVE_MARKET',
+    });
   }
   for(const value of tickerSymbols) {
     const symbol=String(value||'').toUpperCase();
