@@ -3950,7 +3950,8 @@ async function startServer() {
     const principal = await resolveCallerPrincipal(req);
     const subSummary = maskPrincipalSummary(principal);
     const snap = GLOBAL_MICROSERVICE_COORDINATOR.getSnapshot();
-    const fullErrorAccess = evaluateSubscriptionGate(principal, 'TELEMETRY').allowed;
+    const fullErrorAccess = evaluateSubscriptionGate(principal, 'TELEMETRY').allowed ||
+      buildRbacIdentity(principal, extraAdminEmailsFromEnv).role === 'SUPER_ADMIN';
     return res.json({
       ok: true,
       architecture: {
@@ -3973,12 +3974,10 @@ async function startServer() {
         ? (req.body.patch as Record<string, unknown>)
         : {};
     const parsedPatch: Partial<GranularControlMatrix> = {};
-    const requiredCapabilities = new Set<CapabilityClass>();
 
     for (const key of CONTROL_TOGGLE_KEYS) {
       if (typeof rawPatch[key] === 'boolean') {
         parsedPatch[key] = rawPatch[key] as boolean;
-        requiredCapabilities.add(DESCRIPTOR_BY_KEY[key].capability);
       }
     }
 
@@ -3991,20 +3990,6 @@ async function startServer() {
     }
 
     const principal = await resolveCallerPrincipal(req);
-    for (const cap of requiredCapabilities) {
-      const gate = evaluateSubscriptionGate(principal, cap);
-      if (!gate.allowed) {
-        return res.status(gate.httpStatus).json({
-          ok: false,
-          code: gate.code,
-          capability: cap,
-          error: gate.reason,
-          remediation: gate.remediation,
-          subscriptionLocked: true,
-        });
-      }
-    }
-
     const result = await GLOBAL_MICROSERVICE_COORDINATOR.updateControlMatrix(
       parsedPatch,
       principal.uid || 'operator',
@@ -4026,7 +4011,6 @@ async function startServer() {
     requireOperatorAuth,
     requireMasterControlOwner,
     standardWriteRateLimit,
-    requirePremiumSubscription('TELEMETRY'),
     async (req, res) => {
       const serviceId = String(req.body?.serviceId || '') as MicroserviceId;
       if (!ORDERED_MICROSERVICE_IDS.includes(serviceId)) {
@@ -4060,7 +4044,6 @@ async function startServer() {
     requireOperatorAuth,
     requireMasterControlOwner,
     standardWriteRateLimit,
-    requirePremiumSubscription('AGENT_OVERRIDE'),
     async (req, res) => {
       const serviceId = String(req.body?.serviceId || '') as MicroserviceId;
       if (!ORDERED_MICROSERVICE_IDS.includes(serviceId)) {
@@ -4087,11 +4070,8 @@ async function startServer() {
     requireOperatorAuth,
     requireMasterControlOwner,
     standardWriteRateLimit,
-    requirePremiumSubscription('EXECUTION'),
     async (req, res) => {
-      const principal =
-        (req as express.Request & { subscriberPrincipal?: SubscriptionPrincipal })
-          .subscriberPrincipal ?? UNAUTHENTICATED_PRINCIPAL;
+      const principal = await resolveCallerPrincipal(req);
       const snapshotId = String(req.body?.snapshotId || '').trim();
       const reason = String(req.body?.reason || 'Manual workspace configuration rollback');
       if (!snapshotId) {
@@ -4119,7 +4099,6 @@ async function startServer() {
     requireOperatorAuth,
     requireMasterControlOwner,
     standardWriteRateLimit,
-    requirePremiumSubscription('TELEMETRY'),
     async (req, res) => {
       const serviceId = String(req.body?.serviceId || 'market-data-svc') as MicroserviceId;
       if (!ORDERED_MICROSERVICE_IDS.includes(serviceId)) {
