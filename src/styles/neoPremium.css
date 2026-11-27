@@ -51,3 +51,44 @@
 @media(max-width:850px){.neo-hero{grid-template-columns:1fr;padding:50px 0 80px}.neo-feature-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.neo-showcase{max-width:650px}}
 @media(max-width:560px){.neo-topbar{flex-wrap:wrap}.neo-toplinks{gap:13px;flex-wrap:wrap}.neo-toplinks>a:not(.neo-pill):not(.neo-mobile-visible){display:none}.neo-hero h1{font-size:clamp(41px,11vw,59px)}.neo-feature-grid{grid-template-columns:1fr}.neo-last-cta{flex-direction:column;align-items:flex-start}.neo-preview-metrics{gap:8px}.neo-preview-metrics>div{padding:11px}}
 @media(prefers-reduced-motion:reduce){.neo-btn{transition:none}.neo-btn:hover{transform:none}}
+
+/* Signal Forge brand baseline v1 — scoped and reversible. */
+.neo-page {
+  --neo-bg:#151719;--neo-surface:#222426;--neo-ink:#F6F1E9;--neo-muted:#B9B1A7;
+  --neo-accent:#D2A66A;--neo-shadow:9px 9px 24px #090A0B,-7px -7px 22px #292C2E;
+  background:var(--neo-bg);color:var(--neo-ink);color-scheme:dark;
+  font-family:Inter,system-ui,sans-serif;
+}
+.neo-page[data-neo-theme="light"] {
+  --neo-bg:#F6F4F0;--neo-surface:#FCFAF6;--neo-ink:#26282A;--neo-muted:#666A6B;
+  --neo-accent:#916539;--neo-shadow:7px 7px 19px #DCD7CF,-7px -7px 19px #FFF;
+  color-scheme:light;
+}
+.neo-page :is(h1,h2,h3),.neo-brand{font-family:Manrope,Inter,system-ui,sans-serif}
+.neo-hero h1{letter-spacing:-.055em;line-height:1.09}
+.neo-lead{line-height:1.8}
+.neo-hero,.neo-section{scroll-margin-top:70px}
+.neo-btn{box-shadow:var(--neo-shadow)}
+.neo-btn-primary{background:var(--neo-accent);color:#171717;box-shadow:var(--neo-shadow)}
+.neo-btn-primary:hover{background:var(--neo-accent);color:#171717;filter:brightness(1.08)}
+.neo-page :is(a,button,select):focus-visible{outline:3px solid var(--neo-accent);outline-offset:3px}
+.neo-theme-switch{display:inline-flex;gap:4px;padding:4px;border:1px solid currentColor;border-radius:999px;color:var(--neo-muted)}
+.neo-theme-switch button{padding:7px 11px;border-radius:999px;font:700 12px Inter,system-ui,sans-serif;color:inherit}
+.neo-theme-switch button[aria-pressed="true"]{background:var(--neo-accent);color:#161616}
+.neo-preview-card{background:var(--neo-surface);box-shadow:inset 4px 4px 12px #0002}
+.neo-preview-metrics>div{background:var(--neo-bg);box-shadow:var(--neo-shadow)}
+.neo-preview-bars i{background:linear-gradient(180deg,#E3BC82,#8B6337)}
+.neo-preview-bottom>div,.neo-feature-icon{box-shadow:var(--neo-shadow)}
+.neo-landing-footer{border-color:color-mix(in srgb,var(--neo-muted) 30%,transparent)}
+.neo-page [id="roadmap"] :is(h2,h3){color:var(--neo-ink)}
+.neo-page [id="roadmap"] :is(p){color:var(--neo-muted)}
+.neo-page [id="roadmap"] article{background:var(--neo-surface);border-color:color-mix(in srgb,var(--neo-muted) 20%,transparent)}
+.neo-page [id="roadmap"] article span{color:var(--neo-accent)}
+@media(max-width:560px){.neo-theme-switch{order:3}.neo-topbar{gap:14px}}
+@media(prefers-reduced-motion:no-preference){
+  .neo-hero-copy{animation:forge-enter .7s ease-out both}
+  .neo-showcase{animation:forge-enter .9s .12s ease-out both}
+  .neo-preview-bars i{transform-origin:bottom;animation:forge-chart 1s .35s ease-out both}
+}
+@keyframes forge-enter{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+@keyframes forge-chart{from{transform:scaleY(.08)}to{transform:scaleY(1)}}
