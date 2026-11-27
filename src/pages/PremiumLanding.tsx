@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Activity, ArrowUpRight, BarChart3, Blocks, ChartCandlestick, LockKeyhole, MoveRight, Palette, ShieldCheck, SlidersHorizontal, Sparkles, Wallet } from 'lucide-react';
 import '../styles/neoPremium.css';
@@ -5,11 +6,20 @@ import { GuideOnlyAssistant } from '../components/GuideOnlyAssistant';
 
 /** Public product preview. All cards illustrate capabilities, never fabricated P&L. */
 export function PremiumLanding() {
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    try { return localStorage.getItem('signal-forge-public-theme') === 'light' ? 'light' : 'dark'; }
+    catch { return 'dark'; }
+  });
+  const changeTheme = (next: 'dark' | 'light') => {
+    setTheme(next);
+    try { localStorage.setItem('signal-forge-public-theme', next); } catch { /* storage unavailable */ }
+  };
   return (
-    <div className="neo-page" data-neo-theme="stone">
+    <div className="neo-page" data-neo-theme={theme}>
       <div className="neo-container">
         <header className="neo-topbar" aria-label="Welcome navigation">
           <Link to="/welcome" className="neo-brand"><img src="/signal-forge-mark.svg" alt="" width="34" height="34" className="inline-block align-middle" /> Signal Forge</Link>
+          <div className="neo-theme-switch" role="group" aria-label="Appearance"><button type="button" aria-pressed={theme === "dark"} onClick={() => changeTheme("dark")}>Dark Forge</button><button type="button" aria-pressed={theme === "light"} onClick={() => changeTheme("light")}>Light Forge</button></div>
           <nav className="neo-toplinks" aria-label="Landing links">
             <a href="#features">Features</a>
             <a href="#workspace">Workspace</a>
