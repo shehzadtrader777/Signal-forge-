@@ -127,6 +127,8 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
     subscriptionSummary,
     toggleControlMatrixKey,
     voiceAgent,
+    engageForgeFailSafeNow,
+    forgeCapitalBusy,
   } = useApp();
 
   const hub = useCommandControlStore((s) => s.hub);
@@ -269,6 +271,14 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
     [applyPreset, syncDerivedMatrixToBackend]
   );
 
+  const handleVerifiedEmergencyRequest = useCallback(async () => {
+    if (typeof window === 'undefined' || !window.confirm(
+      'Activate the server Emergency Halt (423) now? This blocks trading and requires independent owner recovery authorization.'
+    )) return;
+    setSyncNotice('Emergency Halt requested. Check the server-confirmed status below; a local preference alone is not confirmation.');
+    await engageForgeFailSafeNow('Owner requested explicit 423 Emergency Halt from Master Command & Control Settings.');
+  }, [engageForgeFailSafeNow]);
+
   const handleResetAll = useCallback(async () => {
     const next = resetHubToDefaults();
     await syncDerivedMatrixToBackend(next, 'Command Hub Defaults (app state unchanged)');
@@ -378,6 +388,13 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
               intent="secondary"
               testId="settings-open-voice-overlay-btn"
               onClick={() => setVoiceOverlayOpen(true)}
+            />
+            <ForgeInteractiveButton
+              label={forgeCapitalBusy ? 'Emergency Request Pending' : 'Server Emergency Halt (423)'}
+              icon={<ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" />}
+              intent="danger"
+              testId="settings-server-emergency-halt-btn"
+              onClick={handleVerifiedEmergencyRequest}
             />
             <ForgeInteractiveButton
               label="Reset Defaults"
