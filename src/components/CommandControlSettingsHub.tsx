@@ -15,6 +15,7 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { ForgeHaltServerStatus } from './ForgeHaltServerStatus';
 import {
   COMMAND_DOMAINS,
   computeControlMatrixDelta,
@@ -61,8 +62,8 @@ const HUB_LAYOUT: WidgetLayoutContract = {
 
 const GLOBAL_OVERRIDE_OPTIONS: readonly SegmentedOption<GlobalMasterOverride>[] = [
   { value: 'GRANULAR', label: 'Granular Control', testId: 'master-mode-granular' },
-  { value: 'FORCE_ALL_ON', label: 'Master Force ON', testId: 'master-mode-force-on' },
-  { value: 'FORCE_ALL_OFF', label: 'Master Emergency OFF', testId: 'master-mode-force-off' },
+  { value: 'FORCE_ALL_ON', label: 'Force Module Preferences ON', testId: 'master-mode-force-on' },
+  { value: 'FORCE_ALL_OFF', label: 'Local Modules OFF', testId: 'master-mode-force-off' },
 ];
 
 const DOMAIN_OVERRIDE_OPTIONS: readonly SegmentedOption<MasterOverrideMode>[] = [
@@ -377,6 +378,10 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
       >
         <div className="space-y-5">
           <ForgeMetricStrip items={metrics} columns={4} />
+          <ForgeHaltServerStatus />
+          <p className="rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs text-amber-100">
+            Maintenance/Force ON/OFF controls are workspace preferences only. They do not confirm or clear the server-side 423 Emergency Halt. Enabling modules or resetting defaults never authorizes LIVE trading; use the dedicated authenticated Forge Capital emergency control for actual server halt.
+          </p>
 
           {/* Master Override Command Bar */}
           <div
@@ -390,7 +395,7 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
                   <span>Global Master Override Layer</span>
                 </div>
                 <p className="text-xs text-slate-400">
-                  Override all 29 mapped feeds, AI agents, execution tools, and safeguards instantly. Individual granular settings remain preserved underneath.
+                  Configure 29 workspace modules. This panel is not a server-authoritative order-routing or Emergency Halt control; independent execution safety gates always apply.
                 </p>
               </div>
 
