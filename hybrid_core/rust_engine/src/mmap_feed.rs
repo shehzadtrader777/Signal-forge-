@@ -37,14 +37,12 @@ const MAX_MMAP_DATASET_BYTES: u64 = 256 * 1024 * 1024;
 
 fn decode_tick_frame(chunk: &[u8]) -> Option<TickFrame> {
     if chunk.len() != TICK_FRAME_BYTES { return None; }
-    let read_u64 = |start: usize| u64::from_le_bytes(chunk[start..start + 8].try_into().ok()?);
-    let read_f64 = |start: usize| f64::from_le_bytes(chunk[start..start + 8].try_into().ok()?);
     let frame = TickFrame {
-        ts_ns: read_u64(0),
-        bid: read_f64(8),
-        ask: read_f64(16),
-        bid_size: read_f64(24),
-        ask_size: read_f64(32),
+        ts_ns: u64::from_le_bytes(chunk[0..8].try_into().ok()?),
+        bid: f64::from_le_bytes(chunk[8..16].try_into().ok()?),
+        ask: f64::from_le_bytes(chunk[16..24].try_into().ok()?),
+        bid_size: f64::from_le_bytes(chunk[24..32].try_into().ok()?),
+        ask_size: f64::from_le_bytes(chunk[32..40].try_into().ok()?),
         asset_class: chunk[40],
         venue_code: chunk[41],
         flags: u16::from_le_bytes(chunk[42..44].try_into().ok()?),
