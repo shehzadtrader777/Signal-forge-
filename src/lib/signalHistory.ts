@@ -157,6 +157,7 @@ export function buildUnifiedSignalHistory(input: {
   tickers?: Record<string, TickerSnapshot>;
   backtestRecords?: HistoricalSignalRecord[];
   includeCrossStrategyBenchmarks?: boolean;
+  includeHistoricalBenchmarks?: boolean; // false for genuine observed-only audit mode
 }): UnifiedSignalAuditRecord[] {
   const records: UnifiedSignalAuditRecord[] = [];
   const seenIds = new Set<string>();
@@ -277,7 +278,7 @@ export function buildUnifiedSignalHistory(input: {
     for (const r of input.backtestRecords) {
       pushUnique(fromBacktestRecord(r));
     }
-  } else {
+  } else if (input.includeHistoricalBenchmarks !== false) {
     for (const r of getGlobalPastSignalsHistory()) {
       pushUnique(fromBacktestRecord(r));
     }
