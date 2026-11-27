@@ -8,3 +8,11 @@ coverage/
 !.env.example
 .data/
 
+.aistudio/
+.backups/
+*.zip
+*.pem
+*.p12
+*.pfx
+*service-account*.json
+*serviceAccount*.json

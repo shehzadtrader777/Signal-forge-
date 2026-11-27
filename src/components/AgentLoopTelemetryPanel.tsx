@@ -24,6 +24,8 @@ interface AgentLoopsTelemetryResponse {
   stages: AgentLoopStage[];
 }
 
+const REFRESH_BTN_TAP = { scale: 0.96 } as const;
+
 export const AgentLoopTelemetryPanel = memo(function AgentLoopTelemetryPanel() {
   const { appLiveEnabled } = useApp();
   const pulseSyncStreams = useWorkspaceStore((s) => s.cyber.pulseSyncStreams);
@@ -51,7 +53,11 @@ export const AgentLoopTelemetryPanel = memo(function AgentLoopTelemetryPanel() {
 
   useEffect(() => {
     if (!appLiveEnabled) return;
-    const id = window.setInterval(fetchTelemetry, 4000);
+    // Avoid overlapping hot-page polls and stop polling while the tab is hidden.
+    const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void fetchTelemetry();
+    }, 12_000);
     return () => window.clearInterval(id);
   }, [appLiveEnabled, fetchTelemetry]);
 
@@ -92,7 +98,7 @@ export const AgentLoopTelemetryPanel = memo(function AgentLoopTelemetryPanel() {
             {telemetry?.wsConnected ? 'Binance WS Locked' : 'Calibrating WS'}
           </span>
           <motion.button
-            whileTap={{ scale: 0.96 }}
+            whileTap={REFRESH_BTN_TAP}
             type="button"
             onClick={fetchTelemetry}
             aria-label="Refresh agent transaction loop telemetry"

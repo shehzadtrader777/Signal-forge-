@@ -6,7 +6,6 @@ use memmap2::Mmap;
 use serde::Serialize;
 use std::fs::File;
 use std::io;
-use std::mem::size_of;
 use std::path::Path;
 use std::time::Instant;
 
@@ -19,8 +18,7 @@ pub enum AssetClassCode {
     Equities = 3,
 }
 
-/// 44-byte packed binary tick frame shared across Python mmap writer and Rust scanner.
-#[repr(C)]
+/// In-memory decoded tick; never reinterpret mapped bytes as a padded C struct.
 #[derive(Debug, Clone, Copy)]
 pub struct TickFrame {
     pub ts_ns: u64,
@@ -31,6 +29,29 @@ pub struct TickFrame {
     pub asset_class: u8,
     pub venue_code: u8,
     pub flags: u16,
+}
+
+/// Python `struct.Struct("<QddddBBH")` is exactly 44 bytes, independent of Rust struct padding.
+pub const TICK_FRAME_BYTES: usize = 44;
+const MAX_MMAP_DATASET_BYTES: u64 = 256 * 1024 * 1024;
+
+fn decode_tick_frame(chunk: &[u8]) -> Option<TickFrame> {
+    if chunk.len() != TICK_FRAME_BYTES { return None; }
+    let frame = TickFrame {
+        ts_ns: u64::from_le_bytes(chunk[0..8].try_into().ok()?),
+        bid: f64::from_le_bytes(chunk[8..16].try_into().ok()?),
+        ask: f64::from_le_bytes(chunk[16..24].try_into().ok()?),
+        bid_size: f64::from_le_bytes(chunk[24..32].try_into().ok()?),
+        ask_size: f64::from_le_bytes(chunk[32..40].try_into().ok()?),
+        asset_class: chunk[40],
+        venue_code: chunk[41],
+        flags: u16::from_le_bytes(chunk[42..44].try_into().ok()?),
+    };
+    if !frame.bid.is_finite() || !frame.ask.is_finite()
+        || !frame.bid_size.is_finite() || !frame.ask_size.is_finite() {
+        return None;
+    }
+    Some(frame)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -47,35 +68,28 @@ pub struct VectorScanSummary {
 pub struct MmapTickDataset {
     _file: File,
     mmap: Mmap,
-    frame_count: usize,
 }
 
 impl MmapTickDataset {
     pub fn open(path: &Path) -> io::Result<Self> {
         let file = File::open(path)?;
         let meta = file.metadata()?;
-        let frame_size = size_of::<TickFrame>();
+        let frame_size = TICK_FRAME_BYTES;
+        if meta.len() == 0 || meta.len() > MAX_MMAP_DATASET_BYTES {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "mmap dataset size outside safe bounds"));
+        }
         if (meta.len() as usize) % frame_size != 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "mmap binary tick file is not aligned to TickFrame size",
             ));
         }
-        // SAFETY: Read-only immutable snapshot file verified for exact struct alignment.
+        // SAFETY: Read-only mapping, decoded via byte slices (never casting to a TickFrame pointer).
         let mmap = unsafe { Mmap::map(&file)? };
-        let frame_count = mmap.len() / frame_size;
         Ok(Self {
             _file: file,
             mmap,
-            frame_count,
         })
-    }
-
-    #[inline]
-    pub fn frames(&self) -> &[TickFrame] {
-        let ptr = self.mmap.as_ptr() as *const TickFrame;
-        // SAFETY: Length verified as exact multiple of size_of::<TickFrame>().
-        unsafe { std::slice::from_raw_parts(ptr, self.frame_count) }
     }
 
     /// Vectorized single-pass nanosecond scan over a historical date range (`start_ns..=end_ns`)
@@ -101,11 +115,15 @@ impl MmapTickDataset {
         let mut signals_generated = 0usize;
         let mut spread_bps_sum = 0.0f64;
 
-        for tick in self.frames() {
+        for chunk in self.mmap.chunks_exact(TICK_FRAME_BYTES) {
+            let tick = match decode_tick_frame(chunk) {
+                Some(tick) => tick,
+                None => continue,
+            };
             if tick.ts_ns < start_ns || tick.ts_ns > end_ns {
                 continue;
             }
-            if tick.bid <= 0.0 || tick.ask <= tick.bid {
+            if tick.bid <= 0.0 || tick.ask <= tick.bid || tick.bid_size < 0.0 || tick.ask_size < 0.0 {
                 continue;
             }
             let mid = 0.5 * (tick.bid + tick.ask);
@@ -163,5 +181,35 @@ impl MmapTickDataset {
             },
             cumulative_return_pct: (equity - 1.0) * 100.0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn python_44_byte_layout_decodes_without_padding() {
+        let mut bytes = [0u8; TICK_FRAME_BYTES];
+        bytes[0..8].copy_from_slice(&42u64.to_le_bytes());
+        bytes[8..16].copy_from_slice(&100.5f64.to_le_bytes());
+        bytes[16..24].copy_from_slice(&101.0f64.to_le_bytes());
+        bytes[24..32].copy_from_slice(&12.0f64.to_le_bytes());
+        bytes[32..40].copy_from_slice(&8.0f64.to_le_bytes());
+        bytes[40] = 1;
+        bytes[41] = 2;
+        bytes[42..44].copy_from_slice(&7u16.to_le_bytes());
+        let frame = decode_tick_frame(&bytes).expect("valid Python frame");
+        assert_eq!(frame.ts_ns, 42);
+        assert_eq!(frame.bid, 100.5);
+        assert_eq!(frame.ask, 101.0);
+        assert_eq!(frame.flags, 7);
+        assert!(decode_tick_frame(&bytes[..43]).is_none());
+    }
+    #[test]
+    fn reject_non_finite_tick_data() {
+        let mut bytes = [0u8; TICK_FRAME_BYTES];
+        bytes[8..16].copy_from_slice(&f64::NAN.to_le_bytes());
+        assert!(decode_tick_frame(&bytes).is_none());
     }
 }

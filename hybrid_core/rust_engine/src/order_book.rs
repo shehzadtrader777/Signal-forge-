@@ -86,10 +86,19 @@ impl OrderBookRouter {
         book_depth_usd: f64,
     ) -> SimulatedFill {
         let t0 = Instant::now();
-        if quantity <= 0.0 || reference_price <= 0.0 {
+        if !quantity.is_finite()
+            || !reference_price.is_finite()
+            || !max_slippage_bps.is_finite()
+            || !book_depth_usd.is_finite()
+            || quantity <= 0.0
+            || reference_price <= 0.0
+            || max_slippage_bps < 0.0
+            || book_depth_usd <= 0.0
+            || !(side.eq_ignore_ascii_case("BUY") || side.eq_ignore_ascii_case("SELL"))
+        {
             return SimulatedFill {
                 accepted: false,
-                reject_reason: Some("Quantity and price must be strictly positive".to_string()),
+                reject_reason: Some("Invalid or non-finite price, quantity, slippage, book depth or side".to_string()),
                 fill_price: 0.0,
                 slippage_bps: 0.0,
                 fee_usd: 0.0,

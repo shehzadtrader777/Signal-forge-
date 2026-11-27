@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
+use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -93,8 +94,20 @@ pub fn write_framed_reply(stream: &mut UnixStream, reply: &ExecutionReply) -> io
 
 /// Bind a clean Unix Domain Socket listener for Python Control Plane IPC.
 pub fn bind_ipc_socket(socket_path: &Path) -> io::Result<UnixListener> {
-    if socket_path.exists() {
-        let _ = std::fs::remove_file(socket_path);
+    match std::fs::symlink_metadata(socket_path) {
+        Ok(meta) => {
+            if !meta.file_type().is_socket() {
+                return Err(io::Error::new(io::ErrorKind::AlreadyExists,
+                    "Refusing to replace non-socket IPC path"));
+            }
+            std::fs::remove_file(socket_path)?;
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
     }
-    UnixListener::bind(socket_path)
+    let listener = UnixListener::bind(socket_path)?;
+    // IPC commands include simulated orders and risk changes. Never expose this
+    // socket to other local users by default, even if process umask is permissive.
+    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(listener)
 }

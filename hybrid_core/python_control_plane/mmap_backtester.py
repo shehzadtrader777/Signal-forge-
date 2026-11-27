@@ -83,6 +83,10 @@ def write_mmap_tick_dataset(
     tick_count: int = 12_000,
 ) -> Tuple[str, AssetAdapterProfile]:
     """Generate a binary mmap-aligned tick file for the requested asset adapter and date range."""
+    # Prevent a single oversized request from allocating unbounded RAM for tick data.
+    # 250k × 44 bytes = 11 MiB of raw data, before Python overhead.
+    if type(tick_count) is not int or not 1 <= tick_count <= 250_000:
+        raise ValueError("tick_count must be an integer in [1, 250000]")
     adapter = ADAPTER_REGISTRY.get(asset_class.upper(), ADAPTER_REGISTRY["CRYPTO"])
     start_ns = _iso_to_epoch_ns(start_date)
     end_ns = max(start_ns + 60_000_000_000, _iso_to_epoch_ns(end_date))

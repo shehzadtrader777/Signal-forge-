@@ -32,6 +32,7 @@ export interface UnifiedSignalAuditRecord {
   exitOrMarkPrice: number;
   stopLoss: number;
   takeProfit: number;
+  takeProfits?: [number,number,number];
   confidence: number;
   riskRewardRatio: number;
   status: SignalHistoryOutcome;
@@ -157,6 +158,7 @@ export function buildUnifiedSignalHistory(input: {
   tickers?: Record<string, TickerSnapshot>;
   backtestRecords?: HistoricalSignalRecord[];
   includeCrossStrategyBenchmarks?: boolean;
+  includeHistoricalBenchmarks?: boolean; // false for genuine observed-only audit mode
 }): UnifiedSignalAuditRecord[] {
   const records: UnifiedSignalAuditRecord[] = [];
   const seenIds = new Set<string>();
@@ -218,6 +220,7 @@ export function buildUnifiedSignalHistory(input: {
       exitOrMarkPrice: markPrice,
       stopLoss: pos.trailingStopLoss,
       takeProfit: pos.takeProfits[2],
+      takeProfits: [...pos.takeProfits] as [number,number,number],
       confidence: 88,
       riskRewardRatio: rr > 0 ? rr : 3.0,
       status: outcome,
@@ -263,6 +266,7 @@ export function buildUnifiedSignalHistory(input: {
       exitOrMarkPrice: exitOrMark,
       stopLoss: pin.trailingStopLoss,
       takeProfit: sig.takeProfits[2],
+      takeProfits: [...sig.takeProfits] as [number,number,number],
       confidence: sig.confidence,
       riskRewardRatio: rr,
       status: outcome,
@@ -277,7 +281,7 @@ export function buildUnifiedSignalHistory(input: {
     for (const r of input.backtestRecords) {
       pushUnique(fromBacktestRecord(r));
     }
-  } else {
+  } else if (input.includeHistoricalBenchmarks !== false) {
     for (const r of getGlobalPastSignalsHistory()) {
       pushUnique(fromBacktestRecord(r));
     }

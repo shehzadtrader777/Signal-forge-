@@ -73,11 +73,8 @@ export function resolveRbacRoleFromPrincipal(
     return 'GUEST';
   }
 
-  // Server-side operator CLI automation clearance
-  if (principal.uid === 'operator-cli-token') {
-    return 'SUPER_ADMIN';
-  }
-
+  // Never infer SUPER_ADMIN from a client-supplied UID. CLI authorization must be
+  // checked independently on the server using a validated scoped credential.
   const normalizedEmail = (principal.email || '').trim().toLowerCase();
   const allowlist = new Set<string>([
     ...DEFAULT_ADMIN_EMAILS,

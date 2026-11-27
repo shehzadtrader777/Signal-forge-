@@ -53,7 +53,7 @@ test('EntryZoneExecutionValidator keeps signals pinned active outside Entry Zone
   assert.equal(inside.distanceToZonePct, 0);
 });
 
-test('PrePumpSupportExecutionModule forces immediate support execution and holds until Max Profit Target (TP3)', () => {
+test('PrePumpSupportExecutionModule keeps estimated signals in research only and preserves position lifecycle', () => {
   const engine = new PrePumpSupportExecutionModule();
   const candidates = engine.process({
     topGainers: [
@@ -80,7 +80,8 @@ test('PrePumpSupportExecutionModule forces immediate support execution and holds
   const sol = candidates[0];
   assert.equal(sol.holdPolicy, 'HOLD_UNTIL_MAX_PROFIT');
   assert.equal(sol.supportConfirmed, true);
-  assert.equal(sol.autoExecuteEligible, true);
+  assert.equal(sol.autoExecuteEligible, false);
+  assert.equal(sol.verificationStatus, 'UNVERIFIED_VOLUME');
   assert.ok(sol.resistanceTargetMax > sol.takeProfits[1]);
 
   // Create executed order with HOLD_UNTIL_MAX_PROFIT mandate

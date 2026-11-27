@@ -2,7 +2,7 @@ name: Signal Forge Five-Phase Hardening CI/CD
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, integration/studio-react-stability-2026-11-27]
   pull_request:
     branches: [main, master]
 
@@ -24,10 +24,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
+      # The repository ships bun.lock, not package-lock.json. npm cache + npm ci
+      # fail before any actual test is reached.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
 
       - name: Install locked dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       # Phase 1: Structural & Dependency Invariants
       - name: "Phase 1: Architectural & Dependency Integrity Gate"
@@ -73,8 +76,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
+      # The repository ships bun.lock, not package-lock.json. npm cache + npm ci
+      # fail before any actual test is reached.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
       - name: Install locked dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
       - name: Verify cross-host FillModel & vector digest
         run: npx tsx --test src/lib/fillModel.test.ts

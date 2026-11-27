@@ -58,6 +58,19 @@ import {
   type WalkForwardReport,
 } from './systemicLayers';
 
+/**
+ * Never silently substitute BTC when a newly discovered symbol is being researched.
+ * The fallback name only labels simulations; it does not certify historical coverage.
+ */
+function resolveBacktestCoinMeta(symbol:string) {
+  const normalized=String(symbol||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+  const known=TRACKED_COINS.find(c=>c.symbol===normalized);
+  if(known)return known;
+  if(!/^[A-Z0-9]{2,16}USDT$/.test(normalized))throw new Error('Invalid research market pair');
+  const baseAsset=normalized.slice(0,-4);
+  return {symbol:normalized,baseAsset,name:baseAsset,referencePrice:1,dailyVolatility:0.04};
+}
+
 export type BacktestStrategy =
   | 'AUTONOMOUS_MASTER'
   | 'SMC_1_5'
@@ -248,7 +261,7 @@ function createDeterministicRng(seedStr: string): () => number {
  * killzone liquidity sweeps (07:00–21:00 UTC).
  */
 function generateSmc30DayCandles(symbol: string, count = 3000): Candle[] {
-  const coin = TRACKED_COINS.find((c) => c.symbol === symbol) || TRACKED_COINS[0];
+  const coin = resolveBacktestCoinMeta(symbol);
   const stepSec = 15 * 60;
   const nowSec = Math.floor(Date.now() / 1000 / stepSec) * stepSec;
   const rng = createDeterministicRng(`smc_30d_${symbol}`);
@@ -785,7 +798,7 @@ export function runSmcMonthlySimulation(
   timeframe: Timeframe = '15m',
   options: SmcSimulationOptions = {}
 ): BacktestSummary {
-  const coin = TRACKED_COINS.find((c) => c.symbol === symbol) || TRACKED_COINS[0];
+  const coin = resolveBacktestCoinMeta(symbol);
   const targetMonthlyTrades = options.targetMonthlyTrades ?? SMC_AGENT_CONFIG.monthlyTradeTarget;
   const rr = Math.max(5.0, options.riskRewardRatio ?? SMC_AGENT_CONFIG.riskRewardRatio);
   const riskPerTradePct = options.riskPerTradePercent ?? SMC_AGENT_CONFIG.riskPerTradePercent;
@@ -915,7 +928,7 @@ export function runPatternScannerSimulation(
   providedCandles?: Candle[],
   customFeed?: PITFeed
 ): BacktestSummary {
-  const coin = TRACKED_COINS.find((c) => c.symbol === symbol) || TRACKED_COINS[0];
+  const coin = resolveBacktestCoinMeta(symbol);
   const candles =
     providedCandles && providedCandles.length >= 80
       ? providedCandles
@@ -1031,7 +1044,7 @@ export function runBacktestSimulation(
     return runPatternScannerSimulation(symbol, timeframe, providedCandles, customFeed);
   }
 
-  const coin = TRACKED_COINS.find((c) => c.symbol === symbol) || TRACKED_COINS[0];
+  const coin = resolveBacktestCoinMeta(symbol);
   const candlesPerDay =
     timeframe === '15m' ? 96 : timeframe === '1h' ? 24 : timeframe === '4h' ? 6 : 1;
   const lookbackCandles = Math.min(360, Math.max(120, candlesPerDay * 30 + 60));
@@ -1156,7 +1169,7 @@ function generateMultiDayProtocolCandles(
   liveWsPrice?: number
 ): Candle[] {
   const totalBars = days * 96 + 140;
-  const coin = TRACKED_COINS.find((c) => c.symbol === symbol) || TRACKED_COINS[0];
+  const coin = resolveBacktestCoinMeta(symbol);
   const stepSec = 15 * 60;
   const nowSec = Math.floor(Date.now() / 1000 / stepSec) * stepSec;
   const rng = createDeterministicRng(`proto_${days}d_${symbol}`);
@@ -1243,7 +1256,7 @@ export function runComparativeWindowSimulation(params: {
   targetTrades?: number;
   customFeed?: PITFeed;
 }): ComparativeWindowSummary {
-  const coin = TRACKED_COINS.find((c) => c.symbol === params.symbol) || TRACKED_COINS[0];
+  const coin = resolveBacktestCoinMeta(params.symbol);
   const timeframe: Timeframe = params.timeframe ?? '15m';
   const strategy: BacktestStrategy = params.strategy ?? 'AUTONOMOUS_MASTER';
   const days = params.windowDays;

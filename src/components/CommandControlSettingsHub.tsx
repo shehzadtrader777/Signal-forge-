@@ -15,6 +15,8 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { ForgeHaltServerStatus } from './ForgeHaltServerStatus';
+import { useRbacIdentity } from '../hooks/useRbacIdentity';
 import {
   COMMAND_DOMAINS,
   computeControlMatrixDelta,
@@ -61,8 +63,8 @@ const HUB_LAYOUT: WidgetLayoutContract = {
 
 const GLOBAL_OVERRIDE_OPTIONS: readonly SegmentedOption<GlobalMasterOverride>[] = [
   { value: 'GRANULAR', label: 'Granular Control', testId: 'master-mode-granular' },
-  { value: 'FORCE_ALL_ON', label: 'Master Force ON', testId: 'master-mode-force-on' },
-  { value: 'FORCE_ALL_OFF', label: 'Master Emergency OFF', testId: 'master-mode-force-off' },
+  { value: 'FORCE_ALL_ON', label: 'Force Module Preferences ON', testId: 'master-mode-force-on' },
+  { value: 'FORCE_ALL_OFF', label: 'Local Modules OFF', testId: 'master-mode-force-off' },
 ];
 
 const DOMAIN_OVERRIDE_OPTIONS: readonly SegmentedOption<MasterOverrideMode>[] = [
@@ -123,11 +125,14 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
     appLiveEnabled,
     setAppLiveEnabled,
     architectureState,
-    subscriptionSummary,
     toggleControlMatrixKey,
     voiceAgent,
+    engageForgeFailSafeNow,
+    forgeCapitalBusy,
   } = useApp();
 
+  const { rbac } = useRbacIdentity();
+  const ownerControlsAllowed = rbac.role === 'SUPER_ADMIN';
   const hub = useCommandControlStore((s) => s.hub);
   const setGlobalOverride = useCommandControlStore((s) => s.setGlobalOverride);
   const setDomainOverride = useCommandControlStore((s) => s.setDomainOverride);
@@ -150,6 +155,11 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
 
   const snapshot = useMemo(() => evaluateCommandControlSnapshot(hub), [hub]);
 
+  const pendingBackendDiffs = useMemo(() => computeControlMatrixDelta(
+    architectureState.controlMatrix,
+    snapshot.derivedControlMatrix
+  ).length, [architectureState.controlMatrix, snapshot.derivedControlMatrix]);
+
   const filteredModules = useMemo(() => {
     const domainFilter: CommandDomainId | 'ALL' =
       activeTab === 'ALL' || activeTab === 'DOCK_WORKSPACE' ? 'ALL' : activeTab;
@@ -162,14 +172,11 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
 
   const syncDerivedMatrixToBackend = useCallback(
     async (nextHubState: typeof hub, contextLabel: string) => {
-      const nextSnap = evaluateCommandControlSnapshot(nextHubState);
-      if (!subscriptionSummary.premiumUnlocked) {
-        setSyncNotice(
-          `${contextLabel} applied across Command Hub & displays (Checksum ${nextSnap.matrixChecksum}).`
-        );
+      if (!ownerControlsAllowed) {
+        setSyncNotice('Owner-level account required for global system configuration. Changes are not authorized.');
         return;
       }
-
+      const nextSnap = evaluateCommandControlSnapshot(nextHubState);
       const deltas = computeControlMatrixDelta(
         architectureState.controlMatrix,
         nextSnap.derivedControlMatrix
@@ -182,28 +189,37 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
       }
 
       let syncedCount = 0;
-      for (const delta of deltas.slice(0, 6)) {
-        const res = await toggleControlMatrixKey(delta.key, delta.value);
-        if (res.ok) syncedCount += 1;
+      for (const delta of deltas) {
+        try {
+          const res = await toggleControlMatrixKey(delta.key, delta.value);
+          if (!res.ok) break; // Stop on failed write; the backend may have diverged.
+          syncedCount += 1;
+        } catch {
+          break;
+        }
       }
       setSyncNotice(
-        `${contextLabel} synced (${syncedCount}/${deltas.length} backend toggles updated · ${nextSnap.matrixChecksum}).`
+        syncedCount === deltas.length
+          ? `${contextLabel} synchronized (${syncedCount}/${deltas.length} backend toggles · ${nextSnap.matrixChecksum}).`
+          : `${contextLabel}: PARTIAL BACKEND SYNC (${syncedCount}/${deltas.length}). Execution remains subject to independent server safety checks. Reconcile before relying on this state.`
       );
     },
     [
       architectureState.controlMatrix,
-      subscriptionSummary.premiumUnlocked,
+      ownerControlsAllowed,
       toggleControlMatrixKey,
     ]
   );
 
   const handleGlobalOverrideChange = useCallback(
     async (mode: GlobalMasterOverride) => {
+      if (!ownerControlsAllowed) {
+        setSyncNotice('Owner-level access required to change global command overrides.');
+        return;
+      }
       const next = setGlobalOverride(mode);
       if (mode === 'FORCE_ALL_OFF' && appLiveEnabled) {
         await setAppLiveEnabled(false);
-      } else if (mode !== 'FORCE_ALL_OFF' && !appLiveEnabled) {
-        await setAppLiveEnabled(true);
       }
       await syncDerivedMatrixToBackend(
         next,
@@ -214,52 +230,78 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
           : 'Granular Command Mode'
       );
     },
-    [appLiveEnabled, setAppLiveEnabled, setGlobalOverride, syncDerivedMatrixToBackend]
+    [appLiveEnabled, ownerControlsAllowed, setAppLiveEnabled, setGlobalOverride, syncDerivedMatrixToBackend]
   );
 
   const handleDomainOverrideChange = useCallback(
     async (domain: CommandDomainId, mode: MasterOverrideMode) => {
+      if (!ownerControlsAllowed) {
+        setSyncNotice('Owner-level access required to change domain controls.');
+        return;
+      }
       const next = setDomainOverride(domain, mode);
       const label = COMMAND_DOMAINS.find((d) => d.id === domain)?.shortLabel ?? domain;
       await syncDerivedMatrixToBackend(next, `${label} Master -> ${mode}`);
     },
-    [setDomainOverride, syncDerivedMatrixToBackend]
+    [ownerControlsAllowed, setDomainOverride, syncDerivedMatrixToBackend]
   );
 
   const handleGranularModuleToggle = useCallback(
     async (mod: EvaluatedCommandModule) => {
+      if (!ownerControlsAllowed) {
+        setSyncNotice('Owner-level access required to change system modules.');
+        return;
+      }
       const nextEnabled = !mod.granularEnabled;
       const next = setGranularToggle(mod.descriptor.id, nextEnabled);
-      if (mod.descriptor.controlMatrixKey && subscriptionSummary.premiumUnlocked && !mod.isOverridden) {
-        await toggleControlMatrixKey(mod.descriptor.controlMatrixKey, nextEnabled);
+      let backendConfirmed = false;
+      if (mod.descriptor.controlMatrixKey && !mod.isOverridden) {
+        try {
+          const outcome = await toggleControlMatrixKey(mod.descriptor.controlMatrixKey, nextEnabled);
+          backendConfirmed = outcome.ok;
+        } catch {
+          backendConfirmed = false;
+        }
       }
       setSyncNotice(
         mod.isOverridden
-          ? `Saved granular preference for ${mod.descriptor.label} (${nextEnabled ? 'ON' : 'OFF'}). Release Master Override to apply.`
-          : `${mod.descriptor.label} switched ${nextEnabled ? 'ACTIVE' : 'PAUSED'} (${evaluateCommandControlSnapshot(next).matrixChecksum}).`
+          ? `Saved granular preference for ${mod.descriptor.label}. Master Override remains in effect.`
+          : backendConfirmed
+          ? `${mod.descriptor.label}: backend confirmed ${nextEnabled ? 'ON' : 'OFF'} (${evaluateCommandControlSnapshot(next).matrixChecksum}).`
+          : `${mod.descriptor.label}: local preference saved; backend change NOT confirmed. Check permissions and resync.`
       );
     },
-    [setGranularToggle, subscriptionSummary.premiumUnlocked, toggleControlMatrixKey]
+    [ownerControlsAllowed, setGranularToggle, toggleControlMatrixKey]
   );
 
   const handlePresetClick = useCallback(
     async (preset: CommandPresetId, label: string) => {
-      const next = applyPreset(preset);
-      if (preset === 'FULL_COMMAND' && !appLiveEnabled) {
-        await setAppLiveEnabled(true);
+      if (!ownerControlsAllowed) {
+        setSyncNotice('Owner-level access required to change maintenance presets.');
+        return;
       }
+      const next = applyPreset(preset);
       await syncDerivedMatrixToBackend(next, `Preset "${label}"`);
     },
-    [appLiveEnabled, applyPreset, setAppLiveEnabled, syncDerivedMatrixToBackend]
+    [applyPreset, ownerControlsAllowed, syncDerivedMatrixToBackend]
   );
 
+  const handleVerifiedEmergencyRequest = useCallback(async () => {
+    if (typeof window === 'undefined' || !window.confirm(
+      'Activate the server Emergency Halt (423) now? This blocks trading and requires independent owner recovery authorization.'
+    )) return;
+    setSyncNotice('Emergency Halt requested. Check the server-confirmed status below; a local preference alone is not confirmation.');
+    await engageForgeFailSafeNow('Owner requested explicit 423 Emergency Halt from Master Command & Control Settings.');
+  }, [engageForgeFailSafeNow]);
+
   const handleResetAll = useCallback(async () => {
-    const next = resetHubToDefaults();
-    if (!appLiveEnabled) {
-      await setAppLiveEnabled(true);
+    if (!ownerControlsAllowed) {
+      setSyncNotice('Owner-level account required to reset maintenance controls.');
+      return;
     }
-    await syncDerivedMatrixToBackend(next, 'Command Hub Defaults');
-  }, [appLiveEnabled, resetHubToDefaults, setAppLiveEnabled, syncDerivedMatrixToBackend]);
+    const next = resetHubToDefaults();
+    await syncDerivedMatrixToBackend(next, 'Command Hub Defaults (app state unchanged)');
+  }, [ownerControlsAllowed, resetHubToDefaults, syncDerivedMatrixToBackend]);
 
   const metrics: readonly WidgetMetricItem[] = useMemo(
     () => [
@@ -299,9 +341,9 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
         id: 'matrix-checksum',
         label: 'Control Matrix Checksum',
         value: snapshot.matrixChecksum,
-        subtext: subscriptionSummary.premiumUnlocked
-          ? 'Backend Microservice Sync ON'
-          : 'Local Hub + Multi-Display Sync',
+        subtext: ownerControlsAllowed
+          ? 'Owner may request backend sync (verify result)'
+          : 'Read-only backend / local view',
         tone: 'INFO',
       },
       {
@@ -320,7 +362,7 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
       snapshot.matrixChecksum,
       snapshot.overriddenCount,
       snapshot.totalModules,
-      subscriptionSummary.premiumUnlocked,
+      ownerControlsAllowed,
       voiceAgent.listening,
     ]
   );
@@ -367,6 +409,13 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
               onClick={() => setVoiceOverlayOpen(true)}
             />
             <ForgeInteractiveButton
+              label={forgeCapitalBusy ? 'Emergency Request Pending' : 'Server Emergency Halt (423)'}
+              icon={<ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" />}
+              intent="danger"
+              testId="settings-server-emergency-halt-btn"
+              onClick={handleVerifiedEmergencyRequest}
+            />
+            <ForgeInteractiveButton
               label="Reset Defaults"
               icon={<RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />}
               intent="ghost"
@@ -378,6 +427,20 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
       >
         <div className="space-y-5">
           <ForgeMetricStrip items={metrics} columns={4} />
+          <ForgeHaltServerStatus />
+          {!ownerControlsAllowed && (
+            <p role="status" className="rounded-lg border border-rose-500/40 bg-rose-950/20 px-3 py-2 text-xs text-rose-200">
+              Read-only system control view: a verified SUPER_ADMIN account is required to change shared backend modules, maintenance presets or rollbacks. Emergency-stop requests retain their separate operator authentication.
+            </p>
+          )}
+          {pendingBackendDiffs > 0 && (
+            <div role="status" className="rounded-lg border border-amber-500/40 bg-amber-950/30 p-3 text-xs text-amber-100">
+              Maintenance reconciliation needed: {pendingBackendDiffs} command toggles differ from the last reported backend matrix. This is not a confirmed backend configuration; inspect and resync before relying on it.
+            </div>
+          )}
+          <p className="rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs text-amber-100">
+            Maintenance/Force ON/OFF controls are workspace preferences only. They do not confirm or clear the server-side 423 Emergency Halt. Enabling modules or resetting defaults never authorizes LIVE trading; use the dedicated authenticated Forge Capital emergency control for actual server halt.
+          </p>
 
           {/* Master Override Command Bar */}
           <div
@@ -391,7 +454,7 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
                   <span>Global Master Override Layer</span>
                 </div>
                 <p className="text-xs text-slate-400">
-                  Override all 29 mapped feeds, AI agents, execution tools, and safeguards instantly. Individual granular settings remain preserved underneath.
+                  Configure 29 workspace modules. This panel is not a server-authoritative order-routing or Emergency Halt control; independent execution safety gates always apply.
                 </p>
               </div>
 

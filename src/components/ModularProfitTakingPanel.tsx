@@ -11,6 +11,8 @@ import type {
   ProfitTakingMode,
 } from '../lib/modularProfitTaking';
 
+const AGENT_TAB_TAP = { scale: 0.96 } as const;
+
 export const ModularProfitTakingPanel = memo(function ModularProfitTakingPanel() {
   const { selectedSymbol, tickers } = useApp();
   const [profiles, setProfiles] = useState<AgentProfitTakingProfile[]>([]);
@@ -76,9 +78,16 @@ export const ModularProfitTakingPanel = memo(function ModularProfitTakingPanel()
     fetchPolicies();
   }, [fetchPolicies]);
 
+  // Studio React stability repair: avoid self-triggered evaluation loops when
+  // profiles refresh or tick values fluctuate rapidly. This is UI research only.
+  const quantizedLivePrice = Number(livePrice.toPrecision(5));
+  const profilesVersionSig = profiles.map((p) => `${p.agentId}:${p.updatedAtIso}`).join('|');
   useEffect(() => {
-    runLiveEvaluation(selectedAgentId, simAtrPct, simPeakR, livePrice);
-  }, [selectedAgentId, simAtrPct, simPeakR, livePrice, profiles, runLiveEvaluation]);
+    const timer = window.setTimeout(() => {
+      void runLiveEvaluation(selectedAgentId, simAtrPct, simPeakR, quantizedLivePrice);
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [selectedAgentId, simAtrPct, simPeakR, quantizedLivePrice, profilesVersionSig, runLiveEvaluation]);
 
   const activeProfile = profiles.find((p) => p.agentId === selectedAgentId) ?? null;
 
@@ -146,7 +155,7 @@ export const ModularProfitTakingPanel = memo(function ModularProfitTakingPanel()
             return (
               <motion.button
                 key={prof.agentId}
-                whileTap={{ scale: 0.96 }}
+                whileTap={AGENT_TAB_TAP}
                 type="button"
                 role="tab"
                 aria-selected={active}
