@@ -7,6 +7,7 @@
  * clone scaling runs.
  */
 
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -109,8 +110,50 @@ export const HYBRID_SOURCE_CATALOG: readonly HybridSourceDescriptor[] = [
   },
 ];
 
+export interface PythonControlPlaneSelfTestResult {
+  readonly ok: boolean;
+  readonly executedAtIso: string;
+  readonly durationMs: number;
+  readonly transport: string;
+  readonly phase2Clones: number;
+  readonly phase3Ticks: number;
+  readonly phase3NsPerTick: number;
+  readonly phase4ChamberPromoted: boolean;
+  readonly phase5OptimizedPositionPct: number;
+  readonly phase6TrackedRows: number;
+  readonly error?: string;
+}
+
+export interface HybridRuntimeDiagnostics {
+  readonly probedAtIso: string;
+  readonly executionMode:
+    | 'RUST_NATIVE_IPC'
+    | 'PYTHON_CONTROL_PLANE_WITH_TS_KERNEL'
+    | 'TS_KERNEL_FALLBACK';
+  readonly python: {
+    readonly available: boolean;
+    readonly version: string | null;
+    readonly controlPlaneModulePresent: boolean;
+    readonly dryRunCorePresent: boolean;
+    readonly fableCorePresent: boolean;
+  };
+  readonly rust: {
+    readonly rustcAvailable: boolean;
+    readonly rustcVersion: string | null;
+    readonly cargoAvailable: boolean;
+    readonly cargoVersion: string | null;
+    readonly crateSourcePresent: boolean;
+    readonly binaryBuilt: boolean;
+    readonly binaryPath: string;
+    readonly ipcSocketActive: boolean;
+    readonly remediationSummary: string;
+  };
+  readonly lastPythonSelfTest: PythonControlPlaneSelfTestResult | null;
+}
+
 export interface HybridArchitectureStateSnapshot {
   ipcTopology: IpcTopologyStatus;
+  runtimeDiagnostics: HybridRuntimeDiagnostics;
   cloneScalePlan: HorizontalCloneScalePlan;
   activeRiskEnvelope: {
     positionSizePct: number;
@@ -128,6 +171,97 @@ export interface HybridArchitectureStateSnapshot {
     paperRefinementCount: number;
     avgNsPerTick: number;
     sqlitePath: string;
+  };
+}
+
+function safeProbeVersion(binary: 'python3' | 'rustc' | 'cargo'): string | null {
+  try {
+    const out = execFileSync(binary, ['--version'], {
+      timeout: 2_500,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const trimmed = out.trim();
+    return trimmed.length > 0 ? trimmed.slice(0, 80) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function probeHybridRuntimeDiagnostics(
+  projectRoot: string,
+  lastPythonSelfTest: PythonControlPlaneSelfTestResult | null = null
+): HybridRuntimeDiagnostics {
+  const pythonVersion = safeProbeVersion('python3');
+  const rustcVersion = safeProbeVersion('rustc');
+  const cargoVersion = safeProbeVersion('cargo');
+
+  const controlPlaneModulePresent = fs.existsSync(
+    path.resolve(projectRoot, 'hybrid_core', 'python_control_plane', 'main.py')
+  );
+  const dryRunCorePresent = fs.existsSync(
+    path.resolve(projectRoot, 'signal_forge_core', 'main.py')
+  );
+  const fableCorePresent = fs.existsSync(
+    path.resolve(projectRoot, 'fable_5_2', 'main_orchestrator.py')
+  );
+
+  const crateSourcePresent = fs.existsSync(
+    path.resolve(projectRoot, 'hybrid_core', 'rust_engine', 'Cargo.toml')
+  );
+  const binaryPath =
+    process.env.SIGNAL_FORGE_RUST_BINARY?.trim() ||
+    path.resolve(
+      projectRoot,
+      'hybrid_core',
+      'rust_engine',
+      'target',
+      'release',
+      'signal_forge_rust_engine'
+    );
+  const binaryBuilt = fs.existsSync(binaryPath);
+  const ipcSocketPath =
+    process.env.SIGNAL_FORGE_IPC_SOCKET?.trim() || '/tmp/signal_forge_hybrid.sock';
+  const ipcSocketActive = fs.existsSync(ipcSocketPath);
+
+  const executionMode: HybridRuntimeDiagnostics['executionMode'] =
+    binaryBuilt && ipcSocketActive
+      ? 'RUST_NATIVE_IPC'
+      : pythonVersion && controlPlaneModulePresent
+        ? 'PYTHON_CONTROL_PLANE_WITH_TS_KERNEL'
+        : 'TS_KERNEL_FALLBACK';
+
+  const remediationSummary =
+    binaryBuilt && ipcSocketActive
+      ? 'Compiled Rust execution binary and Unix Domain Socket IPC are active.'
+      : binaryBuilt
+        ? 'Compiled Rust binary is present; start the daemon to attach live UDS IPC.'
+        : rustcVersion && cargoVersion
+          ? 'Rust toolchain detected; run `cargo build --release` in hybrid_core/rust_engine to build native binary.'
+          : 'Rust toolchain (rustc/cargo) is not installed in this container; multi-stage Dockerfile compiles the Rust binary for container deployments while Python 3.11 + TypeScript deterministic kernel handle local verification.';
+
+  return {
+    probedAtIso: new Date().toISOString(),
+    executionMode,
+    python: {
+      available: pythonVersion !== null,
+      version: pythonVersion,
+      controlPlaneModulePresent,
+      dryRunCorePresent,
+      fableCorePresent,
+    },
+    rust: {
+      rustcAvailable: rustcVersion !== null,
+      rustcVersion,
+      cargoAvailable: cargoVersion !== null,
+      cargoVersion,
+      crateSourcePresent,
+      binaryBuilt,
+      binaryPath: path.relative(projectRoot, binaryPath) || binaryPath,
+      ipcSocketActive,
+      remediationSummary,
+    },
+    lastPythonSelfTest,
   };
 }
 
@@ -159,6 +293,9 @@ export class HybridArchitectureServerRuntime {
   private readonly projectRoot: string;
   private readonly sqliteLabel: string;
   private strategySeq = 1;
+  private lastPythonSelfTest: PythonControlPlaneSelfTestResult | null = null;
+  private cachedDiagnostics: HybridRuntimeDiagnostics | null = null;
+  private lastProbeAtMs = 0;
 
   constructor(projectRoot: string, dbPath?: string) {
     this.projectRoot = projectRoot;
@@ -455,6 +592,83 @@ export class HybridArchitectureServerRuntime {
     return rows.map((row) => JSON.parse(row.payload_json) as TrackedStrategyRecord);
   }
 
+  public getRuntimeDiagnostics(forceRefresh = false): HybridRuntimeDiagnostics {
+    const nowMs = Date.now();
+    if (!forceRefresh && this.cachedDiagnostics && nowMs - this.lastProbeAtMs < 30_000) {
+      return this.cachedDiagnostics;
+    }
+    this.cachedDiagnostics = probeHybridRuntimeDiagnostics(
+      this.projectRoot,
+      this.lastPythonSelfTest
+    );
+    this.lastProbeAtMs = nowMs;
+    return this.cachedDiagnostics;
+  }
+
+  /**
+   * Executes the fixed, allowlisted Python 3.11 control plane verification module
+   * (`hybrid_core.python_control_plane.main`) without shell interpolation or user arguments.
+   */
+  public runPythonControlPlaneSelfTest(): PythonControlPlaneSelfTestResult {
+    const startedAt = Date.now();
+    const executedAtIso = new Date(startedAt).toISOString();
+    try {
+      const stdout = execFileSync('python3', ['-m', 'hybrid_core.python_control_plane.main'], {
+        cwd: this.projectRoot,
+        timeout: 8_000,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PYTHONPATH: this.projectRoot,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      const parsed = JSON.parse(stdout) as {
+        phase1_ipc?: { ok?: boolean; transport?: string };
+        phase2_clones?: number;
+        phase3_ticks?: number;
+        phase3_ns_per_tick?: number;
+        phase4_chamber_promoted?: boolean;
+        phase5_optimized_position_pct?: number;
+        phase6_tracked_rows?: number;
+      };
+      const result: PythonControlPlaneSelfTestResult = {
+        ok: Boolean(parsed.phase1_ipc?.ok),
+        executedAtIso,
+        durationMs: Math.max(1, Date.now() - startedAt),
+        transport: String(parsed.phase1_ipc?.transport || 'PYTHON_IN_PROCESS_SHIM'),
+        phase2Clones: Number(parsed.phase2_clones ?? 0),
+        phase3Ticks: Number(parsed.phase3_ticks ?? 0),
+        phase3NsPerTick: Number(parsed.phase3_ns_per_tick ?? 0),
+        phase4ChamberPromoted: Boolean(parsed.phase4_chamber_promoted),
+        phase5OptimizedPositionPct: Number(parsed.phase5_optimized_position_pct ?? 0),
+        phase6TrackedRows: Number(parsed.phase6_tracked_rows ?? 0),
+      };
+      this.lastPythonSelfTest = result;
+      this.cachedDiagnostics = probeHybridRuntimeDiagnostics(this.projectRoot, result);
+      this.lastProbeAtMs = Date.now();
+      return result;
+    } catch (err) {
+      const result: PythonControlPlaneSelfTestResult = {
+        ok: false,
+        executedAtIso,
+        durationMs: Math.max(1, Date.now() - startedAt),
+        transport: 'UNAVAILABLE',
+        phase2Clones: 0,
+        phase3Ticks: 0,
+        phase3NsPerTick: 0,
+        phase4ChamberPromoted: false,
+        phase5OptimizedPositionPct: 0,
+        phase6TrackedRows: 0,
+        error: err instanceof Error ? err.message.slice(0, 200) : 'Python control plane check failed.',
+      };
+      this.lastPythonSelfTest = result;
+      this.cachedDiagnostics = probeHybridRuntimeDiagnostics(this.projectRoot, result);
+      this.lastProbeAtMs = Date.now();
+      return result;
+    }
+  }
+
   public getStateSnapshot(): HybridArchitectureStateSnapshot {
     const cloneScalePlan = this.getLatestClonePlan();
     const trackedStrategies = this.listStrategies(30);
@@ -469,9 +683,11 @@ export class HybridArchitectureServerRuntime {
             ).toFixed(1),
           )
         : 28.0;
+    const runtimeDiagnostics = this.getRuntimeDiagnostics();
 
     return {
       ipcTopology: buildIpcTopologyStatus(cloneScalePlan.totalActiveClones),
+      runtimeDiagnostics,
       cloneScalePlan,
       activeRiskEnvelope: {
         positionSizePct: latestRisk?.optimizedPositionSizePct ?? 2.5,

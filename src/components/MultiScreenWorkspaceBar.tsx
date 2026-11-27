@@ -53,6 +53,14 @@ const BATCH_OPTIONS: Array<{ ms: 8 | 16 | 50 | 100; label: string }> = [
   { ms: 100, label: '10Hz (100ms)' },
 ];
 
+const PRESET_OPTIONS: readonly { id: WorkspacePresetId; label: string }[] = [
+  { id: 'FULL_COMMAND', label: 'All Panels' },
+  { id: 'EXECUTION_120HZ', label: '120Hz Execution' },
+  { id: 'SIGNALS_AND_PREPUMP', label: 'Signals & Pre-Pump' },
+  { id: 'TELEMETRY_OPS', label: 'Telemetry Ops' },
+];
+
+
 export const MultiScreenWorkspaceBar = memo(function MultiScreenWorkspaceBar({
   pipelineSnapshot,
 }: MultiScreenWorkspaceBarProps) {
@@ -224,14 +232,7 @@ export const MultiScreenWorkspaceBar = memo(function MultiScreenWorkspaceBar({
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
-            {(
-              [
-                { id: 'FULL_COMMAND', label: 'All Panels' },
-                { id: 'EXECUTION_120HZ', label: '120Hz Execution' },
-                { id: 'SIGNALS_AND_PREPUMP', label: 'Signals & Pre-Pump' },
-                { id: 'TELEMETRY_OPS', label: 'Telemetry Ops' },
-              ] as Array<{ id: WorkspacePresetId; label: string }>
-            ).map((preset) => (
+            {PRESET_OPTIONS.map((preset) => (
               <motion.button
                 key={preset.id}
                 whileTap={PRESET_BTN_TAP}
@@ -287,4 +288,3 @@ export const MultiScreenWorkspaceBar = memo(function MultiScreenWorkspaceBar({
     </section>
   );
 });
-

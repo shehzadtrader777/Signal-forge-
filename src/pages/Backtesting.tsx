@@ -35,6 +35,7 @@ import { ModularBacktestMatrixPanel } from '../components/ModularBacktestMatrixP
 import { buildBacktestResearchUniverse, validateHistoricalCoverage } from '../lib/backtestUniverse';
 import { buildUnifiedSignalHistory } from '../lib/signalHistory';
 import '../styles/forgeBacktesting.css';
+import { Step2StrategyBacktestComparator } from '../components/Step2StrategyBacktestComparator';
 
 const BAR_RADIUS: [number, number, number, number] = [6, 6, 0, 0];
 const AREA_CHART_MARGIN = { top: 8, right: 12, left: 4, bottom: 0 };
@@ -266,8 +267,18 @@ export function Backtesting() {
     []
   );
 
+  const [anchoredBacktestPrice, setAnchoredBacktestPrice] = useState<number | undefined>(() =>
+    tickers[simSeed.symbol]?.price ?? futuresTelemetry[simSeed.symbol]?.markPrice
+  );
+
   useEffect(() => {
     syncLiveFeedAndCandles(simSeed.symbol, simSeed.timeframe);
+    const snap =
+      tickersRef.current[simSeed.symbol]?.price ??
+      futuresTelemetryRef.current[simSeed.symbol]?.markPrice;
+    if (snap && Number.isFinite(snap)) {
+      setAnchoredBacktestPrice(snap);
+    }
   }, [simSeed.symbol, simSeed.timeframe, syncLiveFeedAndCandles]);
 
   const historyCoverage = useMemo(() => validateHistoricalCoverage({
@@ -281,6 +292,17 @@ export function Backtesting() {
   const liveWsPrice =
     tickers[simSeed.symbol]?.price ?? futuresTelemetry[simSeed.symbol]?.markPrice;
 
+  // Capture initial live WS price once per symbol if mounted before WS hydration
+  useEffect(() => {
+    if (
+      anchoredBacktestPrice === undefined &&
+      liveWsPrice !== undefined &&
+      Number.isFinite(liveWsPrice)
+    ) {
+      setAnchoredBacktestPrice(liveWsPrice);
+    }
+  }, [anchoredBacktestPrice, liveWsPrice]);
+
   // Comparative 30 / 60 / 90-Day Optimization Protocol Report (strictly 300–500 trades/window, 5% Max SL, 5x ATR Trail TP)
   const comparativeReport = useMemo(
     () =>
@@ -289,9 +311,9 @@ export function Backtesting() {
         timeframe: simSeed.timeframe,
         strategy: simSeed.strategy,
         providedCandles: liveCandles,
-        liveWsPrice,
+        liveWsPrice: anchoredBacktestPrice,
       }),
-    [simSeed, liveCandles, liveWsPrice]
+    [simSeed, liveCandles, anchoredBacktestPrice]
   );
 
   const [wfInSampleBars, setWfInSampleBars] = useState<number>(85);
@@ -365,6 +387,8 @@ export function Backtesting() {
         </div>
         <p className="mt-4 text-xs leading-5 text-slate-400">Displayed results are model outputs, not guaranteed outcomes. Verify historical candle coverage and data provenance before relying on a date-window label.</p>
       </section>
+
+      <Step2StrategyBacktestComparator />
 
       {/* Page Header & Backtest Runner */}
       <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between border-b border-slate-800/80 pb-6">

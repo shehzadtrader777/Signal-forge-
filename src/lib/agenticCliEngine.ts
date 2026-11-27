@@ -125,6 +125,12 @@ export const DENIED_PATH_PATTERNS: readonly RegExp[] = [
   /(^|\/)firebase-applet-config\.json$/i,
   /(^|\/)node_modules(\/|$)/i,
   /(^|\/)\.git(\/|$)/i,
+  /^src\/lib\/rbac\.ts$/i,
+  /^src\/lib\/operatorSessionAuth\.ts$/i,
+  /^src\/lib\/aiProviderVaultServer\.ts$/i,
+  /^src\/lib\/agenticCliEngine\.ts$/i,
+  /^src\/lib\/agenticCliGatewayServer\.ts$/i,
+  /^src\/services\/firebaseAuthVerifier\.ts$/i,
 ];
 
 export interface PathValidationResult {

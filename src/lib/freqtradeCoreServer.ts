@@ -112,6 +112,14 @@ interface TradeDbRow {
   close_reason: string;
   opened_at: string;
   closed_at: string | null;
+  price_source?: string | null;
+  price_timestamp_iso?: string | null;
+  bid_price?: number | null;
+  ask_price?: number | null;
+  spread_bps?: number | null;
+  slippage_bps?: number | null;
+  fee_usd?: number | null;
+  profit_label?: string | null;
 }
 
 interface RpcLogDbRow {
@@ -207,7 +215,15 @@ export class FreqtradeCoreServerRuntime {
         realized_pnl_usd REAL NOT NULL DEFAULT 0,
         close_reason TEXT NOT NULL DEFAULT '',
         opened_at TEXT NOT NULL,
-        closed_at TEXT
+        closed_at TEXT,
+        price_source TEXT NOT NULL DEFAULT 'PAPER_SIMULATED',
+        price_timestamp_iso TEXT NOT NULL DEFAULT '',
+        bid_price REAL,
+        ask_price REAL,
+        spread_bps REAL,
+        slippage_bps REAL NOT NULL DEFAULT 2,
+        fee_usd REAL NOT NULL DEFAULT 0,
+        profit_label TEXT NOT NULL DEFAULT 'SIMULATED_PAPER_ONLY'
       );
 
       CREATE TABLE IF NOT EXISTS telegram_rpc_logs (
@@ -232,6 +248,25 @@ export class FreqtradeCoreServerRuntime {
         channel_status TEXT NOT NULL
       );
     `);
+
+    // Idempotent schema migration for pre-existing SQLite databases
+    const migrationStatements = [
+      "ALTER TABLE dry_run_trades ADD COLUMN price_source TEXT NOT NULL DEFAULT 'PAPER_SIMULATED'",
+      "ALTER TABLE dry_run_trades ADD COLUMN price_timestamp_iso TEXT NOT NULL DEFAULT ''",
+      'ALTER TABLE dry_run_trades ADD COLUMN bid_price REAL',
+      'ALTER TABLE dry_run_trades ADD COLUMN ask_price REAL',
+      'ALTER TABLE dry_run_trades ADD COLUMN spread_bps REAL',
+      'ALTER TABLE dry_run_trades ADD COLUMN slippage_bps REAL NOT NULL DEFAULT 2',
+      'ALTER TABLE dry_run_trades ADD COLUMN fee_usd REAL NOT NULL DEFAULT 0',
+      "ALTER TABLE dry_run_trades ADD COLUMN profit_label TEXT NOT NULL DEFAULT 'SIMULATED_PAPER_ONLY'",
+    ];
+    for (const sql of migrationStatements) {
+      try {
+        this.db.exec(sql);
+      } catch {
+        // Column already exists
+      }
+    }
 
     const nowIso = new Date().toISOString();
     const insertState = this.db.prepare(`
@@ -286,6 +321,15 @@ export class FreqtradeCoreServerRuntime {
       closeReason: row.close_reason,
       openedAtIso: row.opened_at,
       closedAtIso: row.closed_at,
+      priceSource: row.price_source || 'PAPER_SIMULATED',
+      priceTimestampIso: row.price_timestamp_iso || row.opened_at,
+      bidPrice: row.bid_price ?? null,
+      askPrice: row.ask_price ?? null,
+      spreadBps: row.spread_bps ?? null,
+      slippageBps: typeof row.slippage_bps === 'number' ? row.slippage_bps : 2,
+      feeUsd: typeof row.fee_usd === 'number' ? row.fee_usd : 0,
+      profitLabel: 'SIMULATED_PAPER_ONLY',
+      isRealProfit: false,
     };
   }
 
@@ -466,8 +510,10 @@ export class FreqtradeCoreServerRuntime {
         signal_id, exchange, symbol, market_type, trading_mode, side,
         entry_price, current_price, quantity, stake_usd, leverage,
         stop_loss, take_profit, trailing_stop, peak_price,
-        status, realized_pnl_usd, close_reason, opened_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'OPEN', 0, '', ?)
+        status, realized_pnl_usd, close_reason, opened_at,
+        price_source, price_timestamp_iso, bid_price, ask_price,
+        spread_bps, slippage_bps, fee_usd, profit_label
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'OPEN', 0, '', ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const info = stmt.run(
@@ -485,7 +531,15 @@ export class FreqtradeCoreServerRuntime {
       route.stopLoss,
       route.takeProfit,
       route.fillPrice,
-      nowIso
+      nowIso,
+      route.priceSource,
+      route.priceTimestampIso,
+      route.bidPrice,
+      route.askPrice,
+      route.spreadBps,
+      route.slippageBps,
+      route.feeUsd,
+      route.profitLabel
     );
 
     const tradeId = Number(info.lastInsertRowid);
@@ -493,8 +547,15 @@ export class FreqtradeCoreServerRuntime {
       ok: true,
       statusCode: 201,
       tradeId,
-      message: `Executed #${tradeId} ${input.side} ${route.normalizedSymbol} via CCXT (${input.exchange.toUpperCase()} ${input.marketType} · ${metrics.tradingMode}) @ $${route.fillPrice.toLocaleString()} · SL $${route.stopLoss.toLocaleString()} · TP $${route.takeProfit.toLocaleString()}`,
+      message: `Executed #${tradeId} ${input.side} ${route.normalizedSymbol} via CCXT (${input.exchange.toUpperCase()} ${input.marketType} · ${metrics.tradingMode} · SIMULATED_PAPER_ONLY) @ $${route.fillPrice.toLocaleString()} · SL $${route.stopLoss.toLocaleString()} · TP $${route.takeProfit.toLocaleString()}`,
     };
+  }
+
+  public getOpenPosition(tradeId: number): DryRunPositionRecord | null {
+    const row = this.db
+      .prepare("SELECT * FROM dry_run_trades WHERE trade_id = ? AND status = 'OPEN'")
+      .get(tradeId) as unknown as TradeDbRow | undefined;
+    return row ? this.mapTradeRow(row) : null;
   }
 
   public closePosition(

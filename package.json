@@ -10,8 +10,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "npx tsx --test src/lib/*.test.ts",
-    "verify": "npx tsx --test src/lib/*.test.ts && npm run lint && npm run build"
+    "test": "node --import tsx --test src/lib/*.test.ts src/lib/*.test.mjs firestore.rules.test.ts",
+    "verify": "npm run test && npm run lint && npm run build"
   },
   "dependencies": {
     "@google/genai": "2.32.0",

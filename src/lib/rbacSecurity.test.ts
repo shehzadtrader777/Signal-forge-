@@ -12,8 +12,8 @@ test('operator-looking UID cannot elevate a normal verified user',()=>{
  assert.equal(resolveRbacRoleFromPrincipal({...base,tier:'PREMIUM_INSTITUTIONAL'}),'QUANT_ANALYST');
 });
 test('verified explicit admin email remains recognized only for authenticated principal',()=>{
- const adminEmail='amirshehzad2647tcs@gmail.com';
- assert.equal(resolveRbacRoleFromPrincipal({...base,uid:'normal-uid',email:adminEmail,emailVerified:true}),'SUPER_ADMIN');
- assert.equal(resolveRbacRoleFromPrincipal({...base,uid:'normal-uid',email:adminEmail,emailVerified:false}),'TRADER');
- assert.equal(resolveRbacRoleFromPrincipal({...base,uid:'',email:adminEmail,emailVerified:true}),'GUEST');
+ const adminEmail='admin@example.invalid';
+ assert.equal(resolveRbacRoleFromPrincipal({...base,uid:'normal-uid',email:adminEmail,emailVerified:true},[adminEmail]),'SUPER_ADMIN');
+ assert.equal(resolveRbacRoleFromPrincipal({...base,uid:'normal-uid',email:adminEmail,emailVerified:false},[adminEmail]),'TRADER');
+ assert.equal(resolveRbacRoleFromPrincipal({...base,uid:'',email:adminEmail,emailVerified:true},[adminEmail]),'GUEST');
 });

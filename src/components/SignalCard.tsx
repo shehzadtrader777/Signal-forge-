@@ -15,6 +15,11 @@ interface SignalCardProps {
   onInspectDetail?: (signal: TradingSignal, layoutId: string, pinnedRecord?: PinnedSignalRecord) => void;
 }
 
+const SIGNAL_TAP_96 = { scale: 0.96 } as const;
+const SIGNAL_TAP_95 = { scale: 0.95 } as const;
+const SIGNAL_TAP_94 = { scale: 0.94 } as const;
+const SIGNAL_TAP_92 = { scale: 0.92 } as const;
+
 export const SignalCard = memo(function SignalCard({
   signal,
   rank,
@@ -91,10 +96,7 @@ export const SignalCard = memo(function SignalCard({
     : null;
 
   return (
-    <motion.article
-      layout
-      layoutId={sharedLayoutId}
-      transition={{ type: 'spring', stiffness: 420, damping: 34, mass: 0.72 }}
+    <article
       data-testid={`signal-card-${signal.symbol}`}
       className={`cyber-surface flex flex-col justify-between rounded-xl border p-4 transition-colors ${
         resolved
@@ -288,7 +290,7 @@ export const SignalCard = memo(function SignalCard({
       {/* Actions: Primary Functional BUY + Shared-Element Inspect + Risk Calc + Watchlist Star */}
       <div className="mt-4 flex items-center gap-1.5 pt-1">
         <motion.button
-          whileTap={{ scale: 0.96 }}
+          whileTap={SIGNAL_TAP_96}
           type="button"
           data-testid={`signal-buy-${signal.symbol}`}
           onClick={handleBuyExecutionRedirect}
@@ -300,7 +302,7 @@ export const SignalCard = memo(function SignalCard({
 
         {onInspectDetail && (
           <motion.button
-            whileTap={{ scale: 0.94 }}
+            whileTap={SIGNAL_TAP_94}
             type="button"
             data-testid={`signal-inspect-${signal.symbol}`}
             onClick={() => onInspectDetail(signal, sharedLayoutId, pinnedRecord)}
@@ -312,7 +314,7 @@ export const SignalCard = memo(function SignalCard({
         )}
 
         <motion.button
-          whileTap={{ scale: 0.95 }}
+          whileTap={SIGNAL_TAP_95}
           type="button"
           onClick={() => onOpenRiskCalc(signal)}
           aria-label={`Open risk calculator for ${signal.symbol}`}
@@ -323,7 +325,7 @@ export const SignalCard = memo(function SignalCard({
         </motion.button>
 
         <motion.button
-          whileTap={{ scale: 0.92 }}
+          whileTap={SIGNAL_TAP_92}
           type="button"
           onClick={() => toggleWatchlist(signal.symbol)}
           aria-label={isWatched ? `Remove ${signal.symbol} from watchlist` : `Save ${signal.symbol} to watchlist`}
@@ -336,6 +338,6 @@ export const SignalCard = memo(function SignalCard({
           <Star className={`h-3.5 w-3.5 ${isWatched ? 'fill-amber-400' : ''}`} />
         </motion.button>
       </div>
-    </motion.article>
+    </article>
   );
 });

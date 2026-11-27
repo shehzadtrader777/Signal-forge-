@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import {
   createChart,
+  createSeriesMarkers,
   CandlestickSeries,
   HistogramSeries,
   LineSeries,
@@ -10,9 +11,12 @@ import {
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  type SeriesMarker,
+  type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
-import { Search, SlidersHorizontal, Star } from 'lucide-react';
+import { Camera, Check, Link2, Search, SlidersHorizontal, Star } from 'lucide-react';
 import {
   TRACKED_COINS,
   fetchCoinCandles,
@@ -36,6 +40,11 @@ import {
 } from '../lib/priceSyncArbiter';
 import { useApp } from '../context/AppContext';
 import { useTradingArchitectureStore } from '../store/useTradingArchitectureStore';
+import {
+  SEEDED_CANONICAL_TRADE_LEDGER,
+  adaptPublicVerifiedTradeToLifecycle,
+  type CanonicalTradeRecord,
+} from '../lib/tradeLifecycleLedger';
 
 const TIMEFRAMES: Timeframe[] = ['15m', '1h', '4h', '1d'];
 
@@ -44,6 +53,7 @@ interface CandleChartProps {
   onTimeframeChange: (tf: Timeframe) => void;
   onCandlesLoaded?: (symbol: string, candles: Candle[]) => void;
   smcAnalysis?: SmcAgentAnalysis | null;
+  initialTradeId?: string;
 }
 
 export const CandleChart = memo(function CandleChart({
@@ -51,6 +61,7 @@ export const CandleChart = memo(function CandleChart({
   onTimeframeChange,
   onCandlesLoaded,
   smcAnalysis,
+  initialTradeId,
 }: CandleChartProps) {
   const {
     selectedSymbol,
@@ -65,6 +76,7 @@ export const CandleChart = memo(function CandleChart({
   } = useApp();
   const indicatorSuite = useTradingArchitectureStore((s) => s.indicatorSuite);
   const updateIndicatorSuite = useTradingArchitectureStore((s) => s.updateIndicatorSuite);
+  const verifiedTrades = useTradingArchitectureStore((s) => s.verifiedTrades);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
@@ -73,6 +85,26 @@ export const CandleChart = memo(function CandleChart({
   const [dataSource, setDataSource] = useState<'binance' | 'cache'>('cache');
   const [loading, setLoading] = useState(true);
   const [syncTelemetry, setSyncTelemetry] = useState<PriceSyncTelemetry | null>(null);
+  const [linkedTradeId, setLinkedTradeId] = useState<string>(initialTradeId || '');
+  const [snapshotNotice, setSnapshotNotice] = useState<string | null>(null);
+
+  const availableTradeRecords = useMemo<CanonicalTradeRecord[]>(() => {
+    const map = new Map<string, CanonicalTradeRecord>();
+    for (const rec of SEEDED_CANONICAL_TRADE_LEDGER) {
+      map.set(rec.tradeId, rec);
+    }
+    for (const vt of verifiedTrades) {
+      if (!map.has(vt.tradeId)) {
+        map.set(vt.tradeId, adaptPublicVerifiedTradeToLifecycle(vt));
+      }
+    }
+    return Array.from(map.values());
+  }, [verifiedTrades]);
+
+  const linkedTrade = useMemo<CanonicalTradeRecord | null>(() => {
+    if (!linkedTradeId) return null;
+    return availableTradeRecords.find((t) => t.tradeId === linkedTradeId) ?? null;
+  }, [availableTradeRecords, linkedTradeId]);
 
   const showEma = indicatorSuite.showEmaRibbon;
   const showSmc = indicatorSuite.showSmcOverlay;
@@ -80,6 +112,7 @@ export const CandleChart = memo(function CandleChart({
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const emaFastSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const emaMidSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
@@ -88,10 +121,15 @@ export const CandleChart = memo(function CandleChart({
   const bbUpperSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const bbLowerSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const smcPriceLinesRef = useRef<IPriceLine[]>([]);
+  const tradePriceLinesRef = useRef<IPriceLine[]>([]);
   const lastKlinePriceRef = useRef<number | undefined>(undefined);
   const lastReconcileKeyRef = useRef<string>('');
+  const lastReanchorKeyRef = useRef<string>('');
+  const lastLiveTickKeyRef = useRef<string>('');
   const upgradedCacheKeyRef = useRef<string>('');
   const syncArbiterRef = useRef<TradingViewBinanceSyncArbiter>(new TradingViewBinanceSyncArbiter());
+  const candlesRef = useRef<Candle[]>(candles);
+  candlesRef.current = candles;
 
   const currentTicker = tickers[selectedSymbol];
   const currentCoin =
@@ -222,6 +260,7 @@ export const CandleChart = memo(function CandleChart({
 
     chartRef.current = chart;
     candleSeriesRef.current = candleSeries;
+    markersPluginRef.current = createSeriesMarkers(candleSeries, []);
     volumeSeriesRef.current = volumeSeries;
     emaFastSeriesRef.current = emaFastSeries;
     emaMidSeriesRef.current = emaMidSeries;
@@ -240,6 +279,8 @@ export const CandleChart = memo(function CandleChart({
 
     return () => {
       observer.disconnect();
+      markersPluginRef.current?.detach();
+      markersPluginRef.current = null;
       chart.remove();
       chartRef.current = null;
     };
@@ -251,13 +292,18 @@ export const CandleChart = memo(function CandleChart({
     setLoading(true);
     lastKlinePriceRef.current = undefined;
     lastReconcileKeyRef.current = '';
+    lastReanchorKeyRef.current = '';
+    lastLiveTickKeyRef.current = '';
 
     const anchorPrice = referencePriceRef.current;
     fetchCoinCandles(selectedSymbol, timeframe, 160, anchorPrice).then((res) => {
       if (!active) return;
       const latestLive = referencePriceRef.current;
+      // Never pull verified Binance exchange klines onto a cached/non-live ticker, and never relabel 'cache' candles as 'binance'
+      const allowReconcile =
+        res.source === 'cache' || Boolean(tickers[selectedSymbol]?.isLiveWs);
       const rec =
-        latestLive && latestLive > 0
+        allowReconcile && latestLive && latestLive > 0
           ? reconcileCandleSeriesToLivePrice(
               res.candles,
               latestLive,
@@ -266,8 +312,7 @@ export const CandleChart = memo(function CandleChart({
             )
           : null;
       const initialCandles = rec && rec.reconciled ? rec.candles : res.candles;
-      const effectiveSource =
-        rec?.mode === 'full_reanchor' ? 'binance' : res.source;
+      const effectiveSource: 'binance' | 'cache' = res.source;
 
       setCandles(initialCandles);
       setDataSource(effectiveSource);
@@ -517,6 +562,176 @@ export const CandleChart = memo(function CandleChart({
     }
   }, [smcLevelSignature, showSmc, smcAnalysis, candles.length]);
 
+  // Render linked Trade ID Entry/Exit markers and Entry/SL/TP levels on Smart Chart
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    const markersPlugin = markersPluginRef.current;
+    if (!series) return;
+
+    for (const line of tradePriceLinesRef.current) {
+      try {
+        series.removePriceLine(line);
+      } catch {
+        // ignore disposed series
+      }
+    }
+    tradePriceLinesRef.current = [];
+
+    if (!linkedTrade || linkedTrade.pair !== selectedSymbol || candles.length === 0) {
+      markersPlugin?.setMarkers([]);
+      return;
+    }
+
+    const tradeLines: Array<{
+      price: number;
+      color: string;
+      lineWidth: 1 | 2;
+      lineStyle: LineStyle;
+      title: string;
+    }> = [
+      {
+        price: linkedTrade.actualExecutionPrice ?? linkedTrade.entryPrice,
+        color: '#38bdf8',
+        lineWidth: 2,
+        lineStyle: LineStyle.Solid,
+        title: `${linkedTrade.tradeId} ${linkedTrade.recordClass === 'SIGNAL_ONLY' ? 'Signal' : 'Entry'}`,
+      },
+      {
+        price: linkedTrade.stopLoss,
+        color: '#f43f5e',
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        title: `${linkedTrade.tradeId} SL`,
+      },
+      {
+        price: linkedTrade.takeProfit,
+        color: '#10b981',
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        title: `${linkedTrade.tradeId} TP`,
+      },
+    ];
+
+    for (const cfg of tradeLines) {
+      if (!Number.isFinite(cfg.price) || cfg.price <= 0) continue;
+      tradePriceLinesRef.current.push(
+        series.createPriceLine({
+          price: cfg.price,
+          color: cfg.color,
+          lineWidth: cfg.lineWidth,
+          lineStyle: cfg.lineStyle,
+          axisLabelVisible: true,
+          title: cfg.title,
+        })
+      );
+    }
+
+    const entryIdx = Math.max(0, candles.length - 18);
+    const exitIdx = Math.max(entryIdx + 1, candles.length - 4);
+    const entryCandle = candles[entryIdx];
+    const exitCandle = candles[Math.min(exitIdx, candles.length - 1)];
+
+    const nextMarkers: SeriesMarker<Time>[] = [];
+    if (entryCandle) {
+      nextMarkers.push({
+        time: entryCandle.time as UTCTimestamp,
+        position: linkedTrade.direction === 'BUY' ? 'belowBar' : 'aboveBar',
+        color: linkedTrade.direction === 'BUY' ? '#10b981' : '#f43f5e',
+        shape: linkedTrade.direction === 'BUY' ? 'arrowUp' : 'arrowDown',
+        text: `${linkedTrade.direction} · ${linkedTrade.tradeId}`,
+      });
+    }
+
+    if (
+      exitCandle &&
+      linkedTrade.recordClass === 'EXECUTED_TRADE' &&
+      (linkedTrade.executionStatus === 'CLOSED_TP' ||
+        linkedTrade.executionStatus === 'CLOSED_SL' ||
+        linkedTrade.executionStatus === 'CLOSED_MANUAL')
+    ) {
+      const won = (linkedTrade.realizedPnlUsd ?? 0) >= 0;
+      nextMarkers.push({
+        time: exitCandle.time as UTCTimestamp,
+        position: linkedTrade.direction === 'BUY' ? 'aboveBar' : 'belowBar',
+        color: won ? '#22c55e' : '#ef4444',
+        shape: 'circle',
+        text: `${linkedTrade.executionStatus.replace('_', ' ')} (${won ? '+' : ''}$${(linkedTrade.realizedPnlUsd ?? 0).toFixed(2)})`,
+      });
+    }
+
+    markersPlugin?.setMarkers(nextMarkers);
+  }, [linkedTrade, selectedSymbol, candles]);
+
+  const handleSelectLinkedTrade = (nextId: string) => {
+    setLinkedTradeId(nextId);
+    const found = availableTradeRecords.find((t) => t.tradeId === nextId);
+    if (found) {
+      if (found.pair !== selectedSymbol) {
+        setSelectedSymbol(found.pair);
+      }
+      if (found.timeframe !== timeframe) {
+        onTimeframeChange(found.timeframe);
+      }
+    }
+  };
+
+  const handleExportChartSnapshot = () => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    try {
+      const rawCanvas = chart.takeScreenshot();
+      const out = document.createElement('canvas');
+      const headerH = 56;
+      const footerH = 40;
+      out.width = rawCanvas.width;
+      out.height = rawCanvas.height + headerH + footerH;
+      const ctx = out.getContext('2d');
+      if (!ctx) return;
+
+      ctx.fillStyle = '#0a0e1a';
+      ctx.fillRect(0, 0, out.width, out.height);
+
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = 'bold 16px sans-serif';
+      const titleLine = linkedTrade
+        ? `SIGNAL FORGE · ${linkedTrade.tradeId} · ${selectedSymbol} (${timeframe}) · ${linkedTrade.direction} [${linkedTrade.recordClass === 'SIGNAL_ONLY' ? 'SIGNAL ONLY' : linkedTrade.tradingMode}]`
+        : `SIGNAL FORGE · ${selectedSymbol} (${timeframe}) · $${formatCryptoPrice(displayPrice)}`;
+      ctx.fillText(titleLine, 16, 26);
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '12px monospace';
+      const subLine = linkedTrade
+        ? `Strategy: ${linkedTrade.strategyName} | Entry: $${formatCryptoPrice(linkedTrade.actualExecutionPrice ?? linkedTrade.entryPrice)} | SL: $${formatCryptoPrice(linkedTrade.stopLoss)} | TP: $${formatCryptoPrice(linkedTrade.takeProfit)}`
+        : `EMA ${indicatorSuite.emaFastPeriod}/${indicatorSuite.emaMidPeriod}/${indicatorSuite.emaSlowPeriod}${showSmc ? ' · SMC/FRVP' : ''} | UTC ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`;
+      ctx.fillText(subLine, 16, 45);
+
+      ctx.drawImage(rawCanvas, 0, headerH);
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '11px monospace';
+      ctx.fillText(
+        `Exported for Telegram @SignalForge & Audit Ledger · ${new Date().toISOString()} · Informational only, not financial advice.`,
+        16,
+        headerH + rawCanvas.height + 24
+      );
+
+      const dataUrl = out.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.download = `${(linkedTrade?.tradeId || selectedSymbol).replace(/[^A-Za-z0-9_-]/g, '_')}_${timeframe}_snapshot.png`;
+      link.href = dataUrl;
+      link.click();
+
+      setSnapshotNotice(
+        linkedTrade
+          ? `PNG snapshot exported for ${linkedTrade.tradeId} (ready for Telegram & approved channels).`
+          : `PNG snapshot exported for ${selectedSymbol} ${timeframe}.`
+      );
+      window.setTimeout(() => setSnapshotNotice(null), 5000);
+    } catch {
+      setSnapshotNotice('Chart snapshot unavailable until canvas renders.');
+    }
+  };
+
   // Route live kline updates strictly through L1 PITFeed LiveKlineChannel, anchored to Binance WS parity
   useEffect(() => {
     if (!liveFeedModulesEnabled) {
@@ -557,15 +772,37 @@ export const CandleChart = memo(function CandleChart({
     };
   }, [selectedSymbol, timeframe, liveFeedModulesEnabled]);
 
-  // Automatic plotted-state discrepancy detection & immediate reconciliation with live authoritative price
+  const hasCandles = candles.length > 0;
+
+  // Automatic plotted-state discrepancy detection & reconciliation with verified live authoritative price
   useEffect(() => {
     const livePrice = currentTicker?.price;
-    if (loading || candles.length === 0 || !livePrice || !Number.isFinite(livePrice) || livePrice <= 0) {
+    const isLiveWs = Boolean(currentTicker?.isLiveWs);
+    const currentCandles = candlesRef.current;
+    if (
+      loading ||
+      !hasCandles ||
+      currentCandles.length === 0 ||
+      !livePrice ||
+      !Number.isFinite(livePrice) ||
+      livePrice <= 0
+    ) {
       return;
     }
 
+    // Never overwrite verified Binance exchange klines with a non-live cached/simulated ticker
+    if (dataSource === 'binance' && !isLiveWs) {
+      return;
+    }
+
+    const tickKey = `${selectedSymbol}_${timeframe}_${dataSource}_${isLiveWs ? 1 : 0}_${livePrice}`;
+    if (tickKey === lastLiveTickKeyRef.current) {
+      return;
+    }
+    lastLiveTickKeyRef.current = tickKey;
+
     const rec = reconcileCandleSeriesToLivePrice(
-      candles,
+      currentCandles,
       livePrice,
       DEFAULT_DRIFT_THRESHOLD_PCT,
       dataSource
@@ -575,10 +812,8 @@ export const CandleChart = memo(function CandleChart({
       const guardKey = `${selectedSymbol}_${timeframe}_${Math.round(livePrice * 1e4)}_${rec.mode}`;
       if (guardKey !== lastReconcileKeyRef.current) {
         lastReconcileKeyRef.current = guardKey;
+        candlesRef.current = rec.candles;
         setCandles(rec.candles);
-        if (rec.mode === 'full_reanchor') {
-          setDataSource('binance');
-        }
         onCandlesLoadedRef.current?.(selectedSymbol, rec.candles);
         reportReconciliationRef.current?.({
           symbol: selectedSymbol,
@@ -594,7 +829,7 @@ export const CandleChart = memo(function CandleChart({
     }
 
     // If chart initialized from fallback cache before WS arrived, upgrade once to live exchange klines
-    if (dataSource === 'cache' && currentTicker?.isLiveWs) {
+    if (dataSource === 'cache' && isLiveWs) {
       const upgradeKey = `${selectedSymbol}_${timeframe}`;
       if (upgradedCacheKeyRef.current !== upgradeKey) {
         upgradedCacheKeyRef.current = upgradeKey;
@@ -605,6 +840,7 @@ export const CandleChart = memo(function CandleChart({
             DEFAULT_DRIFT_THRESHOLD_PCT,
             fresh.source
           );
+          candlesRef.current = synced.candles;
           setCandles(synced.candles);
           setDataSource(fresh.source);
           onCandlesLoadedRef.current?.(selectedSymbol, synced.candles);
@@ -612,13 +848,20 @@ export const CandleChart = memo(function CandleChart({
       }
     }
 
-    if (!liveFeedModulesEnabled || !candleSeriesRef.current) return;
-    const last = candles[candles.length - 1];
+    if (!liveFeedModulesEnabled || !candleSeriesRef.current || !isLiveWs) return;
+    const last = currentCandles[currentCandles.length - 1];
     const stitched = stitchBinanceTickToTradingViewBar(last, livePrice);
     if (stitched.requiresFullReanchor) {
-      const reanchored = reanchorSeriesToBinanceWs(candles, livePrice);
-      setCandles(reanchored);
-      onCandlesLoadedRef.current?.(selectedSymbol, reanchored);
+      const reanchorKey = `${selectedSymbol}_${timeframe}_${Math.round(livePrice * 1e4)}`;
+      if (reanchorKey !== lastReanchorKeyRef.current) {
+        lastReanchorKeyRef.current = reanchorKey;
+        const reanchored = reanchorSeriesToBinanceWs(currentCandles, livePrice);
+        if (reanchored !== currentCandles) {
+          candlesRef.current = reanchored;
+          setCandles(reanchored);
+          onCandlesLoadedRef.current?.(selectedSymbol, reanchored);
+        }
+      }
     } else {
       try {
         candleSeriesRef.current.update({
@@ -639,9 +882,18 @@ export const CandleChart = memo(function CandleChart({
       livePrice,
       stitched.parityStatus !== 'LOCKED'
     );
-    setSyncTelemetry(nextTelemetry);
+    setSyncTelemetry((prev) =>
+      prev &&
+      prev.symbol === nextTelemetry.symbol &&
+      prev.parityStatus === nextTelemetry.parityStatus &&
+      prev.discrepancyBps === nextTelemetry.discrepancyBps &&
+      prev.driftEventsResolved === nextTelemetry.driftEventsResolved &&
+      Math.abs(prev.binanceWsPrice - nextTelemetry.binanceWsPrice) <= 1e-8
+        ? prev
+        : nextTelemetry
+    );
   }, [
-    candles,
+    hasCandles,
     currentTicker?.price,
     currentTicker?.isLiveWs,
     dataSource,
@@ -706,13 +958,37 @@ export const CandleChart = memo(function CandleChart({
               Vol {formatCompactUsd(currentTicker?.volume24hUsd ?? 850_000_000)}
             </span>
             <span aria-hidden="true">·</span>
-            <span className="whitespace-nowrap">
+            <span
+              data-testid="chart-price-source-label"
+              className={`whitespace-nowrap font-medium ${
+                !liveFeedModulesEnabled
+                  ? 'text-slate-400'
+                  : dataSource === 'binance' && currentTicker?.isLiveWs
+                  ? 'text-emerald-400'
+                  : 'text-amber-300'
+              }`}
+            >
               {!liveFeedModulesEnabled
                 ? 'Spot Feed Paused'
-                : dataSource === 'binance' || currentTicker?.isLiveWs
-                ? 'Binance Spot'
-                : 'Spot Sync'}
+                : dataSource === 'binance' && currentTicker?.isLiveWs
+                ? 'Binance Spot · Live Last Traded'
+                : dataSource === 'binance'
+                ? 'Binance Klines (Cached Ticker)'
+                : 'Cached / Simulated (Not Live)'}
             </span>
+            {latestCandle &&
+              Number.isFinite(latestCandle.close) &&
+              Math.abs(latestCandle.close - displayPrice) / Math.max(displayPrice, 1e-8) > 0.0001 && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span
+                    data-testid="chart-close-vs-last-label"
+                    className="font-mono text-[11px] text-slate-300 tabular-nums whitespace-nowrap"
+                  >
+                    Chart Close ${formatCryptoPrice(latestCandle.close)}
+                  </span>
+                </>
+              )}
             <span aria-hidden="true">·</span>
             <span
               data-testid="tv-ws-parity-badge"
@@ -946,8 +1222,82 @@ export const CandleChart = memo(function CandleChart({
               </div>
             )}
           </div>
+
+          <button
+            type="button"
+            data-testid="chart-export-snapshot-btn"
+            onClick={handleExportChartSnapshot}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-[#0a0e1a] px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:border-blue-500/60 hover:text-white transition-colors cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <Camera className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
+            <span>Export Snapshot</span>
+          </button>
         </div>
       </div>
+
+      {/* Trade ID Smart Chart Link & Strategy Annotation Strip */}
+      <div className="flex flex-col gap-2 border-b border-slate-800/80 bg-[#0a0e1a]/70 px-4 py-2.5 lg:flex-row lg:items-center lg:justify-between text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <label htmlFor="chart-trade-id-select" className="inline-flex items-center gap-1.5 text-slate-400 font-medium whitespace-nowrap">
+            <Link2 className="h-3.5 w-3.5 text-blue-400" aria-hidden="true" />
+            <span>Link Trade ID:</span>
+          </label>
+          <select
+            id="chart-trade-id-select"
+            data-testid="chart-trade-id-select"
+            value={linkedTradeId}
+            onChange={(e) => handleSelectLinkedTrade(e.target.value)}
+            className="rounded-md border border-slate-700 bg-[#111827] px-2.5 py-1 font-mono text-xs text-white focus:border-[#3b82f6] focus:outline-none"
+          >
+            <option value="">None (Live Market View)</option>
+            {availableTradeRecords.map((tr) => (
+              <option key={tr.tradeId} value={tr.tradeId}>
+                {tr.tradeId} · {tr.pair} {tr.direction} ({tr.recordClass === 'SIGNAL_ONLY' ? 'Signal Only' : `${tr.tradingMode} ${tr.executionStatus}`})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {linkedTrade && (
+          <div
+            data-testid="chart-linked-trade-summary"
+            className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] tabular-nums"
+          >
+            <span className={linkedTrade.direction === 'BUY' ? 'text-emerald-400 font-semibold' : 'text-rose-400 font-semibold'}>
+              {linkedTrade.direction} · {linkedTrade.strategyName}
+            </span>
+            <span className="text-slate-600" aria-hidden="true">|</span>
+            <span className="text-slate-300">
+              Signal ${formatCryptoPrice(linkedTrade.signalPrice)}
+              {linkedTrade.actualExecutionPrice !== null
+                ? ` -> Fill $${formatCryptoPrice(linkedTrade.actualExecutionPrice)}`
+                : ' (Not Executed)'}
+            </span>
+            <span className="text-slate-600" aria-hidden="true">|</span>
+            <span className="text-rose-400">SL ${formatCryptoPrice(linkedTrade.stopLoss)}</span>
+            <span className="text-emerald-400">TP ${formatCryptoPrice(linkedTrade.takeProfit)}</span>
+            {linkedTrade.realizedPnlUsd !== null && (
+              <>
+                <span className="text-slate-600" aria-hidden="true">|</span>
+                <span className={linkedTrade.realizedPnlUsd >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                  Realized {linkedTrade.realizedPnlUsd >= 0 ? '+' : ''}${linkedTrade.realizedPnlUsd.toFixed(2)} ({linkedTrade.tradingMode})
+                </span>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {snapshotNotice && (
+        <div
+          role="status"
+          data-testid="chart-snapshot-notice"
+          className="flex items-center gap-2 border-b border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-xs text-emerald-200"
+        >
+          <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span>{snapshotNotice}</span>
+        </div>
+      )}
 
       {/* TradingView Lightweight Chart Canvas */}
       <div className="relative bg-[#0d1323]">

@@ -22,7 +22,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: hybrid_core/rust_engine
-      - run: cargo test --manifest-path hybrid_core/rust_engine/Cargo.toml --all-targets --verbose
+      - run: cargo test --locked --manifest-path hybrid_core/rust_engine/Cargo.toml --all-targets --verbose
 
   python_bridge:
     name: Python IPC and bounded clone planner

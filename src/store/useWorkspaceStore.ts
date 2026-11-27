@@ -220,7 +220,7 @@ const DEFAULT_CYBER_SETTINGS: CyberVisualSettings = {
   neonGridOverlay: true,
   pulseSyncStreams: true,
   aiActivityIndicators: true,
-  wsBatchIntervalMs: 8,
+  wsBatchIntervalMs: 100,
 };
 
 function loadPersistedWorkspace(): {
@@ -275,6 +275,10 @@ function loadPersistedWorkspace(): {
     const mergedCyber: CyberVisualSettings = {
       ...DEFAULT_CYBER_SETTINGS,
       ...(parsed.cyber ?? {}),
+      wsBatchIntervalMs:
+        typeof parsed.cyber?.wsBatchIntervalMs === 'number' && parsed.cyber.wsBatchIntervalMs >= 50
+          ? parsed.cyber.wsBatchIntervalMs
+          : DEFAULT_CYBER_SETTINGS.wsBatchIntervalMs,
     };
     return {
       monitors: mergedMonitors,

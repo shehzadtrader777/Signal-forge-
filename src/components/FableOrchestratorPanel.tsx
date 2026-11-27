@@ -28,6 +28,7 @@ import type {
   IvSurfacePoint,
 } from '../lib/fableOrchestratorEngine';
 import type { WidgetLayoutContract, WidgetMetadataSegment, WidgetMetricItem } from '../lib/designSystem';
+import { apiFetch } from '../lib/apiClient';
 import {
   ForgeInteractiveButton,
   ForgeMetricStrip,
@@ -176,7 +177,7 @@ export const FableOrchestratorPanel = memo(function FableOrchestratorPanel() {
     setBusyAction('evolve');
     setNotice(null);
     try {
-      const res = await fetch('/api/fable/evolve', {
+      const res = await apiFetch('/api/fable/evolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -209,7 +210,7 @@ export const FableOrchestratorPanel = memo(function FableOrchestratorPanel() {
     setBusyAction('approve-live');
     setNotice(null);
     try {
-      const res = await fetch('/api/fable/deployment/approve-live', {
+      const res = await apiFetch('/api/fable/deployment/approve-live', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

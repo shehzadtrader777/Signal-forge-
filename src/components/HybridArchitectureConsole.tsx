@@ -30,6 +30,7 @@ import type {
   HybridArchitectureStateSnapshot,
   HybridSourceDescriptor,
 } from '../lib/hybridArchitectureServer';
+import { apiFetch } from '../lib/apiClient';
 
 type HybridTabKey = 'ORCHESTRATION' | 'BACKTEST_CHAMBER' | 'STRATEGY_DB' | 'RUST_PYTHON_CORE';
 
@@ -103,6 +104,7 @@ export const HybridArchitectureConsole = memo(function HybridArchitectureConsole
   const [liveVolatilityPct, setLiveVolatilityPct] = useState<number>(28);
   const [tickCount, setTickCount] = useState<number>(12000);
   const [backtestBusy, setBacktestBusy] = useState<boolean>(false);
+  const [pythonVerifyBusy, setPythonVerifyBusy] = useState<boolean>(false);
 
   // Selected strategy for Phase 4-6 detailed audit inspector
   const [selectedStrategyId, setSelectedStrategyId] = useState<string>('');
@@ -169,7 +171,7 @@ export const HybridArchitectureConsole = memo(function HybridArchitectureConsole
     setScalingBusy(true);
     setErrorMsg(null);
     try {
-      const res = await fetch('/api/hybrid/clones/scale', {
+      const res = await apiFetch('/api/hybrid/clones/scale', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -183,9 +185,10 @@ export const HybridArchitectureConsole = memo(function HybridArchitectureConsole
         ok: boolean;
         state?: HybridArchitectureStateSnapshot;
         message?: string;
+        error?: string;
       };
       if (!res.ok || !data.ok || !data.state) {
-        throw new Error(data.message || 'Horizontal clone scaling failed.');
+        throw new Error(data.message || data.error || 'Horizontal clone scaling failed.');
       }
       setSnapshot(data.state);
     } catch (err) {
@@ -195,11 +198,37 @@ export const HybridArchitectureConsole = memo(function HybridArchitectureConsole
     }
   }, [scaleVolatility, computeNodes, baseClonesPerNode]);
 
+  const handleVerifyPythonRuntime = useCallback(async () => {
+    setPythonVerifyBusy(true);
+    setErrorMsg(null);
+    try {
+      const res = await apiFetch('/api/hybrid/runtime/verify-python', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = (await res.json()) as {
+        ok: boolean;
+        state?: HybridArchitectureStateSnapshot;
+        error?: string;
+      };
+      if (data.state) {
+        setSnapshot(data.state);
+      }
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'Python control plane verification failed.');
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Python verification request failed.');
+    } finally {
+      setPythonVerifyBusy(false);
+    }
+  }, []);
+
   const handleRunBacktestPipeline = useCallback(async () => {
     setBacktestBusy(true);
     setErrorMsg(null);
     try {
-      const res = await fetch('/api/hybrid/backtest/run', {
+      const res = await apiFetch('/api/hybrid/backtest/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -217,9 +246,10 @@ export const HybridArchitectureConsole = memo(function HybridArchitectureConsole
         record?: TrackedStrategyRecord;
         state?: HybridArchitectureStateSnapshot;
         message?: string;
+        error?: string;
       };
       if (!res.ok || !data.ok || !data.state || !data.record) {
-        throw new Error(data.message || 'Hybrid backtest execution failed.');
+        throw new Error(data.message || data.error || 'Hybrid backtest execution failed.');
       }
       setSnapshot(data.state);
       setSelectedStrategyId(data.record.strategyId);
@@ -245,8 +275,17 @@ export const HybridArchitectureConsole = memo(function HybridArchitectureConsole
         { id: 'status', label: 'IPC', value: 'Initializing', tone: 'INFO' },
       ];
     }
+    const diag = snapshot.runtimeDiagnostics;
+    const runtimeLabel = diag
+      ? `${diag.python.available ? (diag.python.version ?? 'Python 3') : 'Python Missing'} · ${diag.rust.binaryBuilt ? 'Rust Native Binary' : diag.rust.rustcAvailable ? 'Rust Toolchain Ready' : 'Rust Docker Build / TS Fallback'}`
+      : 'Python 3.11 + Rust 2021';
     return [
-      { id: 'core', label: 'Dual-Layer Core', value: 'Python 3.11 + Rust 2021' },
+      {
+        id: 'core',
+        label: 'Runtime Probe',
+        value: runtimeLabel,
+        tone: diag?.rust.binaryBuilt ? 'NOMINAL' : 'INFO',
+      },
       {
         id: 'ipc',
         label: 'IPC RTT',
@@ -398,15 +437,53 @@ export const HybridArchitectureConsole = memo(function HybridArchitectureConsole
               </div>
 
               <div className="space-y-3 text-xs">
-                <div className="rounded-lg border border-slate-800 bg-[#0b1428] p-3">
-                  <div className="text-[11px] uppercase tracking-wider text-slate-400">
-                    Control Plane
+                <div className="rounded-lg border border-slate-800 bg-[#0b1428] p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] uppercase tracking-wider text-slate-400">
+                      Control Plane · Native Probe
+                    </span>
+                    <span
+                      className={`font-mono text-[11px] font-semibold ${
+                        snapshot.runtimeDiagnostics?.python.available
+                          ? 'text-emerald-400'
+                          : 'text-amber-300'
+                      }`}
+                    >
+                      {snapshot.runtimeDiagnostics?.python.available
+                        ? (snapshot.runtimeDiagnostics.python.version ?? 'Python 3 Active')
+                        : 'Python Not Found'}
+                    </span>
                   </div>
-                  <div className="mt-1 font-semibold text-white">
+                  <div className="font-semibold text-white">
                     {snapshot.ipcTopology.controlPlaneRuntime}
                   </div>
-                  <div className="mt-1 text-slate-400">
+                  <div className="text-slate-400">
                     Strategy orchestration · Dynamic risk feedback · Multi-agent clone dispatch
+                  </div>
+                  {snapshot.runtimeDiagnostics?.lastPythonSelfTest && (
+                    <div
+                      data-testid="hybrid-python-selftest-summary"
+                      className="rounded border border-emerald-500/30 bg-emerald-500/5 px-2.5 py-1.5 font-mono text-[11px] text-emerald-300"
+                    >
+                      Verified {snapshot.runtimeDiagnostics.lastPythonSelfTest.phase3Ticks} mmap ticks ·{' '}
+                      {snapshot.runtimeDiagnostics.lastPythonSelfTest.phase2Clones} clones ·{' '}
+                      {snapshot.runtimeDiagnostics.lastPythonSelfTest.durationMs}ms (
+                      {snapshot.runtimeDiagnostics.lastPythonSelfTest.transport})
+                    </div>
+                  )}
+                  <div className="pt-1">
+                    <ForgeInteractiveButton
+                      label={
+                        pythonVerifyBusy
+                          ? 'Running Python Self-Test...'
+                          : 'Verify Python Control Plane'
+                      }
+                      intent="secondary"
+                      onClick={handleVerifyPythonRuntime}
+                      disabled={pythonVerifyBusy || !snapshot.runtimeDiagnostics?.python.available}
+                      testId="hybrid-verify-python-btn"
+                      icon={<Play className="h-3.5 w-3.5" aria-hidden="true" />}
+                    />
                   </div>
                 </div>
 
@@ -416,7 +493,9 @@ export const HybridArchitectureConsole = memo(function HybridArchitectureConsole
                       IPC Bridge
                     </span>
                     <span className="font-mono tabular-nums text-cyan-300 font-semibold">
-                      {snapshot.ipcTopology.roundTripLatencyNs} ns RTT
+                      {snapshot.runtimeDiagnostics?.rust.ipcSocketActive
+                        ? `${snapshot.ipcTopology.roundTripLatencyNs} ns RTT (UDS Live)`
+                        : 'TS/Python Deterministic Fallback'}
                     </span>
                   </div>
                   <div className="mt-1 font-mono text-[11px] text-slate-200">
@@ -427,15 +506,31 @@ export const HybridArchitectureConsole = memo(function HybridArchitectureConsole
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-slate-800 bg-[#0b1428] p-3">
-                  <div className="text-[11px] uppercase tracking-wider text-slate-400">
-                    Execution Engine
+                <div className="rounded-lg border border-slate-800 bg-[#0b1428] p-3 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] uppercase tracking-wider text-slate-400">
+                      Execution Engine · Native Probe
+                    </span>
+                    <span
+                      className={`font-mono text-[11px] font-semibold ${
+                        snapshot.runtimeDiagnostics?.rust.binaryBuilt
+                          ? 'text-emerald-400'
+                          : 'text-amber-300'
+                      }`}
+                    >
+                      {snapshot.runtimeDiagnostics?.rust.binaryBuilt
+                        ? 'Rust Release Binary Ready'
+                        : snapshot.runtimeDiagnostics?.rust.rustcAvailable
+                          ? 'Rustc Detected (Unbuilt)'
+                          : 'Rustc Absent in Sandbox'}
+                    </span>
                   </div>
-                  <div className="mt-1 font-semibold text-white">
+                  <div className="font-semibold text-white">
                     {snapshot.ipcTopology.executionCoreRuntime}
                   </div>
-                  <div className="mt-1 text-slate-400">
-                    Zero-copy 44-byte TickFrame mmap · L2 order book matching · Slippage guard
+                  <div className="text-slate-400 leading-relaxed">
+                    {snapshot.runtimeDiagnostics?.rust.remediationSummary ??
+                      'Zero-copy 44-byte TickFrame mmap · L2 order book matching · Slippage guard'}
                   </div>
                 </div>
               </div>

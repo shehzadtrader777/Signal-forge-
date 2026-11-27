@@ -95,8 +95,9 @@ export const TelegramDualStreamMonitor = memo(function TelegramDualStreamMonitor
   useEffect(() => {
     if (!appLiveEnabled) return;
     const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       fetchStreamStatus();
-    }, 5000);
+    }, 15_000);
     return () => window.clearInterval(id);
   }, [appLiveEnabled, fetchStreamStatus]);
 
@@ -156,14 +157,16 @@ export const TelegramDualStreamMonitor = memo(function TelegramDualStreamMonitor
         return;
       }
       const webhookOk = Boolean(data.processedSignal?.webhookDispatched);
-      const delivered = Boolean(data.structuredSignal?.deliveredViaBot);
+      const delivered = Boolean(data.delivered || data.providerAccepted);
       setFeedback({
-        ok: true,
-        text: webhookOk
-          ? `Transmitted structured ${signalPair} ${signalDirection} card via Make.com Webhook to channel ${status?.publicChannel.chatId || '-1008928895086'} (HTTP ${data.processedSignal?.webhookHttpStatus}).`
+        ok: delivered,
+        text: data.suppressed
+          ? `Signal recorded locally (suppressed): ${data.deliveryError || 'Public Signal Gate withheld external dispatch.'}`
+          : webhookOk
+          ? `Accepted by Make.com Webhook for channel ${status?.publicChannel.chatId || 'Unconfigured'} (HTTP ${data.processedSignal?.webhookHttpStatus}).`
           : delivered
-          ? `Dispatched structured ${signalPair} ${signalDirection} alert to Signal Forge (${status?.publicChannel.chatId || '-1008928895086'}).`
-          : `Recorded structured ${signalPair} ${signalDirection} alert in Signal Forge stream (${data.structuredSignal?.errorDetail || 'fallback queue active'}).`,
+          ? `Delivered ${signalPair} ${signalDirection} alert to channel ${status?.publicChannel.chatId || 'Unconfigured'}.`
+          : `Delivery failed for ${signalPair} ${signalDirection}: ${data.deliveryError || data.structuredSignal?.errorDetail || 'Provider rejected request.'}`,
       });
     } catch {
       setFeedback({ ok: false, text: 'Network error dispatching structured signal alert.' });
@@ -209,11 +212,14 @@ export const TelegramDualStreamMonitor = memo(function TelegramDualStreamMonitor
           text: `Spam Filter Blocked [${rec.spamVerdict.reasonCode}]: ${rec.spamVerdict.reason}`,
         });
       } else {
+        const accepted = Boolean(data.delivered || data.providerAccepted);
         setFeedback({
-          ok: true,
-          text: rec.webhookDispatched
-            ? `Formatted & transmitted ${rec.symbol} ${rec.direction} signal card to webhook (HTTP ${rec.webhookHttpStatus} · ${rec.webhookLatencyMs}ms) → Chat ${rec.targetChatId}.`
-            : `Formatted ${rec.symbol} ${rec.direction} signal card (${rec.webhookError || 'Webhook queued'}).`,
+          ok: accepted,
+          text: data.suppressed
+            ? `Formatted ${rec.symbol} ${rec.direction} card locally (suppressed): ${rec.suppressionReason || rec.webhookError || 'Gate locked.'}`
+            : accepted
+            ? `Accepted ${rec.symbol} ${rec.direction} signal card (${rec.deliveryState || 'PROVIDER_ACCEPTED'}${rec.webhookHttpStatus ? ` · HTTP ${rec.webhookHttpStatus}` : ''}) → ${rec.targetChatId}.`
+            : `Delivery failed for ${rec.symbol} ${rec.direction}: ${rec.webhookError || 'Provider did not accept payload.'}`,
         });
       }
     } catch {
@@ -291,9 +297,14 @@ export const TelegramDualStreamMonitor = memo(function TelegramDualStreamMonitor
           text: `Spam Filter Blocked Duplicate Milestone [${updated.spamVerdict.reasonCode}]: ${updated.spamVerdict.reason}`,
         });
       } else {
+        const accepted = Boolean(data.delivered || data.providerAccepted);
         setFeedback({
-          ok: true,
-          text: `Transmitted ${updated.symbol} ${ordered.join('+')} milestone (Final P&L ${pnlUsd >= 0 ? '+' : '-'}$${Math.abs(pnlUsd).toFixed(2)} / ${pctMove >= 0 ? '+' : ''}${pctMove.toFixed(2)}%) via Webhook ${updated.webhookDispatched ? `HTTP ${updated.webhookHttpStatus}` : 'queue'}.`,
+          ok: accepted,
+          text: data.suppressed
+            ? `Recorded ${updated.symbol} ${ordered.join('+')} milestone locally (suppressed): ${updated.suppressionReason || 'Public gate locked.'}`
+            : accepted
+            ? `Delivered ${updated.symbol} ${ordered.join('+')} milestone (P&L ${pnlUsd >= 0 ? '+' : '-'}$${Math.abs(pnlUsd).toFixed(2)} / ${pctMove >= 0 ? '+' : ''}${pctMove.toFixed(2)}%) · ${updated.deliveryState || 'ACCEPTED'}.`
+            : `Milestone delivery failed for ${updated.symbol}: ${updated.webhookError || 'Provider error.'}`,
         });
       }
     } catch {
@@ -466,11 +477,12 @@ export const TelegramDualStreamMonitor = memo(function TelegramDualStreamMonitor
             <span>Telegram Webhook &amp; Dual-Stream Router</span>
             <span aria-hidden="true">·</span>
             <span className="font-mono text-slate-300">
-              Bot {status?.botConfigured ? status.maskedToken : 'Unconfigured'}
+              Bot {status?.botHealthState || (status?.botConfigured ? 'CONFIGURED_NOT_VERIFIED' : 'UNCONFIGURED')}
+              {status?.botUsername ? ` (${status.botUsername})` : ''}
             </span>
             <span aria-hidden="true">·</span>
             <span className="font-mono text-slate-300">
-              Channel {status?.publicChannel.chatId || '-1008928895086'}
+              Channel {status?.publicChannel.chatId || 'Unconfigured'}
             </span>
           </div>
           <h2 className="mt-1 font-display text-xl font-bold text-white tracking-tight">
@@ -719,35 +731,42 @@ export const TelegramDualStreamMonitor = memo(function TelegramDualStreamMonitor
           <div className="grid grid-cols-2 gap-4 rounded-lg border border-slate-800 bg-[#0d1323] px-4 py-3 lg:grid-cols-5">
             <div className="min-w-0">
               <div className="text-[11px] text-slate-400">Outbound Webhook Relay</div>
-              <div className="mt-0.5 font-mono text-xs font-semibold text-emerald-400 truncate">
+              <div className="mt-0.5 font-mono text-xs font-semibold text-slate-200 truncate">
                 {processorStatus?.webhookConfigured ? processorStatus.maskedWebhookUrl : 'Not configured'}
               </div>
             </div>
             <div className="min-w-0">
               <div className="text-[11px] text-slate-400">Target Channel Chat ID</div>
               <div className="mt-0.5 font-mono text-xs font-semibold text-white tabular-nums">
-                {processorStatus?.targetChatId || '-1008928895086'}
+                {processorStatus?.targetChatId || 'Unconfigured'}
               </div>
             </div>
             <div className="min-w-0">
-              <div className="text-[11px] text-slate-400">Cards Transmitted</div>
+              <div className="text-[11px] text-slate-400">Accepted / Delivered</div>
               <div className="mt-0.5 font-mono text-xs font-semibold text-white tabular-nums">
-                {processorStatus?.stats.totalTransmitted ?? 0} sent ·{' '}
                 <span className="text-emerald-400">
-                  {processorStatus?.stats.totalWebhookDelivered ?? 0} HTTP 200
+                  {(processorStatus?.lifecycleCounters?.providerAccepted ?? 0) +
+                    (processorStatus?.lifecycleCounters?.deliveredWhenVerifiable ?? 0)}{' '}
+                  accepted
+                </span>{' '}
+                ·{' '}
+                <span className="text-rose-400">
+                  {processorStatus?.lifecycleCounters?.failed ?? 0} failed
                 </span>
               </div>
             </div>
             <div className="min-w-0">
-              <div className="text-[11px] text-slate-400">Spam Filter Discarded</div>
+              <div className="text-[11px] text-slate-400">Suppressed / Spam Blocked</div>
               <div className="mt-0.5 font-mono text-xs font-semibold text-amber-300 tabular-nums">
-                {processorStatus?.stats.totalSpamFiltered ?? 0} blocked
+                {processorStatus?.lifecycleCounters?.suppressed ?? 0} suppressed ·{' '}
+                {processorStatus?.stats.totalSpamFiltered ?? 0} spam
               </div>
             </div>
             <div className="min-w-0">
-              <div className="text-[11px] text-slate-400">TP &amp; Final P&amp;L Updates</div>
+              <div className="text-[11px] text-slate-400">Generated / Retrying</div>
               <div className="mt-0.5 font-mono text-xs font-semibold text-blue-400 tabular-nums">
-                {processorStatus?.stats.totalMilestoneUpdates ?? 0} milestones
+                {processorStatus?.lifecycleCounters?.signalGenerated ?? 0} gen ·{' '}
+                {processorStatus?.lifecycleCounters?.retrying ?? 0} retrying
               </div>
             </div>
           </div>
@@ -797,8 +816,8 @@ export const TelegramDualStreamMonitor = memo(function TelegramDualStreamMonitor
 
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-mono text-[11px] text-slate-400">
-                Routing → Webhook {processorStatus?.maskedWebhookUrl || 'hook.us2.make.com'} · Chat{' '}
-                {processorStatus?.targetChatId || '-1008928895086'}
+                Routing → Webhook {processorStatus?.maskedWebhookUrl || 'Not configured'} · Chat{' '}
+                {processorStatus?.targetChatId || 'Unconfigured'}
               </span>
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -851,7 +870,7 @@ export const TelegramDualStreamMonitor = memo(function TelegramDualStreamMonitor
                     <td colSpan={9} className="py-7 text-center text-slate-400">
                       No signal cards transmitted via webhook yet. Submit an alert above to format,
                       spam-check, and relay directly to Chat{' '}
-                      {processorStatus?.targetChatId || '-1008928895086'}.
+                      {processorStatus?.targetChatId || 'Unconfigured'}.
                     </td>
                   </tr>
                 ) : (
@@ -1433,7 +1452,7 @@ export const TelegramDualStreamMonitor = memo(function TelegramDualStreamMonitor
                 Configures automated 24-hour system health digests directed exclusively to the
                 developer&apos;s private Telegram chat ID (strictly isolated from public channel{' '}
                 <code className="font-mono text-slate-200">
-                  {status?.publicChannel.chatId || '-1008928895086'}
+                  {status?.publicChannel.chatId || 'Unconfigured'}
                 </code>
                 ).
               </p>

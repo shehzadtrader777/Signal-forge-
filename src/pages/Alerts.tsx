@@ -373,7 +373,7 @@ export function Alerts() {
                     Strict 3-Hour Batched Signal Email Digest
                   </h3>
                   <p className="mt-0.5 text-slate-400">
-                    Consolidates all queued high-confidence signal alerts and Binance Top Movers into one scheduled digest every 3 hours with direct WhatsApp desk link (<span className="font-mono">https://wa.me/923015083557</span>).
+                    Consolidates all queued high-confidence signal alerts and Binance Top Movers into one scheduled digest every 3 hours with configured support desk link.
                   </p>
                 </div>
                 <button

@@ -79,7 +79,7 @@ test('RBAC strictly denies Test Console and debugging endpoints for Guests (401)
   const adminPrincipal: SubscriptionPrincipal = {
     authenticated: true,
     uid: 'uid_admin_1',
-    email: 'dillwalaa.69@gmail.com',
+    email: 'owner-test@example.com',
     emailVerified: true,
     tier: 'PREMIUM_INSTITUTIONAL',
     status: 'ACTIVE',
@@ -87,7 +87,7 @@ test('RBAC strictly denies Test Console and debugging endpoints for Guests (401)
     entitlementId: 'ent_admin',
     planLabel: 'Admin',
   };
-  const adminId = buildRbacIdentity(adminPrincipal);
+  const adminId = buildRbacIdentity(adminPrincipal, ['owner-test@example.com']);
   assert.equal(adminId.role, 'SUPER_ADMIN');
   assert.equal(adminId.canAccessTestConsole, true);
   const adminDecision = evaluateRbacAccess(adminId, 'DEBUG_ENDPOINTS_ACCESS');

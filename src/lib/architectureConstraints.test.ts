@@ -77,7 +77,8 @@ test('package.json locks dependency versions without caret/tilde ranges and prov
   };
 
   assert.ok(
-    pkg.scripts?.verify?.includes('tsx --test') &&
+    pkg.scripts?.verify?.includes('npm run test') &&
+      pkg.scripts?.test?.includes('node --import tsx --test') &&
       pkg.scripts?.verify?.includes('npm run lint') &&
       pkg.scripts?.verify?.includes('npm run build'),
     'package.json scripts.verify must run unit tests, type checks, and production build together'
@@ -171,12 +172,11 @@ test('core logic, shared types, and Forge Capital UI modules maintain zero expli
 test('.github/workflows/ci.yml exists and enforces all Five Phases of the Hardening Sequence including Tripwire gate', () => {
   const ciWorkflow = readWorkspaceFile('.github/workflows/ci.yml');
   for (const requiredStep of [
-    'npx tsx --test src/lib/architectureConstraints.test.ts',
-    'npx tsx --test src/lib/pitFeed.test.ts src/lib/fillModel.test.ts src/lib/backtest.test.ts',
+    'node --import tsx --test src/lib/architectureConstraints.test.ts',
+    'node --import tsx --test src/lib/pitFeed.test.ts src/lib/fillModel.test.ts src/lib/backtest.test.ts',
     'npm run lint',
-    'npm run test',
     'npm run build',
-    'npm run verify',
+    'sh scripts/verify-with-rust.sh hybrid_core/rust_engine/target/debug/signal_forge_rust_engine',
   ]) {
     assert.ok(
       ciWorkflow.includes(requiredStep),
@@ -322,6 +322,3 @@ test('rr_single_compute: planned_rr is computed ONCE in Check 1 (signal_emission
     );
   }
 });
-
-
-

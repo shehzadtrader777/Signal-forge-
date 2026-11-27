@@ -113,8 +113,9 @@ export const MultiAgentDebateAndSelfHealingPanel = memo(
     useEffect(() => {
       if (!appLiveEnabled) return;
       const id = window.setInterval(() => {
+        if (typeof document !== 'undefined' && document.hidden) return;
         void fetchHealth();
-      }, 10_000);
+      }, 15_000);
       return () => window.clearInterval(id);
     }, [appLiveEnabled, fetchHealth]);
 

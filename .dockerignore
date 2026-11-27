@@ -5,3 +5,14 @@ dist
 .env.local
 .playwright-cli
 *.log
+
+.env.*
+!.env.example
+.data
+.backups
+.aistudio
+**/__pycache__
+**/target
+*.zip
+*.pem
+*.key

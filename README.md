@@ -41,12 +41,12 @@ The current TypeScript application uses **React, Vite, Express, Firebase, Tailwi
 
 ## Local development
 
-**Prerequisites:** Node.js and npm compatible with the checked-in lockfile; use a supported Node.js version for Vite 8.
+Use Node.js 22 and Bun for local development. Full verification also requires Python 3 and a stable Rust toolchain.
 
 ```bash
 git clone https://github.com/shehzadtrader777/Signal-forge-.git
 cd Signal-forge-
-npm ci
+bun install --frozen-lockfile
 cp .env.example .env
 npm run dev
 ```
@@ -55,15 +55,14 @@ The example environment file is a **template, not configured credentials**. Leav
 
 ### Verification
 
-```bash
-npm run test
-npm run lint
-npm run build
-# or run the repository's combined script
-npm run verify
-```
+On a host that supports Unix domain sockets, build the Rust engine and run the combined check against a temporary engine socket.
 
-Passing these commands confirms only the checks they run. It does not prove historical data integrity, exchange connectivity, security readiness or successful production deployment.
+```bash
+cargo test --locked --manifest-path hybrid_core/rust_engine/Cargo.toml --all-targets
+cargo build --locked --manifest-path hybrid_core/rust_engine/Cargo.toml
+python3 -m unittest discover -s hybrid_core/python_control_plane -p 'test_*.py' -v
+sh scripts/verify-with-rust.sh hybrid_core/rust_engine/target/debug/signal_forge_rust_engine
+```
 
 ## Roadmap
 

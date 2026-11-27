@@ -1,5 +1,7 @@
 import { BaseSignalPipelineModule } from './abstractPipeline';
 import { computeDiscrepancyBps } from './priceSyncArbiter';
+import type { MarketDataQuality } from './coinGeckoClient';
+import type { AgentDataProvenance } from './smartMarketDataRouter';
 
 export type SyncedAgentId =
   | 'AI_COORDINATOR'
@@ -10,7 +12,12 @@ export type SyncedAgentId =
   | 'RISK_KERNEL'
   | 'EXECUTION_ROUTER';
 
-export type AgentSyncHealth = 'SYNCHRONIZED' | 'RECONCILING' | 'DRIFT_QUARANTINED';
+export type AgentSyncHealth =
+  | 'SYNCHRONIZED'
+  | 'RECONCILING'
+  | 'DRIFT_QUARANTINED'
+  | 'DEGRADED_FALLBACK'
+  | 'EXECUTION_PAUSED_STALE';
 
 export interface AgentSyncRecord {
   readonly agentId: SyncedAgentId;
@@ -24,12 +31,22 @@ export interface AgentSyncRecord {
   readonly status: AgentSyncHealth;
   readonly driftCorrectionsCount: number;
   readonly lastSyncedAtMs: number;
+  readonly dataProvenance: AgentDataProvenance;
+  readonly dataQuality: MarketDataQuality;
+  readonly providerName: string;
+  readonly dataAgeMs: number | null;
+  readonly executionAllowed: boolean;
 }
 
 export interface AgentSyncCommitInput {
   readonly symbol: string;
   readonly authoritativePrice: number;
   readonly epoch: number;
+  readonly dataProvenance?: AgentDataProvenance;
+  readonly dataQuality?: MarketDataQuality;
+  readonly providerName?: string;
+  readonly dataAgeMs?: number | null;
+  readonly executionAllowed?: boolean;
   readonly agentReports?: Partial<
     Record<
       SyncedAgentId,
@@ -53,6 +70,12 @@ export interface MultiAgentSyncSnapshot {
   readonly totalDriftCorrections: number;
   readonly consensusHash: string;
   readonly allAgentsLocked: boolean;
+  readonly liveDataSynchronized: boolean;
+  readonly dataProvenance: AgentDataProvenance;
+  readonly dataQuality: MarketDataQuality;
+  readonly providerName: string;
+  readonly dataAgeMs: number | null;
+  readonly executionAllowed: boolean;
   readonly generatedAtIso: string;
   readonly agents: readonly AgentSyncRecord[];
 }
@@ -82,15 +105,53 @@ function computeAgentStateHash(
   agentId: SyncedAgentId,
   epoch: number,
   symbol: string,
-  price: number
+  price: number,
+  provenance: AgentDataProvenance
 ): string {
-  return fnv1aHex(`${agentId}|${epoch}|${symbol.toUpperCase()}|${price.toFixed(6)}`);
+  return fnv1aHex(`${agentId}|${epoch}|${symbol.toUpperCase()}|${price.toFixed(6)}|${provenance}`);
+}
+
+function resolveDefaultDataQuality(provenance: AgentDataProvenance): MarketDataQuality {
+  switch (provenance) {
+    case 'LIVE_EXCHANGE':
+      return 'LIVE';
+    case 'CACHED_EXCHANGE':
+      return 'CACHED';
+    case 'REFERENCE_AGGREGATED':
+      return 'DELAYED';
+    case 'HISTORICAL_BACKTEST':
+      return 'CACHED';
+    case 'SIMULATED_FIXTURE':
+      return 'SIMULATED';
+    case 'STALE_OR_UNAVAILABLE':
+    default:
+      return 'UNAVAILABLE';
+  }
+}
+
+function resolveAgentStatusForProvenance(
+  provenance: AgentDataProvenance,
+  drifted: boolean
+): AgentSyncHealth {
+  if (provenance === 'STALE_OR_UNAVAILABLE') {
+    return 'EXECUTION_PAUSED_STALE';
+  }
+  if (
+    provenance === 'SIMULATED_FIXTURE' ||
+    provenance === 'REFERENCE_AGGREGATED' ||
+    provenance === 'CACHED_EXCHANGE' ||
+    provenance === 'HISTORICAL_BACKTEST'
+  ) {
+    return 'DEGRADED_FALLBACK';
+  }
+  return drifted ? 'RECONCILING' : 'SYNCHRONIZED';
 }
 
 /**
  * Authoritative Multi-Agent State Synchronization & Anti-Drift Engine.
- * Guarantees monotonic epoch progression and automatically reconciles any agent whose
- * reported price or epoch drifts from the Certified Primary Source / Binance WS anchor.
+ * Guarantees monotonic epoch progression, tracks exact market data provenance,
+ * and refuses to report live SYNCHRONIZED status when backed by fallback,
+ * simulated, reference-only, or stale/unavailable feeds.
  */
 export class MultiAgentStateSyncEngine extends BaseSignalPipelineModule<
   AgentSyncCommitInput,
@@ -98,7 +159,12 @@ export class MultiAgentStateSyncEngine extends BaseSignalPipelineModule<
 > {
   private globalEpoch = 0;
   private activeSymbol = 'BTCUSDT';
-  private activePrice = 91500;
+  private activePrice = 0;
+  private activeProvenance: AgentDataProvenance = 'STALE_OR_UNAVAILABLE';
+  private activeQuality: MarketDataQuality = 'UNAVAILABLE';
+  private activeProvider = 'none';
+  private activeDataAgeMs: number | null = null;
+  private activeExecutionAllowed = false;
   private readonly driftThresholdBps: number;
   private readonly records = new Map<SyncedAgentId, AgentSyncRecord>();
   private totalDriftCorrections = 0;
@@ -113,13 +179,24 @@ export class MultiAgentStateSyncEngine extends BaseSignalPipelineModule<
         agentLabel: entry.label,
         epoch: 0,
         symbol: this.activeSymbol,
-        authoritativePrice: this.activePrice,
-        reportedPrice: this.activePrice,
+        authoritativePrice: 0,
+        reportedPrice: 0,
         driftBps: 0,
-        stateHash: computeAgentStateHash(entry.id, 0, this.activeSymbol, this.activePrice),
-        status: 'SYNCHRONIZED',
+        stateHash: computeAgentStateHash(
+          entry.id,
+          0,
+          this.activeSymbol,
+          0,
+          'STALE_OR_UNAVAILABLE'
+        ),
+        status: 'EXECUTION_PAUSED_STALE',
         driftCorrectionsCount: 0,
         lastSyncedAtMs: now,
+        dataProvenance: 'STALE_OR_UNAVAILABLE',
+        dataQuality: 'UNAVAILABLE',
+        providerName: 'none',
+        dataAgeMs: null,
+        executionAllowed: false,
       });
     }
   }
@@ -127,16 +204,34 @@ export class MultiAgentStateSyncEngine extends BaseSignalPipelineModule<
   protected executeCore(input: AgentSyncCommitInput): MultiAgentSyncSnapshot {
     const nowMs = input.nowMs ?? Date.now();
     const safeSymbol = input.symbol.trim().toUpperCase() || this.activeSymbol;
-    const safePrice =
-      Number.isFinite(input.authoritativePrice) && input.authoritativePrice > 0
-        ? input.authoritativePrice
-        : this.activePrice;
+    const hasValidPrice = Number.isFinite(input.authoritativePrice) && input.authoritativePrice > 0;
+    const provenance: AgentDataProvenance =
+      input.dataProvenance ?? (hasValidPrice ? 'LIVE_EXCHANGE' : 'STALE_OR_UNAVAILABLE');
+    const quality: MarketDataQuality = input.dataQuality ?? resolveDefaultDataQuality(provenance);
+    const providerName =
+      input.providerName ?? (provenance === 'LIVE_EXCHANGE' ? 'binance_spot' : 'none');
+    const dataAgeMs = input.dataAgeMs !== undefined ? input.dataAgeMs : null;
+    const executionAllowed =
+      input.executionAllowed !== undefined
+        ? Boolean(input.executionAllowed) && provenance === 'LIVE_EXCHANGE' && hasValidPrice
+        : provenance === 'LIVE_EXCHANGE' && hasValidPrice;
+
+    const safePrice = hasValidPrice
+      ? input.authoritativePrice
+      : provenance === 'STALE_OR_UNAVAILABLE'
+      ? 0
+      : this.activePrice;
 
     // Strictly monotonic epoch advancement prevents out-of-order state regression
     const nextEpoch = Math.max(this.globalEpoch + 1, Math.floor(input.epoch));
     this.globalEpoch = nextEpoch;
     this.activeSymbol = safeSymbol;
     this.activePrice = safePrice;
+    this.activeProvenance = provenance;
+    this.activeQuality = quality;
+    this.activeProvider = providerName;
+    this.activeDataAgeMs = dataAgeMs;
+    this.activeExecutionAllowed = executionAllowed;
 
     for (const entry of AGENT_DIRECTORY) {
       const prev = this.records.get(entry.id);
@@ -149,7 +244,10 @@ export class MultiAgentStateSyncEngine extends BaseSignalPipelineModule<
           : safePrice;
       const reportedEpoch = report?.reportedEpoch ?? nextEpoch;
 
-      const rawDriftBps = computeDiscrepancyBps(rawReportedPrice, safePrice);
+      const rawDriftBps =
+        safePrice > 0 && rawReportedPrice > 0
+          ? computeDiscrepancyBps(rawReportedPrice, safePrice)
+          : 0;
       const epochStale = reportedEpoch < nextEpoch;
       const drifted = rawDriftBps > this.driftThresholdBps || epochStale;
 
@@ -157,9 +255,14 @@ export class MultiAgentStateSyncEngine extends BaseSignalPipelineModule<
         this.totalDriftCorrections += 1;
       }
 
-      // Immediately re-anchor drifted or stale agents to authoritative price & epoch (0.0 bps residual)
       const reconciledPrice = safePrice;
-      const nextHash = computeAgentStateHash(entry.id, nextEpoch, safeSymbol, reconciledPrice);
+      const nextHash = computeAgentStateHash(
+        entry.id,
+        nextEpoch,
+        safeSymbol,
+        reconciledPrice,
+        provenance
+      );
 
       this.records.set(entry.id, {
         agentId: entry.id,
@@ -170,9 +273,14 @@ export class MultiAgentStateSyncEngine extends BaseSignalPipelineModule<
         reportedPrice: reconciledPrice,
         driftBps: 0,
         stateHash: nextHash,
-        status: drifted ? 'RECONCILING' : 'SYNCHRONIZED',
+        status: resolveAgentStatusForProvenance(provenance, drifted),
         driftCorrectionsCount: (prev?.driftCorrectionsCount ?? 0) + (drifted ? 1 : 0),
         lastSyncedAtMs: nowMs,
+        dataProvenance: provenance,
+        dataQuality: quality,
+        providerName,
+        dataAgeMs,
+        executionAllowed,
       });
     }
 
@@ -181,22 +289,64 @@ export class MultiAgentStateSyncEngine extends BaseSignalPipelineModule<
 
   /**
    * Forces immediate deterministic reconciliation across all 7 agents to the
-   * latest authoritative price & epoch, clearing any RECONCILING status back to SYNCHRONIZED.
+   * latest authoritative price & epoch, preserving honest data provenance.
    */
-  forceReconcileAll(symbol?: string, authoritativePrice?: number, nowMs = Date.now()): MultiAgentSyncSnapshot {
+  forceReconcileAll(
+    symbol?: string,
+    authoritativePrice?: number,
+    nowMs = Date.now(),
+    provenanceOverride?: {
+      dataProvenance?: AgentDataProvenance;
+      dataQuality?: MarketDataQuality;
+      providerName?: string;
+      dataAgeMs?: number | null;
+      executionAllowed?: boolean;
+    }
+  ): MultiAgentSyncSnapshot {
     const targetSymbol = symbol ? symbol.trim().toUpperCase() : this.activeSymbol;
-    const targetPrice =
-      authoritativePrice !== undefined && Number.isFinite(authoritativePrice) && authoritativePrice > 0
-        ? authoritativePrice
-        : this.activePrice;
+    const hasPrice =
+      authoritativePrice !== undefined &&
+      Number.isFinite(authoritativePrice) &&
+      authoritativePrice > 0;
+    const targetPrice = hasPrice ? authoritativePrice : this.activePrice;
+
+    const provenance: AgentDataProvenance =
+      provenanceOverride?.dataProvenance ??
+      (hasPrice ? 'LIVE_EXCHANGE' : this.activeProvenance);
+    const quality: MarketDataQuality =
+      provenanceOverride?.dataQuality ?? resolveDefaultDataQuality(provenance);
+    const providerName =
+      provenanceOverride?.providerName ??
+      (provenance === 'LIVE_EXCHANGE' ? 'binance_spot' : this.activeProvider);
+    const dataAgeMs =
+      provenanceOverride?.dataAgeMs !== undefined
+        ? provenanceOverride.dataAgeMs
+        : this.activeDataAgeMs;
+    const executionAllowed =
+      provenanceOverride?.executionAllowed !== undefined
+        ? Boolean(provenanceOverride.executionAllowed) && provenance === 'LIVE_EXCHANGE' && targetPrice > 0
+        : provenance === 'LIVE_EXCHANGE' && targetPrice > 0;
 
     this.globalEpoch += 1;
     this.activeSymbol = targetSymbol;
     this.activePrice = targetPrice;
+    this.activeProvenance = provenance;
+    this.activeQuality = quality;
+    this.activeProvider = providerName;
+    this.activeDataAgeMs = dataAgeMs;
+    this.activeExecutionAllowed = executionAllowed;
+
+    const targetStatus = resolveAgentStatusForProvenance(provenance, false);
 
     for (const entry of AGENT_DIRECTORY) {
       const prev = this.records.get(entry.id);
-      const nextHash = computeAgentStateHash(entry.id, this.globalEpoch, targetSymbol, targetPrice);
+      const nextHash = computeAgentStateHash(
+        entry.id,
+        this.globalEpoch,
+        targetSymbol,
+        targetPrice,
+        provenance
+      );
       this.records.set(entry.id, {
         agentId: entry.id,
         agentLabel: entry.label,
@@ -206,9 +356,14 @@ export class MultiAgentStateSyncEngine extends BaseSignalPipelineModule<
         reportedPrice: targetPrice,
         driftBps: 0,
         stateHash: nextHash,
-        status: 'SYNCHRONIZED',
+        status: targetStatus,
         driftCorrectionsCount: prev?.driftCorrectionsCount ?? 0,
         lastSyncedAtMs: nowMs,
+        dataProvenance: provenance,
+        dataQuality: quality,
+        providerName,
+        dataAgeMs,
+        executionAllowed,
       });
     }
 
@@ -218,9 +373,13 @@ export class MultiAgentStateSyncEngine extends BaseSignalPipelineModule<
   getSnapshot(nowMs = Date.now()): MultiAgentSyncSnapshot {
     const agents = AGENT_DIRECTORY.map((entry) => this.records.get(entry.id)!);
     const maxDriftBps = agents.reduce((max, rec) => Math.max(max, rec.driftBps), 0);
-    const synchronizedAgents = agents.filter(
-      (rec) => rec.epoch === this.globalEpoch && rec.driftBps <= this.driftThresholdBps
-    ).length;
+    const liveDataSynchronized =
+      this.activeProvenance === 'LIVE_EXCHANGE' && this.activePrice > 0 && this.globalEpoch > 0;
+    const synchronizedAgents = liveDataSynchronized
+      ? agents.filter(
+          (rec) => rec.epoch === this.globalEpoch && rec.driftBps <= this.driftThresholdBps
+        ).length
+      : 0;
 
     const consensusInput = agents
       .map((a) => `${a.agentId}:${a.epoch}:${a.stateHash}`)
@@ -237,7 +396,13 @@ export class MultiAgentStateSyncEngine extends BaseSignalPipelineModule<
       totalAgents: agents.length,
       totalDriftCorrections: this.totalDriftCorrections,
       consensusHash,
-      allAgentsLocked: synchronizedAgents === agents.length && maxDriftBps === 0,
+      allAgentsLocked: liveDataSynchronized && synchronizedAgents === agents.length && maxDriftBps === 0,
+      liveDataSynchronized,
+      dataProvenance: this.activeProvenance,
+      dataQuality: this.activeQuality,
+      providerName: this.activeProvider,
+      dataAgeMs: this.activeDataAgeMs,
+      executionAllowed: this.activeExecutionAllowed,
       generatedAtIso: new Date(nowMs).toISOString(),
       agents,
     };

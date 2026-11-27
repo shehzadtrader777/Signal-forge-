@@ -14,6 +14,19 @@ interface SignalDetailModalProps {
   onOpenRiskCalc: (signal: TradingSignal) => void;
 }
 
+const MODAL_DRAG_CONSTRAINTS = { top: 0, bottom: 0 } as const;
+const MODAL_DRAG_ELASTIC = { top: 0.08, bottom: 0.35 } as const;
+const MODAL_BACKDROP_INITIAL = { opacity: 0 } as const;
+const MODAL_BACKDROP_ANIMATE = { opacity: 1 } as const;
+const MODAL_BACKDROP_EXIT = { opacity: 0 } as const;
+const MODAL_BACKDROP_TRANSITION = { duration: 0.18 } as const;
+const MODAL_PANEL_INITIAL = { opacity: 0, y: 12, scale: 0.97 } as const;
+const MODAL_PANEL_ANIMATE = { opacity: 1, y: 0, scale: 1 } as const;
+const MODAL_PANEL_EXIT = { opacity: 0, y: 10, scale: 0.97 } as const;
+const MODAL_PANEL_TRANSITION = { type: 'spring', stiffness: 420, damping: 34, mass: 0.72 } as const;
+const MODAL_TAP_92 = { scale: 0.92 } as const;
+const MODAL_TAP_96 = { scale: 0.96 } as const;
+
 export const SignalDetailModal = memo(function SignalDetailModal({
   signal,
   layoutId,
@@ -45,22 +58,25 @@ export const SignalDetailModal = memo(function SignalDetailModal({
         >
           {/* Backdrop */}
           <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.18 }}
+            initial={MODAL_BACKDROP_INITIAL}
+            animate={MODAL_BACKDROP_ANIMATE}
+            exit={MODAL_BACKDROP_EXIT}
+            transition={MODAL_BACKDROP_TRANSITION}
             onClick={onClose}
             className="fixed inset-0 bg-[#02050d]/80 backdrop-blur-sm"
             aria-hidden="true"
           />
 
-          {/* Shared Element Morph Container */}
+          {/* Shared Element Detail Container (compositor-only spring without duplicate layoutId conflict) */}
           <motion.article
-            layoutId={layoutId}
-            transition={{ type: 'spring', stiffness: 420, damping: 34, mass: 0.72 }}
+            key={layoutId}
+            initial={MODAL_PANEL_INITIAL}
+            animate={MODAL_PANEL_ANIMATE}
+            exit={MODAL_PANEL_EXIT}
+            transition={MODAL_PANEL_TRANSITION}
             drag="y"
-            dragConstraints={{ top: 0, bottom: 0 }}
-            dragElastic={{ top: 0.08, bottom: 0.35 }}
+            dragConstraints={MODAL_DRAG_CONSTRAINTS}
+            dragElastic={MODAL_DRAG_ELASTIC}
             onDragEnd={(_, info) => {
               if (info.offset.y > 110 || info.velocity.y > 500) {
                 onClose();
@@ -105,7 +121,7 @@ export const SignalDetailModal = memo(function SignalDetailModal({
               </div>
 
               <motion.button
-                whileTap={{ scale: 0.92 }}
+                whileTap={MODAL_TAP_92}
                 type="button"
                 onClick={onClose}
                 aria-label="Close signal detail modal"
@@ -182,7 +198,7 @@ export const SignalDetailModal = memo(function SignalDetailModal({
             {/* Action Bar */}
             <div className="mt-5 flex flex-wrap items-center justify-end gap-2.5">
               <motion.button
-                whileTap={{ scale: 0.96 }}
+                whileTap={MODAL_TAP_96}
                 type="button"
                 onClick={() => {
                   onClose();
@@ -195,7 +211,7 @@ export const SignalDetailModal = memo(function SignalDetailModal({
               </motion.button>
 
               <motion.button
-                whileTap={{ scale: 0.96 }}
+                whileTap={MODAL_TAP_96}
                 type="button"
                 onClick={() => {
                   onClose();

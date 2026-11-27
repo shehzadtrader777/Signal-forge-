@@ -16,3 +16,6 @@ coverage/
 *.pfx
 *service-account*.json
 *serviceAccount*.json
+
+__pycache__/
+/hybrid_core/rust_engine/target/

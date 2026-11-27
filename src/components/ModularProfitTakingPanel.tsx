@@ -78,15 +78,20 @@ export const ModularProfitTakingPanel = memo(function ModularProfitTakingPanel()
     fetchPolicies();
   }, [fetchPolicies]);
 
-  // Studio React stability repair: avoid self-triggered evaluation loops when
-  // profiles refresh or tick values fluctuate rapidly. This is UI research only.
   const quantizedLivePrice = Number(livePrice.toPrecision(5));
   const profilesVersionSig = profiles.map((p) => `${p.agentId}:${p.updatedAtIso}`).join('|');
+
   useEffect(() => {
+    let cancelled = false;
     const timer = window.setTimeout(() => {
-      void runLiveEvaluation(selectedAgentId, simAtrPct, simPeakR, quantizedLivePrice);
+      if (!cancelled) {
+        void runLiveEvaluation(selectedAgentId, simAtrPct, simPeakR, quantizedLivePrice);
+      }
     }, 200);
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [selectedAgentId, simAtrPct, simPeakR, quantizedLivePrice, profilesVersionSig, runLiveEvaluation]);
 
   const activeProfile = profiles.find((p) => p.agentId === selectedAgentId) ?? null;
