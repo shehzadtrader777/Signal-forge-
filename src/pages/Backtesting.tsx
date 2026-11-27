@@ -33,6 +33,7 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
 import { TrustConsolePanel } from '../components/TrustConsolePanel';
 import { ModularBacktestMatrixPanel } from '../components/ModularBacktestMatrixPanel';
 import { buildBacktestResearchUniverse, validateHistoricalCoverage } from '../lib/backtestUniverse';
+import { buildUnifiedSignalHistory } from '../lib/signalHistory';
 import '../styles/forgeBacktesting.css';
 
 const BAR_RADIUS: [number, number, number, number] = [6, 6, 0, 0];
@@ -209,7 +210,7 @@ function SparklineSnapshot({ points, isWin }: { points: number[]; isWin: boolean
 }
 
 export function Backtesting() {
-  const { tickers, futuresTelemetry, futuresFeedSource, wsConnected, allKnownCoins, topGainers } = useApp();
+  const { tickers, futuresTelemetry, futuresFeedSource, wsConnected, allKnownCoins, topGainers, pinnedSignals, executionState } = useApp();
   const researchUniverse = useMemo(() => buildBacktestResearchUniverse(allKnownCoins, topGainers, Object.keys(tickers)), [allKnownCoins, topGainers, tickers]);
   const [selectedSymbol, setSelectedSymbol] = useState<string>('BTCUSDT');
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('15m');
@@ -316,6 +317,13 @@ export function Backtesting() {
     [simSeed.symbol, simSeed.timeframe, liveCandles, wfInSampleBars, wfOutOfSampleBars]
   );
 
+  const observedSignalAudit = useMemo(() => buildUnifiedSignalHistory({
+    pinnedSignals,
+    positions: executionState.positions,
+    tickers,
+    includeHistoricalBenchmarks: false,
+    includeCrossStrategyBenchmarks: false,
+  }), [pinnedSignals, executionState.positions, tickers]);
   const globalPastSignals = useMemo(() => getGlobalPastSignalsHistory(), []);
   const activeRows = historySource === 'SIMULATED' ? simulation.trades : globalPastSignals;
   const visibleRows = showAllTrades ? activeRows : activeRows.slice(0, 30);
@@ -873,6 +881,34 @@ export function Backtesting() {
         </div>
       </details>
 
+      <section aria-label="Observed signal audit (not simulated)" className="rounded-xl border border-[#8f704b]/35 bg-[#111827] p-4 sm:p-5">
+        <h2 className="font-display text-lg font-bold text-white">Observed Signal Audit · Pinned Signals &amp; Orders</h2>
+        <p className="mt-1 text-xs text-slate-400">
+          {observedSignalAudit.length} locally retained observed records, excluding generated benchmark results.
+          This is not yet a complete server-persisted all-market archive; missing emitted signals cannot be reconstructed.
+        </p>
+        <div className="mt-3 max-h-64 overflow-auto">
+          {observedSignalAudit.length === 0 ? (
+            <p className="rounded-lg border border-slate-700 px-3 py-3 text-xs text-amber-200">No observed records in the current application state. Simulated backtest history is shown separately below.</p>
+          ) : (
+            <table className="w-full min-w-[540px] text-left text-xs">
+              <thead><tr className="border-b border-slate-700 text-slate-400">
+                <th className="py-2">Time</th><th>Pair</th><th>Source</th><th>Status</th><th className="text-right">Entry</th>
+              </tr></thead>
+              <tbody>{observedSignalAudit.map(record => (
+                <tr key={record.id} className="border-b border-slate-800 text-slate-200">
+                  <td className="py-2 font-mono">{record.timestamp}</td>
+                  <td className="font-semibold">{record.symbol}</td>
+                  <td>{record.origin === 'LIVE_PINNED' ? 'Pinned Signal' : 'Execution Record'}</td>
+                  <td>{record.status}</td>
+                  <td className="text-right font-mono">${formatCryptoPrice(record.entryPrice)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          )}
+        </div>
+      </section>
+
       {/* Past Signals History Table */}
       <section
         aria-label="Past Signals History"
@@ -915,7 +951,7 @@ export function Backtesting() {
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              Cross-Pair Feed ({globalPastSignals.length})
+              Simulated Cross-Pair Benchmark ({globalPastSignals.length})
             </button>
           </div>
         </div>
