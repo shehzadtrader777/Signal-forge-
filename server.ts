@@ -421,7 +421,6 @@ const SESSION_TTL_MS = 30 * 60_000;
 const SESSION_SIGNING_KEY =
   process.env.SESSION_SIGNING_KEY || crypto.randomBytes(32).toString('hex');
 const OPERATOR_API_TOKEN = process.env.OPERATOR_API_TOKEN || '';
-const FORGE_FAILSAFE_SECRET = process.env.FORGE_FAILSAFE_SECRET || '';
 
 function createAsyncMutex() {
   let queue: Promise<void> = Promise.resolve();
@@ -6077,7 +6076,7 @@ async function startServer() {
     const engaged = forgeCapitalState.failSafe.engaged || forgeCapitalState.allTradingHalted;
     return res.json({
       ok: true,
-      state: engaged ? 'HALTED_CONFIRMED' : 'RESUME_APPROVED_EXECUTION_LOCKED',
+      state: engaged ? 'HALTED_CONFIRMED' : 'UNKNOWN',
       sealId: forgeCapitalState.failSafe.immutableSealId,
       engaged,
       haltCode: forgeCapitalState.failSafe.haltCode,
