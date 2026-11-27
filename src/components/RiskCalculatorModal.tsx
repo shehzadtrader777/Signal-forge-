@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Calculator, X } from 'lucide-react';
 import { type TradingSignal } from '../lib/signals';
 import { calculateRiskMetrics } from '../lib/riskCalculator';
@@ -15,6 +15,15 @@ export function RiskCalculatorModal({ signal, onClose }: RiskCalculatorModalProp
   const [balanceInput, setBalanceInput] = useState('10000');
   const [riskInput, setRiskInput] = useState('2');
   const [leverageInput, setLeverageInput] = useState('10');
+
+  useEffect(() => {
+    if (!signal) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [signal, onClose]);
 
   if (!signal) return null;
 

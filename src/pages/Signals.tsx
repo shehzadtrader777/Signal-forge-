@@ -20,6 +20,8 @@ import { LiveTestnetLedger } from '../components/LiveTestnetLedger';
 import { OrderBookDepthPanel } from '../components/OrderBookDepthPanel';
 import { SentinelAgentPanel } from '../components/SentinelAgentPanel';
 import { AutonomousOperationsHub } from '../components/AutonomousOperationsHub';
+import { PublicSignalValidationGatePanel } from '../components/PublicSignalValidationGatePanel';
+import { Step2IntelligenceHubPanel } from '../components/Step2IntelligenceHubPanel';
 import { formatCryptoPrice, type Timeframe } from '../lib/marketData';
 import {
   DEFAULT_MASTER_SIGNAL_FILTERS,
@@ -251,6 +253,7 @@ export function Signals() {
             <span className="font-mono font-semibold text-white">&ge;86% Confidence</span> and{' '}
             <span className="font-mono font-semibold text-white">&ge;1:2.0 R:R</span> across Smart
             Money Concepts, Fixed Range Volume Profile nodes, and verified Breakout/Breakdown setups.
+            Internal candidates remain private until approved through the 5-stage Public Signal Gate below.
           </p>
         </div>
 
@@ -293,6 +296,15 @@ export function Signals() {
 
       {/* Granular Master System Runtime Toggles */}
       <SystemControlsBar />
+
+      {/* Step 2: Unified AI Signal Hub, 6-Role Coordinated Intelligence, Modular Strategies & Controlled Execution */}
+      <Step2IntelligenceHubPanel />
+
+      {/* Phase 1: 5-Stage Public Signal Validation, 50-Check Gate & Backend Operator Approval */}
+      <PublicSignalValidationGatePanel
+        liveBtcPrice={signalTickers['BTCUSDT']?.price}
+        liveEthPrice={signalTickers['ETHUSDT']?.price}
+      />
 
       {/* Coordinator KPI Summary Strip */}
       <section

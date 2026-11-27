@@ -24,6 +24,7 @@ import { useRbacIdentity } from '../hooks/useRbacIdentity';
 import { evaluateCommandControlSnapshot } from '../lib/commandControlHub';
 import { useCommandControlStore } from '../store/useCommandControlStore';
 import { useTradingArchitectureStore } from '../store/useTradingArchitectureStore';
+import { MOTION_120HZ_SPRINGS } from '../lib/designSystem';
 import { LiveSwitchSecurityModal } from './LiveSwitchSecurityModal';
 
 interface SideMenuDrawerProps {
@@ -32,7 +33,8 @@ interface SideMenuDrawerProps {
 }
 
 const MENU_ROUTES = [
-  { to: '/', label: 'Master Dashboard', icon: LayoutDashboard, end: true, requiresConsoleRbac: false },
+  { to: '/home', label: 'Public Platform Home', icon: Info, end: false, requiresConsoleRbac: false },
+  { to: '/dashboard', label: 'Master Dashboard', icon: LayoutDashboard, end: false, requiresConsoleRbac: false },
   { to: '/signals', label: 'Coordinator & Execution', icon: Radio, end: false, requiresConsoleRbac: false },
   { to: '/portfolio', label: 'Multi-Asset Portfolio', icon: PieChart, end: false, requiresConsoleRbac: false },
   { to: '/auto-reports', label: 'Auto-Reports (D / W / M)', icon: FileBarChart2, end: false, requiresConsoleRbac: false },
@@ -45,6 +47,16 @@ const MENU_ROUTES = [
   { to: '/about', label: 'System Architecture', icon: Info, end: false, requiresConsoleRbac: false },
 ];
 
+const SIDE_MENU_BACKDROP_INITIAL = { opacity: 0 } as const;
+const SIDE_MENU_BACKDROP_ANIMATE = { opacity: 1 } as const;
+const SIDE_MENU_BACKDROP_EXIT = { opacity: 0 } as const;
+const SIDE_MENU_BACKDROP_TRANSITION = { duration: 0.18 } as const;
+
+const SIDE_MENU_PANEL_INITIAL = { x: '-100%' } as const;
+const SIDE_MENU_PANEL_ANIMATE = { x: 0 } as const;
+const SIDE_MENU_PANEL_EXIT = { x: '-100%' } as const;
+const SIDE_MENU_PANEL_TRANSITION = MOTION_120HZ_SPRINGS.drawer;
+
 export function SideMenuDrawer({ open, onClose }: SideMenuDrawerProps) {
   const {
     executionState,
@@ -56,9 +68,9 @@ export function SideMenuDrawer({ open, onClose }: SideMenuDrawerProps) {
   const hub = useCommandControlStore((s) => s.hub);
   const setGlobalOverride = useCommandControlStore((s) => s.setGlobalOverride);
   const setGranularToggle = useCommandControlStore((s) => s.setGranularToggle);
+  const setVoiceOverlayOpen = useCommandControlStore((s) => s.setVoiceOverlayOpen);
   const executionControlMode = useTradingArchitectureStore((s) => s.executionMode);
   const setExecutionControlMode = useTradingArchitectureStore((s) => s.setExecutionMode);
-  const setGlobalSearchOpen = useTradingArchitectureStore((s) => s.setGlobalSearchOpen);
   const [liveModalOpen, setLiveModalOpen] = useState(false);
   const [liveFeedback, setLiveFeedback] = useState<string | null>(null);
   const [controlPanelExpanded, setControlPanelExpanded] = useState(true);
@@ -72,11 +84,16 @@ export function SideMenuDrawer({ open, onClose }: SideMenuDrawerProps) {
 
   useEffect(() => {
     if (!open) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKey);
+    };
   }, [open, onClose]);
 
   const isLive = executionState.mode === 'LIVE';
@@ -109,30 +126,22 @@ export function SideMenuDrawer({ open, onClose }: SideMenuDrawerProps) {
           >
             {/* Backdrop */}
             <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.16 }}
+              initial={SIDE_MENU_BACKDROP_INITIAL}
+              animate={SIDE_MENU_BACKDROP_ANIMATE}
+              exit={SIDE_MENU_BACKDROP_EXIT}
+              transition={SIDE_MENU_BACKDROP_TRANSITION}
               className="fixed inset-0 bg-[#030712]/80"
               onClick={onClose}
               aria-hidden="true"
             />
 
-            {/* Gesture-Driven Slide-Out Side Menu Container (swipe left to close) */}
+            {/* Slide-Out Side Menu Container (touch-scroll safe; closed via backdrop, close button, or Escape) */}
             <motion.aside
-              initial={{ x: '-100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '-100%' }}
-              transition={{ type: 'spring', stiffness: 420, damping: 36, mass: 0.75 }}
-              drag="x"
-              dragConstraints={{ left: -280, right: 0 }}
-              dragElastic={0.08}
-              onDragEnd={(_, info) => {
-                if (info.offset.x < -80 || info.velocity.x < -450) {
-                  onClose();
-                }
-              }}
-              className="relative z-10 flex h-full w-72 max-w-[85vw] flex-col border-r border-cyan-500/20 bg-[#070d1b] text-slate-100 shadow-2xl"
+              initial={SIDE_MENU_PANEL_INITIAL}
+              animate={SIDE_MENU_PANEL_ANIMATE}
+              exit={SIDE_MENU_PANEL_EXIT}
+              transition={SIDE_MENU_PANEL_TRANSITION}
+              className="relative z-10 flex h-full w-72 max-w-[85vw] flex-col border-r border-cyan-500/20 bg-[#070d1b] text-slate-100 shadow-2xl overscroll-contain"
             >
             <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
               <div className="flex items-center gap-2.5">
@@ -144,7 +153,9 @@ export function SideMenuDrawer({ open, onClose }: SideMenuDrawerProps) {
                     Signal Forge Menu
                   </div>
                   <div className="mt-0.5 text-[10px] font-mono text-slate-400">
-                    Administration &amp; Routing
+                    {rbac.canAccessTestConsole
+                      ? `Owner Hub · ${rbac.role}`
+                      : 'Paper/Demo Safe Navigation'}
                   </div>
                 </div>
               </div>
@@ -168,15 +179,15 @@ export function SideMenuDrawer({ open, onClose }: SideMenuDrawerProps) {
                 data-testid="side-menu-global-search-btn"
                 onClick={() => {
                   onClose();
-                  setGlobalSearchOpen(true);
+                  setVoiceOverlayOpen(true);
                 }}
-                className="mb-3 flex w-full items-center justify-between rounded-lg border border-cyan-500/35 bg-cyan-500/10 px-3 py-2 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/20 transition-colors cursor-pointer"
+                className="mb-3 flex w-full items-center justify-between rounded-lg border border-[#F0B90B]/35 bg-[#F0B90B]/10 px-3 py-2 text-xs font-semibold text-[#FCD535] hover:bg-[#F0B90B]/20 transition-colors cursor-pointer"
               >
                 <span className="flex items-center gap-2">
-                  <Search className="h-3.5 w-3.5 text-cyan-400" aria-hidden="true" />
-                  <span>Global Search &amp; Trade IDs</span>
+                  <Search className="h-3.5 w-3.5 text-[#F0B90B]" aria-hidden="true" />
+                  <span>AI Hub &amp; Trade ID Lookup</span>
                 </span>
-                <kbd className="rounded border border-cyan-500/30 bg-slate-950/70 px-1.5 py-0.5 font-mono text-[10px] text-cyan-300">
+                <kbd className="rounded border border-[#F0B90B]/30 bg-slate-950/70 px-1.5 py-0.5 font-mono text-[10px] text-[#F0B90B]">
                   ⌘K
                 </kbd>
               </button>

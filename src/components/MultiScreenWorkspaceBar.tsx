@@ -49,6 +49,16 @@ const BATCH_OPTIONS: Array<{ ms: 8 | 16 | 50 | 100; label: string }> = [
   { ms: 100, label: '10Hz (100ms)' },
 ];
 
+const PRESET_OPTIONS: readonly { id: WorkspacePresetId; label: string }[] = [
+  { id: 'FULL_COMMAND', label: 'All Panels' },
+  { id: 'EXECUTION_120HZ', label: '120Hz Execution' },
+  { id: 'SIGNALS_AND_PREPUMP', label: 'Signals & Pre-Pump' },
+  { id: 'TELEMETRY_OPS', label: 'Telemetry Ops' },
+];
+
+const PRESET_BTN_TAP = { scale: 0.96 } as const;
+const PANEL_BTN_TAP = { scale: 0.97 } as const;
+
 export const MultiScreenWorkspaceBar = memo(function MultiScreenWorkspaceBar({
   pipelineSnapshot,
 }: MultiScreenWorkspaceBarProps) {
@@ -220,17 +230,10 @@ export const MultiScreenWorkspaceBar = memo(function MultiScreenWorkspaceBar({
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
-            {(
-              [
-                { id: 'FULL_COMMAND', label: 'All Panels' },
-                { id: 'EXECUTION_120HZ', label: '120Hz Execution' },
-                { id: 'SIGNALS_AND_PREPUMP', label: 'Signals & Pre-Pump' },
-                { id: 'TELEMETRY_OPS', label: 'Telemetry Ops' },
-              ] as Array<{ id: WorkspacePresetId; label: string }>
-            ).map((preset) => (
+            {PRESET_OPTIONS.map((preset) => (
               <motion.button
                 key={preset.id}
-                whileTap={{ scale: 0.96 }}
+                whileTap={PRESET_BTN_TAP}
                 transition={MOTION_120HZ_SPRINGS.snappy}
                 type="button"
                 onClick={() => applyPreset(preset.id)}
@@ -240,7 +243,7 @@ export const MultiScreenWorkspaceBar = memo(function MultiScreenWorkspaceBar({
               </motion.button>
             ))}
             <motion.button
-              whileTap={{ scale: 0.96 }}
+              whileTap={PRESET_BTN_TAP}
               transition={MOTION_120HZ_SPRINGS.snappy}
               type="button"
               onClick={() => resetMonitors()}
@@ -258,7 +261,7 @@ export const MultiScreenWorkspaceBar = memo(function MultiScreenWorkspaceBar({
             return (
               <motion.button
                 key={panel.key}
-                whileTap={{ scale: 0.97 }}
+                whileTap={PANEL_BTN_TAP}
                 transition={MOTION_120HZ_SPRINGS.snappy}
                 type="button"
                 onClick={() => togglePanelVisibility(panel.key)}

@@ -30,6 +30,17 @@ const CATEGORY_TABS: readonly { id: SearchDocumentCategory | 'ALL'; label: strin
   { id: 'FEATURE', label: 'Modules' },
 ];
 
+const EMPTY_GLOBAL_SEARCH_INDEX = new GlobalSearchIndex([]);
+
+const SEARCH_BACKDROP_INITIAL = { opacity: 0 } as const;
+const SEARCH_BACKDROP_ANIMATE = { opacity: 1 } as const;
+const SEARCH_BACKDROP_EXIT = { opacity: 0 } as const;
+const SEARCH_BACKDROP_TRANSITION = { duration: 0.16 } as const;
+
+const SEARCH_PANEL_INITIAL = { opacity: 0, y: -12, scale: 0.98 } as const;
+const SEARCH_PANEL_ANIMATE = { opacity: 1, y: 0, scale: 1 } as const;
+const SEARCH_PANEL_EXIT = { opacity: 0, y: -10, scale: 0.98 } as const;
+
 export const GlobalSearchModal = memo(function GlobalSearchModal() {
   const navigate = useNavigate();
   const { pinnedSignals, executionState, tickers, setSelectedSymbol } = useApp();
@@ -42,6 +53,8 @@ export const GlobalSearchModal = memo(function GlobalSearchModal() {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<SearchDocumentCategory | 'ALL'>('ALL');
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const tickersRef = useRef(tickers);
+  tickersRef.current = tickers;
 
   // Cmd/Ctrl + K global shortcut
   useEffect(() => {
@@ -67,7 +80,9 @@ export const GlobalSearchModal = memo(function GlobalSearchModal() {
   }, [open]);
 
   const searchIndex = useMemo(() => {
+    if (!open) return EMPTY_GLOBAL_SEARCH_INDEX;
     const docs: SearchableDocument[] = [...STATIC_FEATURE_SEARCH_DOCS];
+    const currentTickers = tickersRef.current;
 
     for (const trade of verifiedTrades) {
       docs.push({
@@ -98,7 +113,7 @@ export const GlobalSearchModal = memo(function GlobalSearchModal() {
 
     for (const pin of pinnedSignals) {
       const sym = pin.signal.symbol;
-      const liveMark = tickers[sym]?.price ?? pin.signal.entryPrice;
+      const liveMark = currentTickers[sym]?.price ?? pin.signal.entryPrice;
       const rawPct =
         pin.signal.entryPrice > 0
           ? ((liveMark - pin.signal.entryPrice) / pin.signal.entryPrice) * 100
@@ -120,7 +135,7 @@ export const GlobalSearchModal = memo(function GlobalSearchModal() {
     for (const pos of executionState.positions.slice(0, 40)) {
       const isClosed = pos.status !== 'OPEN';
       const marketLabel = pos.marketType ?? 'SPOT';
-      const mark = tickers[pos.symbol]?.price ?? pos.entryPrice;
+      const mark = currentTickers[pos.symbol]?.price ?? pos.entryPrice;
       const rawPct =
         pos.entryPrice > 0 ? ((mark - pos.entryPrice) / pos.entryPrice) * 100 : 0;
       const signedPct = pos.direction === 'BUY' ? rawPct : -rawPct;
@@ -139,7 +154,7 @@ export const GlobalSearchModal = memo(function GlobalSearchModal() {
     }
 
     return new GlobalSearchIndex(docs);
-  }, [executionState.positions, pinnedSignals, tickers, verifiedTrades]);
+  }, [open, executionState.positions, pinnedSignals, verifiedTrades]);
 
   const results = useMemo(
     () => searchIndex.search(query, category, 18),
@@ -174,19 +189,19 @@ export const GlobalSearchModal = memo(function GlobalSearchModal() {
           data-testid="global-search-modal"
         >
           <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.14 }}
+            initial={SEARCH_BACKDROP_INITIAL}
+            animate={SEARCH_BACKDROP_ANIMATE}
+            exit={SEARCH_BACKDROP_EXIT}
+            transition={SEARCH_BACKDROP_TRANSITION}
             onClick={() => setOpen(false)}
             className="fixed inset-0 bg-[#030712]/80"
             aria-hidden="true"
           />
 
           <motion.div
-            initial={{ opacity: 0, y: -10, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -8, scale: 0.98 }}
+            initial={SEARCH_PANEL_INITIAL}
+            animate={SEARCH_PANEL_ANIMATE}
+            exit={SEARCH_PANEL_EXIT}
             transition={MOTION_120HZ_SPRINGS.snappy}
             className="relative z-10 w-full max-w-2xl rounded-xl border border-slate-700/90 bg-[#070d1b] shadow-2xl overflow-hidden text-slate-100"
           >

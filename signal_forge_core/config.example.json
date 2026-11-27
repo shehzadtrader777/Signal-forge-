@@ -31,5 +31,16 @@
     "chat_id_env": "TELEGRAM_AUDIT_CHAT_ID",
     "commands": ["/start", "/stop", "/status", "/profit"],
     "audit_interval_seconds": 60
+  },
+  "notifications": {
+    "discord": {
+      "enabled": false,
+      "webhook_url_env": "DISCORD_WEBHOOK_URL",
+      "bot_token_env": "DISCORD_BOT_TOKEN",
+      "channel_id_env": "DISCORD_CHANNEL_ID",
+      "notify_on_entry": true,
+      "notify_on_exit": true,
+      "notify_on_halt": true
+    }
   }
 }

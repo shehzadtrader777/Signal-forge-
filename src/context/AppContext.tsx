@@ -58,7 +58,7 @@ import {
   type BackendIntelligenceEvaluation,
   type StructuredPerformanceReport,
 } from '../lib/monitorAgent';
-import { apiFetch } from '../lib/apiClient';
+import { apiFetch, hasVerifiedOperatorSession } from '../lib/apiClient';
 import {
   DEFAULT_PORTFOLIO_SEEDS,
   DEFAULT_REBALANCE_CONFIG,
@@ -112,6 +112,21 @@ import {
   type VoiceAgentState,
   type VoiceListeningMode,
 } from '../lib/voiceCommandAgent';
+import {
+  VOICE_MIC_RELEASE_SETTLE_MS,
+  VOICE_SILENCE_TIMEOUT_MS,
+  VOICE_START_WATCHDOG_MS,
+  classifyBrowserVoiceSupport,
+  classifyMicrophoneMediaError,
+  classifySpeechRecognitionError,
+  detectMobileChromeAndroid,
+  normalizeOriginForDiagnostics,
+  resolveSpeechRecognitionLanguage,
+  sanitizeDiagnosticText,
+  shouldAutoRetryAlwaysListening,
+  type VoiceDiagnosticSnapshot,
+  type VoicePermissionStatus,
+} from '../lib/voiceCommandDiagnostics';
 import {
   INITIAL_RL_TUNING_STATE,
   type EmergencyLiquidationSummary,
@@ -255,8 +270,19 @@ export interface LiveOtpChallengeState {
   challengeId: string;
   recipient: string;
   expiresAt: string;
+  ttlSeconds?: number;
+  resendAvailableAt?: string;
   emailSent: boolean;
-  deliveryMode?: 'email' | 'server_log';
+  deliveryStatus?:
+    | 'DELIVERED'
+    | 'PROVIDER_UNCONFIGURED'
+    | 'SANDBOX_DOMAIN_RESTRICTED'
+    | 'PROVIDER_REJECTED'
+    | 'RATE_LIMITED';
+  deliveryDiagnostic?: string;
+  remediationHint?: string;
+  attemptsRemaining?: number;
+  deliveryMode?: 'email' | 'server_log' | 'delivery_failed';
 }
 
 export interface DigestStatusSnapshot {
@@ -384,12 +410,14 @@ interface AppContextValue {
     ok: boolean;
     challenge?: LiveOtpChallengeState;
     error?: string;
+    retryAfterSec?: number;
   }>;
   confirmSwitchToLive: (params: {
     challengeId: string;
     securityAnswer: string;
     otpCode: string;
-  }) => Promise<{ ok: boolean; error?: string }>;
+    safetyChecksCompleted: boolean;
+  }) => Promise<{ ok: boolean; error?: string; attemptsRemaining?: number }>;
   executeCoordinatorOrder: (
     plan: CoordinatedTradePlan,
     options?: {
@@ -472,6 +500,11 @@ interface AppContextValue {
   setVoiceMode: (mode: VoiceListeningMode) => void;
   startPushToTalk: () => void;
   stopVoiceListening: () => void;
+  testMicrophoneCapture: () => Promise<{
+    ok: boolean;
+    diagnostic: VoiceDiagnosticSnapshot;
+    summary: string;
+  }>;
   executeVoiceCommand: (
     transcript: string,
     confidence?: number
@@ -742,10 +775,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (
         prev.validatedTicksCount === nextSnap.validatedTicksCount &&
         prev.rejectedTicksCount === nextSnap.rejectedTicksCount &&
+        prev.duplicateTicksDroppedCount === nextSnap.duplicateTicksDroppedCount &&
+        prev.outOfOrderTicksDroppedCount === nextSnap.outOfOrderTicksDroppedCount &&
+        prev.failedUpdatesCount === nextSnap.failedUpdatesCount &&
         prev.driftsResolvedCount === nextSnap.driftsResolvedCount &&
         prev.lastReconciledSymbol === nextSnap.lastReconciledSymbol &&
         prev.lastDiscrepancyPct === nextSnap.lastDiscrepancyPct &&
         prev.wsConnected === nextSnap.wsConnected &&
+        prev.connectionHealth === nextSnap.connectionHealth &&
+        prev.dataFreshness === nextSnap.dataFreshness &&
+        prev.reconnectCount === nextSnap.reconnectCount &&
         prev.fallbackEnforced === nextSnap.fallbackEnforced &&
         prev.syncEpoch === nextSnap.syncEpoch
       ) {
@@ -954,16 +993,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const hasSpeech =
       typeof window !== 'undefined' &&
       Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+    const secure = typeof window === 'undefined' ? true : Boolean(window.isSecureContext);
     return {
       ...DEFAULT_VOICE_AGENT_STATE,
-      mode: savedMode,
-      listening: savedMode === 'ALWAYS_LISTENING' && hasSpeech,
-      supportedInBrowser: hasSpeech,
+      // Never auto-start listening before actual microphone verification & SpeechRecognition.onstart
+      mode: savedMode === 'ALWAYS_LISTENING' ? 'STANDBY' : savedMode,
+      listening: false,
+      micActive: false,
+      supportedInBrowser: hasSpeech && secure,
     };
   });
   const speechRecognitionRef = useRef<any>(null);
+  const voiceStartWatchdogRef = useRef<number | null>(null);
+  const voiceSilenceTimerRef = useRef<number | null>(null);
+  const voiceSessionSeqRef = useRef<number>(0);
+  // Managed explicitly by voice lifecycle transitions so pending Always-On verification is not clobbered by renders while UI stays STANDBY
   const voiceModeRef = useRef<VoiceListeningMode>(voiceAgent.mode);
-  voiceModeRef.current = voiceAgent.mode;
   const [pinnedSignals, setPinnedSignals] = useState<PinnedSignalRecord[]>(() => {
     try {
       const saved = localStorage.getItem(PINNED_SIGNALS_STORAGE_KEY);
@@ -1204,12 +1249,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const applySyncedMatrixToLocal = useCallback((matrix: GranularControlMatrix) => {
     const derived = matrixToSystemControls(matrix);
-    systemControlsRef.current = derived;
-    setSystemControls(derived);
-    try {
-      localStorage.setItem(SYSTEM_CONTROLS_STORAGE_KEY, JSON.stringify(derived));
-    } catch {
-      // ignore quota errors
+    const prev = systemControlsRef.current;
+    const controlsChanged =
+      !prev ||
+      (Object.keys(derived) as Array<keyof typeof derived>).some(
+        (key) => prev[key] !== derived[key]
+      );
+    if (controlsChanged) {
+      systemControlsRef.current = derived;
+      setSystemControls(derived);
+      try {
+        localStorage.setItem(SYSTEM_CONTROLS_STORAGE_KEY, JSON.stringify(derived));
+      } catch {
+        // ignore quota errors
+      }
     }
     const wantFutures = matrix.futuresFeedModule || matrix.futuresExecutionRouter;
     if (wantFutures !== futuresTradingEnabledRef.current) {
@@ -1793,6 +1846,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const evaluateBackendIntelligence = useCallback(async (symbols: string[]) => {
     if (!systemControlsRef.current.liveFeedModulesEnabled) return;
     if (!symbols || symbols.length === 0) return;
+    if (!(await hasVerifiedOperatorSession())) return;
     try {
       const res = await apiFetch('/api/coordinator/evaluate', {
         method: 'POST',
@@ -2314,157 +2368,1169 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const executeVoiceCommandRef = useRef(executeVoiceCommand);
   executeVoiceCommandRef.current = executeVoiceCommand;
 
-  const stopVoiceListening = useCallback(() => {
-    try {
-      speechRecognitionRef.current?.stop();
-    } catch {
-      // ignore stop error
+  const clearVoiceTimers = useCallback(() => {
+    if (voiceStartWatchdogRef.current !== null) {
+      window.clearTimeout(voiceStartWatchdogRef.current);
+      voiceStartWatchdogRef.current = null;
     }
+    if (voiceSilenceTimerRef.current !== null) {
+      window.clearTimeout(voiceSilenceTimerRef.current);
+      voiceSilenceTimerRef.current = null;
+    }
+  }, []);
+
+  const detachAndAbortRecognition = useCallback(() => {
+    const activeRec = speechRecognitionRef.current;
+    speechRecognitionRef.current = null;
+    if (!activeRec) return;
+    try {
+      activeRec.onstart = null;
+      activeRec.onaudiostart = null;
+      activeRec.onsoundstart = null;
+      activeRec.onspeechstart = null;
+      activeRec.onspeechend = null;
+      activeRec.onaudioend = null;
+      activeRec.onresult = null;
+      activeRec.onerror = null;
+      activeRec.onend = null;
+      if (typeof activeRec.abort === 'function') {
+        activeRec.abort();
+      } else if (typeof activeRec.stop === 'function') {
+        activeRec.stop();
+      }
+    } catch {
+      // ignore abort error
+    }
+  }, []);
+
+  // Collects sanitized browser security, iframe, Permissions Policy, and mediaDevices diagnostics (never stores audio or secrets)
+  const inspectVoiceEnvironment = useCallback(async (): Promise<VoiceDiagnosticSnapshot> => {
+    const isSecureContext = typeof window !== 'undefined' ? Boolean(window.isSecureContext) : false;
+    const origin = normalizeOriginForDiagnostics(
+      typeof window !== 'undefined' ? window.location?.origin : null
+    );
+    let isEmbeddedIframe = false;
+    if (typeof window !== 'undefined') {
+      try {
+        isEmbeddedIframe = window.self !== window.top;
+      } catch {
+        // Cross-origin frame access throws SecurityError, confirming embedded iframe
+        isEmbeddedIframe = true;
+      }
+    }
+
+    let permissionsPolicyAllowsMic: boolean | null = null;
+    if (typeof document !== 'undefined') {
+      try {
+        const docAny = document as unknown as {
+          permissionsPolicy?: { allowsFeature?: (feature: string) => boolean };
+          featurePolicy?: { allowsFeature?: (feature: string) => boolean };
+        };
+        if (typeof docAny.permissionsPolicy?.allowsFeature === 'function') {
+          permissionsPolicyAllowsMic = Boolean(docAny.permissionsPolicy.allowsFeature('microphone'));
+        } else if (typeof docAny.featurePolicy?.allowsFeature === 'function') {
+          permissionsPolicyAllowsMic = Boolean(docAny.featurePolicy.allowsFeature('microphone'));
+        }
+      } catch {
+        permissionsPolicyAllowsMic = null;
+      }
+    }
+
+    const hasMediaDevices = Boolean(typeof navigator !== 'undefined' && navigator.mediaDevices);
+    const hasGetUserMedia = Boolean(
+      typeof navigator !== 'undefined' &&
+        navigator.mediaDevices &&
+        typeof navigator.mediaDevices.getUserMedia === 'function'
+    );
+    const hasSpeechRecognition = Boolean(
+      typeof window !== 'undefined' &&
+        ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
+    );
+    const isMobileChromeAndroid = detectMobileChromeAndroid(
+      typeof navigator !== 'undefined' ? navigator.userAgent : null
+    );
+
+    let browserPermissionState: VoicePermissionStatus = 'UNKNOWN';
+    if (typeof navigator !== 'undefined' && typeof navigator.permissions?.query === 'function') {
+      try {
+        const status = await navigator.permissions.query({
+          name: 'microphone' as PermissionName,
+        });
+        if (status?.state === 'granted') browserPermissionState = 'GRANTED';
+        else if (status?.state === 'denied') browserPermissionState = 'DENIED';
+        else if (status?.state === 'prompt') browserPermissionState = 'PROMPT';
+      } catch {
+        browserPermissionState = 'UNKNOWN';
+      }
+    }
+
+    return {
+      origin,
+      isSecureContext,
+      isEmbeddedIframe,
+      permissionsPolicyAllowsMic,
+      browserPermissionState,
+      hasMediaDevices,
+      hasGetUserMedia,
+      hasSpeechRecognition,
+      isMobileChromeAndroid,
+      rawErrorName: null,
+      sanitizedErrorMessage: null,
+      checkedAtIso: new Date().toISOString(),
+    };
+  }, []);
+
+  // Verifies browser microphone access and immediately stops all tracks (zero audio retention or upload)
+  const verifyMicrophoneAccess = useCallback(
+    async (
+      settleAfterRelease = true
+    ): Promise<{
+      ok: boolean;
+      errorName?: string;
+      errorMessage?: string | null;
+      diagnostic: VoiceDiagnosticSnapshot;
+    }> => {
+      const env = await inspectVoiceEnvironment();
+      if (!env.isSecureContext) {
+        return {
+          ok: false,
+          errorName: 'InsecureContext',
+          errorMessage: 'window.isSecureContext is false',
+          diagnostic: { ...env, rawErrorName: 'InsecureContext', sanitizedErrorMessage: 'window.isSecureContext is false' },
+        };
+      }
+      if (env.permissionsPolicyAllowsMic === false) {
+        const msg = 'Permissions Policy blocks microphone in this document';
+        return {
+          ok: false,
+          errorName: 'SecurityError',
+          errorMessage: msg,
+          diagnostic: { ...env, rawErrorName: 'SecurityError', sanitizedErrorMessage: msg },
+        };
+      }
+      if (!env.hasGetUserMedia) {
+        const msg = 'navigator.mediaDevices.getUserMedia is unavailable';
+        return {
+          ok: false,
+          errorName: 'MediaDevicesUnavailable',
+          errorMessage: msg,
+          diagnostic: { ...env, rawErrorName: 'MediaDevicesUnavailable', sanitizedErrorMessage: msg },
+        };
+      }
+
+      const acquireAndRelease = async (constraints: MediaStreamConstraints) => {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        try {
+          for (const track of stream.getTracks()) {
+            try {
+              track.stop();
+            } catch {
+              // ignore track cleanup error
+            }
+          }
+        } finally {
+          if (settleAfterRelease && VOICE_MIC_RELEASE_SETTLE_MS > 0) {
+            await new Promise((resolve) => window.setTimeout(resolve, VOICE_MIC_RELEASE_SETTLE_MS));
+          }
+        }
+      };
+
+      try {
+        try {
+          await acquireAndRelease({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+            },
+          });
+        } catch (firstErr) {
+          const firstName =
+            firstErr && typeof firstErr === 'object' && 'name' in firstErr
+              ? String((firstErr as { name?: unknown }).name || '')
+              : '';
+          if (firstName === 'OverconstrainedError' || firstName === 'ConstraintNotSatisfiedError') {
+            await acquireAndRelease({ audio: true });
+          } else {
+            throw firstErr;
+          }
+        }
+
+        return {
+          ok: true,
+          diagnostic: {
+            ...env,
+            browserPermissionState: 'GRANTED',
+            rawErrorName: null,
+            sanitizedErrorMessage: null,
+            checkedAtIso: new Date().toISOString(),
+          },
+        };
+      } catch (err) {
+        const errorName =
+          err && typeof err === 'object' && 'name' in err
+            ? String((err as { name?: unknown }).name || 'UnknownError')
+            : 'UnknownError';
+        const rawMessage =
+          err instanceof Error
+            ? err.message
+            : err && typeof err === 'object' && 'message' in err
+            ? String((err as { message?: unknown }).message || '')
+            : '';
+        const sanitizedErrorMessage = sanitizeDiagnosticText(rawMessage);
+        return {
+          ok: false,
+          errorName,
+          errorMessage: sanitizedErrorMessage,
+          diagnostic: {
+            ...env,
+            rawErrorName: errorName,
+            sanitizedErrorMessage,
+            checkedAtIso: new Date().toISOString(),
+          },
+        };
+      }
+    },
+    [inspectVoiceEnvironment]
+  );
+
+  const stopVoiceListening = useCallback(() => {
+    voiceSessionSeqRef.current += 1;
+    clearVoiceTimers();
+    voiceModeRef.current = 'STANDBY';
+    detachAndAbortRecognition();
     setVoiceAgent((prev) => ({
       ...prev,
-      mode: prev.mode === 'ALWAYS_LISTENING' ? 'STANDBY' : prev.mode,
+      mode: 'STANDBY',
       listening: false,
+      micActive: false,
+      audioLevel: 0,
+      capturePhase: prev.listening || prev.capturePhase === 'CHECKING_PERMISSION' ? 'CANCELLED' : 'IDLE',
+      interimTranscript: '',
+      lastError: null,
+      lastErrorUrdu: null,
+      lastErrorCategory: null,
+      lastActionSummary:
+        prev.listening || prev.capturePhase === 'CHECKING_PERMISSION'
+          ? 'Voice listening cancelled manually.'
+          : 'Voice Command Agent placed in Standby.',
     }));
     try {
       localStorage.setItem(VOICE_AGENT_STORAGE_KEY, 'STANDBY');
     } catch {
       // ignore storage quota
     }
-  }, []);
+  }, [clearVoiceTimers, detachAndAbortRecognition]);
 
-  const setVoiceMode = useCallback((mode: VoiceListeningMode) => {
-    voiceModeRef.current = mode;
-    try {
-      localStorage.setItem(VOICE_AGENT_STORAGE_KEY, mode);
-    } catch {
-      // ignore storage error
-    }
-    if (mode === 'STANDBY') {
-      try {
-        speechRecognitionRef.current?.stop();
-      } catch {
-        // ignore
-      }
-    }
+  // Independent microphone verification (completely decoupled from Gemini API calls)
+  const testMicrophoneCapture = useCallback(async () => {
+    const sessionSeq = ++voiceSessionSeqRef.current;
+    clearVoiceTimers();
+    detachAndAbortRecognition();
+    voiceModeRef.current = 'STANDBY';
+
     setVoiceAgent((prev) => ({
       ...prev,
-      mode,
-      listening: mode === 'ALWAYS_LISTENING' && prev.supportedInBrowser,
-      lastActionSummary:
-        mode === 'ALWAYS_LISTENING'
-          ? 'Always-Listening Emergency Stop Guard Armed — say "Stop", "Resume", or "Emergency Liquidate".'
-          : mode === 'PUSH_TO_TALK'
-          ? 'Push-to-Talk mode active — hold or click Mic to speak commands.'
-          : 'Voice Command Agent placed in Standby.',
+      mode: 'STANDBY',
+      listening: false,
+      micActive: false,
+      audioLevel: 0,
+      capturePhase: 'CHECKING_PERMISSION',
+      interimTranscript: '',
+      lastError: null,
+      lastErrorUrdu: null,
+      lastErrorCategory: null,
+      lastActionSummary: 'Testing microphone access independently (zero Gemini API calls)...',
     }));
-  }, []);
+
+    const micCheck = await verifyMicrophoneAccess(false);
+    if (voiceSessionSeqRef.current !== sessionSeq) {
+      return {
+        ok: false,
+        diagnostic: micCheck.diagnostic,
+        summary: 'Microphone test superseded.',
+      };
+    }
+
+    if (!micCheck.ok) {
+      const classified =
+        micCheck.errorName === 'MediaDevicesUnavailable'
+          ? {
+              category: 'MEDIA_DEVICES_UNAVAILABLE' as const,
+              permissionDenied: false,
+              message:
+                'Browser microphone API (navigator.mediaDevices.getUserMedia) is unavailable in this browser/WebView. Open Signal Forge in Chrome or Safari, or type your command below.',
+              urduMessage:
+                'اس براؤزر یا WebView میں مائیکروفون API دستیاب نہیں ہے۔ براہ کرم Chrome میں کھولیں یا نیچے ٹیکسٹ کمانڈ استعمال کریں۔',
+            }
+          : classifyMicrophoneMediaError({
+              errorName: micCheck.errorName,
+              errorMessage: micCheck.errorMessage,
+              isSecureContext: micCheck.diagnostic.isSecureContext,
+              isEmbeddedIframe: micCheck.diagnostic.isEmbeddedIframe,
+              permissionsPolicyAllowsMic: micCheck.diagnostic.permissionsPolicyAllowsMic,
+              browserPermissionState: micCheck.diagnostic.browserPermissionState,
+              isMobileChromeAndroid: micCheck.diagnostic.isMobileChromeAndroid,
+              origin: micCheck.diagnostic.origin,
+            });
+      setVoiceAgent((prev) => ({
+        ...prev,
+        mode: 'STANDBY',
+        listening: false,
+        micActive: false,
+        micVerified: false,
+        audioLevel: 0,
+        capturePhase: 'ERROR',
+        permissionState: classified.permissionDenied ? 'DENIED' : prev.permissionState,
+        lastError: classified.message,
+        lastErrorUrdu: classified.urduMessage,
+        lastErrorCategory: classified.category,
+        lastDiagnostic: micCheck.diagnostic,
+        lastActionSummary: classified.message,
+      }));
+      return {
+        ok: false,
+        diagnostic: micCheck.diagnostic,
+        summary: classified.message,
+      };
+    }
+
+    const summary = micCheck.diagnostic.hasSpeechRecognition
+      ? `Microphone verified & released cleanly on ${micCheck.diagnostic.origin}. Tap Push-to-Talk to speak.`
+      : `Microphone hardware verified on ${micCheck.diagnostic.origin}, but browser Speech Recognition API is unavailable — use typed commands.`;
+
+    setVoiceAgent((prev) => ({
+      ...prev,
+      mode: 'STANDBY',
+      listening: false,
+      micActive: false,
+      micVerified: true,
+      supportedInBrowser: micCheck.diagnostic.hasSpeechRecognition,
+      audioLevel: 0,
+      capturePhase: 'IDLE',
+      permissionState: 'GRANTED',
+      lastError: micCheck.diagnostic.hasSpeechRecognition ? null : summary,
+      lastErrorUrdu: micCheck.diagnostic.hasSpeechRecognition
+        ? null
+        : 'مائیکروفون کی اجازت درست ہے، مگر اس براؤزر میں Speech Recognition موجود نہیں۔ نیچے ٹیکسٹ کمانڈ استعمال کریں۔',
+      lastErrorCategory: micCheck.diagnostic.hasSpeechRecognition ? null : 'UNSUPPORTED_BROWSER',
+      lastDiagnostic: micCheck.diagnostic,
+      lastActionSummary: summary,
+    }));
+
+    return {
+      ok: true,
+      diagnostic: micCheck.diagnostic,
+      summary,
+    };
+  }, [clearVoiceTimers, detachAndAbortRecognition, verifyMicrophoneAccess]);
+
+  // Direct-gesture Always-Listening activation (preserves Android Chrome transient user activation)
+  const startAlwaysListeningSession = useCallback(() => {
+    const SpeechRec =
+      typeof window !== 'undefined'
+        ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+        : null;
+
+    const sessionSeq = ++voiceSessionSeqRef.current;
+    clearVoiceTimers();
+    detachAndAbortRecognition();
+    voiceModeRef.current = 'ALWAYS_LISTENING';
+
+    setVoiceAgent((prev) => ({
+      ...prev,
+      mode: 'STANDBY',
+      listening: false,
+      micActive: false,
+      micVerified: false,
+      audioLevel: 0,
+      capturePhase: 'CHECKING_PERMISSION',
+      interimTranscript: '',
+      lastError: null,
+      lastErrorUrdu: null,
+      lastErrorCategory: null,
+      lastActionSummary: 'Verifying microphone permission before activating Always-On...',
+    }));
+
+    let consecutiveErrors = 0;
+
+    void (async () => {
+      const micCheck = await verifyMicrophoneAccess(true);
+      if (voiceSessionSeqRef.current !== sessionSeq || voiceModeRef.current !== 'ALWAYS_LISTENING') {
+        return;
+      }
+
+      const support = classifyBrowserVoiceSupport({
+        isSecureContext: micCheck.diagnostic.isSecureContext,
+        hasMediaDevices: micCheck.diagnostic.hasGetUserMedia,
+        hasSpeechRecognition: Boolean(SpeechRec),
+        isEmbeddedIframe: micCheck.diagnostic.isEmbeddedIframe,
+        permissionsPolicyAllowsMic: micCheck.diagnostic.permissionsPolicyAllowsMic,
+        origin: micCheck.diagnostic.origin,
+      });
+
+      if (!support.supported || !SpeechRec) {
+        voiceModeRef.current = 'STANDBY';
+        try {
+          localStorage.setItem(VOICE_AGENT_STORAGE_KEY, 'STANDBY');
+        } catch {
+          // ignore
+        }
+        setVoiceAgent((prev) => ({
+          ...prev,
+          mode: 'STANDBY',
+          listening: false,
+          micActive: false,
+          micVerified: false,
+          audioLevel: 0,
+          supportedInBrowser: Boolean(SpeechRec),
+          capturePhase: 'ERROR',
+          permissionState:
+            support.errorCategory === 'UNSUPPORTED_BROWSER' ? 'UNSUPPORTED' : prev.permissionState,
+          interimTranscript: '',
+          lastError: support.message,
+          lastErrorUrdu: support.urduMessage,
+          lastErrorCategory: support.errorCategory,
+          lastDiagnostic: micCheck.diagnostic,
+          lastActionSummary: support.message || 'Always-On unavailable in this browser.',
+        }));
+        return;
+      }
+
+      if (!micCheck.ok) {
+        const classified = classifyMicrophoneMediaError({
+          errorName: micCheck.errorName,
+          errorMessage: micCheck.errorMessage,
+          isSecureContext: micCheck.diagnostic.isSecureContext,
+          isEmbeddedIframe: micCheck.diagnostic.isEmbeddedIframe,
+          permissionsPolicyAllowsMic: micCheck.diagnostic.permissionsPolicyAllowsMic,
+          browserPermissionState: micCheck.diagnostic.browserPermissionState,
+          isMobileChromeAndroid: micCheck.diagnostic.isMobileChromeAndroid,
+          origin: micCheck.diagnostic.origin,
+        });
+        voiceModeRef.current = 'STANDBY';
+        try {
+          localStorage.setItem(VOICE_AGENT_STORAGE_KEY, 'STANDBY');
+        } catch {
+          // ignore
+        }
+        setVoiceAgent((prev) => ({
+          ...prev,
+          mode: 'STANDBY',
+          listening: false,
+          micActive: false,
+          micVerified: false,
+          audioLevel: 0,
+          capturePhase: 'ERROR',
+          permissionState: classified.permissionDenied ? 'DENIED' : prev.permissionState,
+          interimTranscript: '',
+          lastError: classified.message,
+          lastErrorUrdu: classified.urduMessage,
+          lastErrorCategory: classified.category,
+          lastDiagnostic: micCheck.diagnostic,
+          lastActionSummary: classified.message,
+        }));
+        return;
+      }
+
+      const boot = () => {
+        if (voiceSessionSeqRef.current !== sessionSeq || voiceModeRef.current !== 'ALWAYS_LISTENING') {
+          return;
+        }
+        clearVoiceTimers();
+        try {
+          const rec = new SpeechRec();
+          rec.continuous = true;
+          rec.interimResults = true;
+          rec.maxAlternatives = 1;
+          rec.lang = resolveSpeechRecognitionLanguage(
+            typeof navigator !== 'undefined' ? navigator.language : 'en-US'
+          );
+
+          voiceStartWatchdogRef.current = window.setTimeout(() => {
+            if (voiceSessionSeqRef.current !== sessionSeq) return;
+            detachAndAbortRecognition();
+            voiceModeRef.current = 'STANDBY';
+            try {
+              localStorage.setItem(VOICE_AGENT_STORAGE_KEY, 'STANDBY');
+            } catch {
+              // ignore
+            }
+            setVoiceAgent((prev) => ({
+              ...prev,
+              mode: 'STANDBY',
+              listening: false,
+              micActive: false,
+              micVerified: false,
+              audioLevel: 0,
+              capturePhase: 'ERROR',
+              interimTranscript: '',
+              lastError:
+                'Always-On speech recognition did not start within 5 seconds. Reverted cleanly to Standby — use Push-to-Talk or type your command below.',
+              lastErrorUrdu:
+                'Always-On مائیکروفون 5 سیکنڈ میں شروع نہیں ہو سکا۔ محفوظ طریقے سے Standby پر واپس آ گیا — Push-to-Talk یا نیچے ٹیکسٹ کمانڈ استعمال کریں۔',
+              lastErrorCategory: 'RECOGNITION_TIMEOUT',
+              lastDiagnostic: micCheck.diagnostic,
+              lastActionSummary: 'Always-On startup timed out — reverted to Standby.',
+            }));
+          }, VOICE_START_WATCHDOG_MS);
+
+          rec.onstart = () => {
+            if (voiceSessionSeqRef.current !== sessionSeq) return;
+            if (voiceStartWatchdogRef.current !== null) {
+              window.clearTimeout(voiceStartWatchdogRef.current);
+              voiceStartWatchdogRef.current = null;
+            }
+            consecutiveErrors = 0;
+            try {
+              localStorage.setItem(VOICE_AGENT_STORAGE_KEY, 'ALWAYS_LISTENING');
+            } catch {
+              // ignore
+            }
+            setVoiceAgent((prev) => ({
+              ...prev,
+              mode: 'ALWAYS_LISTENING',
+              listening: true,
+              micActive: true,
+              micVerified: true,
+              audioLevel: 0.34,
+              permissionState: 'GRANTED',
+              capturePhase: 'AWAITING_SPEECH',
+              lastError: null,
+              lastErrorUrdu: null,
+              lastErrorCategory: null,
+              lastDiagnostic: micCheck.diagnostic,
+              lastActionSummary:
+                'Always-On microphone verified & live — say "Stop", "Resume", "Status", or any command.',
+            }));
+          };
+
+          rec.onaudiostart = () => {
+            if (voiceSessionSeqRef.current !== sessionSeq) return;
+            setVoiceAgent((prev) => ({
+              ...prev,
+              micActive: true,
+              micVerified: true,
+              audioLevel: Math.max(prev.audioLevel, 0.44),
+            }));
+          };
+
+          rec.onspeechstart = () => {
+            if (voiceSessionSeqRef.current !== sessionSeq) return;
+            setVoiceAgent((prev) => ({
+              ...prev,
+              micActive: true,
+              audioLevel: 0.82,
+              capturePhase: 'SPEECH_DETECTED',
+            }));
+          };
+
+          rec.onspeechend = () => {
+            if (voiceSessionSeqRef.current !== sessionSeq) return;
+            setVoiceAgent((prev) => ({
+              ...prev,
+              audioLevel: 0.3,
+              capturePhase: 'AWAITING_SPEECH',
+            }));
+          };
+
+          rec.onresult = (ev: any) => {
+            if (voiceSessionSeqRef.current !== sessionSeq) return;
+            const idx = ev?.results?.length ? ev.results.length - 1 : 0;
+            const item = ev?.results?.[idx];
+            const alt = item?.[0];
+            const text = String(alt?.transcript || '').trim();
+            if (!text) return;
+            if (!item?.isFinal) {
+              setVoiceAgent((prev) => ({ ...prev, interimTranscript: text, audioLevel: 0.78 }));
+            }
+            if (item?.isFinal || /\bstop\b/i.test(text) || /\bliquidate\b/i.test(text)) {
+              const capturedAt = Date.now();
+              setVoiceAgent((prev) => ({
+                ...prev,
+                interimTranscript: '',
+                lastTranscript: text,
+                lastSpeechEventAt: capturedAt,
+              }));
+              void executeVoiceCommandRef.current(text, alt?.confidence ?? 0.92);
+            }
+          };
+
+          rec.onerror = (ev: any) => {
+            if (voiceSessionSeqRef.current !== sessionSeq) return;
+            clearVoiceTimers();
+            const classified = classifySpeechRecognitionError(ev?.error, {
+              isEmbeddedIframe: micCheck.diagnostic.isEmbeddedIframe,
+              permissionsPolicyAllowsMic: micCheck.diagnostic.permissionsPolicyAllowsMic,
+              origin: micCheck.diagnostic.origin,
+            });
+            consecutiveErrors += 1;
+            if (
+              classified.fatalForAlwaysListening ||
+              !shouldAutoRetryAlwaysListening(classified.category, consecutiveErrors)
+            ) {
+              detachAndAbortRecognition();
+              voiceModeRef.current = 'STANDBY';
+              try {
+                localStorage.setItem(VOICE_AGENT_STORAGE_KEY, 'STANDBY');
+              } catch {
+                // ignore
+              }
+              setVoiceAgent((prev) => ({
+                ...prev,
+                mode: 'STANDBY',
+                listening: false,
+                micActive: false,
+                micVerified: false,
+                audioLevel: 0,
+                capturePhase: classified.category === 'RECOGNITION_ABORTED' ? 'CANCELLED' : 'ERROR',
+                permissionState: classified.permissionDenied ? 'DENIED' : prev.permissionState,
+                interimTranscript: '',
+                lastError: classified.category === 'RECOGNITION_ABORTED' ? null : classified.message,
+                lastErrorUrdu:
+                  classified.category === 'RECOGNITION_ABORTED' ? null : classified.urduMessage,
+                lastErrorCategory: classified.category,
+                lastDiagnostic: {
+                  ...micCheck.diagnostic,
+                  rawErrorName: classified.rawErrorName,
+                  sanitizedErrorMessage: classified.sanitizedErrorMessage,
+                },
+                lastActionSummary: classified.message,
+              }));
+            } else {
+              setVoiceAgent((prev) => ({
+                ...prev,
+                listening: false,
+                micActive: false,
+                audioLevel: 0,
+              }));
+            }
+          };
+
+          rec.onend = () => {
+            if (voiceSessionSeqRef.current !== sessionSeq || voiceModeRef.current !== 'ALWAYS_LISTENING') {
+              setVoiceAgent((prev) => ({
+                ...prev,
+                listening: false,
+                micActive: false,
+                audioLevel: 0,
+              }));
+              return;
+            }
+            setVoiceAgent((prev) => ({ ...prev, listening: false, micActive: false, audioLevel: 0 }));
+            voiceSilenceTimerRef.current = window.setTimeout(
+              boot,
+              700 * Math.max(1, consecutiveErrors + 1)
+            );
+          };
+
+          speechRecognitionRef.current = rec;
+          rec.start();
+        } catch (err) {
+          clearVoiceTimers();
+          detachAndAbortRecognition();
+          voiceModeRef.current = 'STANDBY';
+          try {
+            localStorage.setItem(VOICE_AGENT_STORAGE_KEY, 'STANDBY');
+          } catch {
+            // ignore
+          }
+          const errName =
+            err && typeof err === 'object' && 'name' in err
+              ? String((err as { name?: unknown }).name || '')
+              : '';
+          const errMsg = err instanceof Error ? err.message : '';
+          const classified = classifyMicrophoneMediaError({
+            errorName: errName,
+            errorMessage: errMsg,
+            isSecureContext: micCheck.diagnostic.isSecureContext,
+            isEmbeddedIframe: micCheck.diagnostic.isEmbeddedIframe,
+            permissionsPolicyAllowsMic: micCheck.diagnostic.permissionsPolicyAllowsMic,
+            browserPermissionState: micCheck.diagnostic.browserPermissionState,
+            isMobileChromeAndroid: micCheck.diagnostic.isMobileChromeAndroid,
+            origin: micCheck.diagnostic.origin,
+          });
+          setVoiceAgent((prev) => ({
+            ...prev,
+            mode: 'STANDBY',
+            listening: false,
+            micActive: false,
+            micVerified: false,
+            audioLevel: 0,
+            capturePhase: 'ERROR',
+            permissionState: classified.permissionDenied ? 'DENIED' : prev.permissionState,
+            interimTranscript: '',
+            lastError: classified.message,
+            lastErrorUrdu: classified.urduMessage,
+            lastErrorCategory: classified.category,
+            lastDiagnostic: {
+              ...micCheck.diagnostic,
+              rawErrorName: classified.rawErrorName,
+              sanitizedErrorMessage: classified.sanitizedErrorMessage,
+            },
+            lastActionSummary: classified.message,
+          }));
+        }
+      };
+
+      boot();
+    })();
+  }, [clearVoiceTimers, detachAndAbortRecognition, verifyMicrophoneAccess]);
+
+  const setVoiceMode = useCallback(
+    (mode: VoiceListeningMode) => {
+      if (mode === 'STANDBY') {
+        stopVoiceListening();
+        return;
+      }
+      if (mode === 'ALWAYS_LISTENING') {
+        startAlwaysListeningSession();
+        return;
+      }
+      voiceModeRef.current = mode;
+      setVoiceAgent((prev) => ({
+        ...prev,
+        mode,
+        listening: false,
+        micActive: false,
+        audioLevel: 0,
+        capturePhase: 'IDLE',
+        interimTranscript: '',
+        lastError: null,
+        lastErrorUrdu: null,
+        lastErrorCategory: null,
+        lastActionSummary: 'Push-to-Talk mode active — tap Push-to-Talk to speak commands.',
+      }));
+    },
+    [startAlwaysListeningSession, stopVoiceListening]
+  );
 
   const startPushToTalk = useCallback(() => {
     const SpeechRec =
       typeof window !== 'undefined'
         ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
         : null;
-    if (!SpeechRec) {
-      setVoiceAgent((prev) => ({
-        ...prev,
-        mode: 'PUSH_TO_TALK',
-        listening: false,
-        lastActionSummary:
-          'Browser SpeechRecognition unavailable — use Instant Voice Quick Triggers or type a voice phrase below.',
-      }));
-      return;
-    }
-    try {
-      speechRecognitionRef.current?.stop();
-    } catch {
-      // ignore previous instance
-    }
-    try {
-      const rec = new SpeechRec();
-      rec.continuous = false;
-      rec.interimResults = false;
-      rec.lang = 'en-US';
-      rec.onresult = (ev: any) => {
-        const res = ev?.results?.[0]?.[0];
-        if (res?.transcript) {
-          executeVoiceCommandRef.current(res.transcript, res.confidence ?? 0.95);
-        }
-      };
-      rec.onend = () => {
+
+    const sessionSeq = ++voiceSessionSeqRef.current;
+    clearVoiceTimers();
+    detachAndAbortRecognition();
+    voiceModeRef.current = 'PUSH_TO_TALK';
+
+    setVoiceAgent((prev) => ({
+      ...prev,
+      mode: 'PUSH_TO_TALK',
+      listening: false,
+      micActive: false,
+      audioLevel: 0,
+      supportedInBrowser: Boolean(SpeechRec),
+      capturePhase: 'CHECKING_PERMISSION',
+      interimTranscript: '',
+      lastError: null,
+      lastErrorUrdu: null,
+      lastErrorCategory: null,
+      lastActionSummary: 'Verifying microphone permission & iframe policy...',
+    }));
+
+    void (async () => {
+      const micCheck = await verifyMicrophoneAccess(true);
+      if (voiceSessionSeqRef.current !== sessionSeq) return;
+
+      const support = classifyBrowserVoiceSupport({
+        isSecureContext: micCheck.diagnostic.isSecureContext,
+        hasMediaDevices: micCheck.diagnostic.hasGetUserMedia,
+        hasSpeechRecognition: Boolean(SpeechRec),
+        isEmbeddedIframe: micCheck.diagnostic.isEmbeddedIframe,
+        permissionsPolicyAllowsMic: micCheck.diagnostic.permissionsPolicyAllowsMic,
+        origin: micCheck.diagnostic.origin,
+      });
+
+      if (!support.supported || !SpeechRec) {
+        voiceModeRef.current = 'STANDBY';
         setVoiceAgent((prev) => ({
           ...prev,
-          listening: prev.mode === 'ALWAYS_LISTENING',
+          mode: 'STANDBY',
+          listening: false,
+          micActive: false,
+          micVerified: false,
+          audioLevel: 0,
+          supportedInBrowser: Boolean(SpeechRec),
+          capturePhase: 'ERROR',
+          permissionState:
+            support.errorCategory === 'UNSUPPORTED_BROWSER' ? 'UNSUPPORTED' : prev.permissionState,
+          interimTranscript: '',
+          lastError: support.message,
+          lastErrorUrdu: support.urduMessage,
+          lastErrorCategory: support.errorCategory,
+          lastDiagnostic: micCheck.diagnostic,
+          lastActionSummary:
+            support.message || 'Browser speech recognition unavailable — type your command below.',
         }));
-      };
-      rec.onerror = () => {
-        setVoiceAgent((prev) => ({ ...prev, listening: false }));
-      };
-      speechRecognitionRef.current = rec;
-      rec.start();
-      setVoiceAgent((prev) => ({
-        ...prev,
-        mode: 'PUSH_TO_TALK',
-        listening: true,
-        lastActionSummary: 'Listening for Push-to-Talk command...',
-      }));
-    } catch {
-      setVoiceAgent((prev) => ({ ...prev, listening: false }));
-    }
-  }, []);
+        return;
+      }
 
-  // Background Always-Listening Web Speech service for hands-free emergency 'Stop'
-  useEffect(() => {
-    if (voiceAgent.mode !== 'ALWAYS_LISTENING') return;
-    const SpeechRec =
-      typeof window !== 'undefined'
-        ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-        : null;
-    if (!SpeechRec) return;
+      if (!micCheck.ok) {
+        const classified = classifyMicrophoneMediaError({
+          errorName: micCheck.errorName,
+          errorMessage: micCheck.errorMessage,
+          isSecureContext: micCheck.diagnostic.isSecureContext,
+          isEmbeddedIframe: micCheck.diagnostic.isEmbeddedIframe,
+          permissionsPolicyAllowsMic: micCheck.diagnostic.permissionsPolicyAllowsMic,
+          browserPermissionState: micCheck.diagnostic.browserPermissionState,
+          isMobileChromeAndroid: micCheck.diagnostic.isMobileChromeAndroid,
+          origin: micCheck.diagnostic.origin,
+        });
+        voiceModeRef.current = 'STANDBY';
+        setVoiceAgent((prev) => ({
+          ...prev,
+          mode: 'STANDBY',
+          listening: false,
+          micActive: false,
+          micVerified: false,
+          audioLevel: 0,
+          capturePhase: 'ERROR',
+          permissionState: classified.permissionDenied ? 'DENIED' : prev.permissionState,
+          interimTranscript: '',
+          lastError: classified.message,
+          lastErrorUrdu: classified.urduMessage,
+          lastErrorCategory: classified.category,
+          lastDiagnostic: micCheck.diagnostic,
+          lastActionSummary: classified.message,
+        }));
+        return;
+      }
 
-    let disposed = false;
-    let rec: any = null;
-    const boot = () => {
-      if (disposed || voiceModeRef.current !== 'ALWAYS_LISTENING') return;
+      let gotFinalResult = false;
+      let didError = false;
+      let latestInterim = '';
+
+      const armSilenceTimeout = () => {
+        if (voiceSilenceTimerRef.current !== null) {
+          window.clearTimeout(voiceSilenceTimerRef.current);
+        }
+        voiceSilenceTimerRef.current = window.setTimeout(() => {
+          if (voiceSessionSeqRef.current !== sessionSeq || gotFinalResult || didError) return;
+          didError = true;
+          detachAndAbortRecognition();
+          voiceModeRef.current = 'STANDBY';
+          setVoiceAgent((prev) => ({
+            ...prev,
+            mode: 'STANDBY',
+            listening: false,
+            micActive: false,
+            audioLevel: 0,
+            capturePhase: 'ERROR',
+            interimTranscript: '',
+            lastError:
+              'Voice listening timed out after 12 seconds without a completed command. Tap Push-to-Talk to retry or type your command below.',
+            lastErrorUrdu:
+              '12 سیکنڈ تک کوئی مکمل آواز موصول نہ ہونے پر مائیک بند کر دیا گیا۔ دوبارہ Push-to-Talk دبائیں یا نیچے ٹیکسٹ کمانڈ لکھیں۔',
+            lastErrorCategory: 'RECOGNITION_TIMEOUT',
+            lastDiagnostic: micCheck.diagnostic,
+            lastActionSummary: 'Voice capture timed out waiting for speech.',
+          }));
+        }, VOICE_SILENCE_TIMEOUT_MS);
+      };
+
       try {
-        rec = new SpeechRec();
-        rec.continuous = true;
+        const rec = new SpeechRec();
+        rec.continuous = false;
         rec.interimResults = true;
-        rec.lang = 'en-US';
+        rec.maxAlternatives = 1;
+        rec.lang = resolveSpeechRecognitionLanguage(
+          typeof navigator !== 'undefined' ? navigator.language : 'en-US'
+        );
+
+        voiceStartWatchdogRef.current = window.setTimeout(() => {
+          if (voiceSessionSeqRef.current !== sessionSeq) return;
+          didError = true;
+          detachAndAbortRecognition();
+          voiceModeRef.current = 'STANDBY';
+          setVoiceAgent((prev) => ({
+            ...prev,
+            mode: 'STANDBY',
+            listening: false,
+            micActive: false,
+            micVerified: false,
+            audioLevel: 0,
+            capturePhase: 'ERROR',
+            interimTranscript: '',
+            lastError:
+              'Speech recognition did not start within 5 seconds. Check browser microphone permissions or type your command below.',
+            lastErrorUrdu:
+              'Speech Recognition 5 سیکنڈ میں شروع نہیں ہو سکا۔ براؤزر کی مائیک اجازت چیک کریں یا نیچے ٹیکسٹ کمانڈ استعمال کریں۔',
+            lastErrorCategory: 'RECOGNITION_TIMEOUT',
+            lastDiagnostic: micCheck.diagnostic,
+            lastActionSummary: 'Speech recognition startup timed out.',
+          }));
+        }, VOICE_START_WATCHDOG_MS);
+
+        rec.onstart = () => {
+          if (voiceSessionSeqRef.current !== sessionSeq) return;
+          if (voiceStartWatchdogRef.current !== null) {
+            window.clearTimeout(voiceStartWatchdogRef.current);
+            voiceStartWatchdogRef.current = null;
+          }
+          armSilenceTimeout();
+          setVoiceAgent((prev) => ({
+            ...prev,
+            mode: 'PUSH_TO_TALK',
+            listening: true,
+            micActive: true,
+            micVerified: true,
+            audioLevel: 0.36,
+            permissionState: 'GRANTED',
+            capturePhase: 'AWAITING_SPEECH',
+            lastError: null,
+            lastErrorUrdu: null,
+            lastErrorCategory: null,
+            lastDiagnostic: micCheck.diagnostic,
+            lastActionSummary: 'Microphone active — speak your command now...',
+          }));
+        };
+
+        rec.onaudiostart = () => {
+          if (voiceSessionSeqRef.current !== sessionSeq) return;
+          setVoiceAgent((prev) => ({
+            ...prev,
+            micActive: true,
+            micVerified: true,
+            audioLevel: Math.max(prev.audioLevel, 0.48),
+          }));
+        };
+
+        rec.onsoundstart = () => {
+          if (voiceSessionSeqRef.current !== sessionSeq) return;
+          armSilenceTimeout();
+          setVoiceAgent((prev) => ({ ...prev, micActive: true, audioLevel: 0.65 }));
+        };
+
+        rec.onspeechstart = () => {
+          if (voiceSessionSeqRef.current !== sessionSeq) return;
+          armSilenceTimeout();
+          setVoiceAgent((prev) => ({
+            ...prev,
+            micActive: true,
+            audioLevel: 0.88,
+            capturePhase: 'SPEECH_DETECTED',
+            lastActionSummary: 'Speech detected — converting to text...',
+          }));
+        };
+
+        rec.onspeechend = () => {
+          if (voiceSessionSeqRef.current !== sessionSeq) return;
+          setVoiceAgent((prev) => ({ ...prev, audioLevel: 0.2 }));
+        };
+
+        rec.onaudioend = () => {
+          if (voiceSessionSeqRef.current !== sessionSeq) return;
+          setVoiceAgent((prev) => ({ ...prev, micActive: false, audioLevel: 0 }));
+        };
+
         rec.onresult = (ev: any) => {
-          const idx = ev?.results?.length ? ev.results.length - 1 : 0;
-          const item = ev?.results?.[idx];
-          const alt = item?.[0];
-          const text = String(alt?.transcript || '').trim();
-          if (!text) return;
-          if (item?.isFinal || /\bstop\b/i.test(text) || /\bliquidate\b/i.test(text)) {
-            executeVoiceCommandRef.current(text, alt?.confidence ?? 0.92);
+          if (voiceSessionSeqRef.current !== sessionSeq) return;
+          armSilenceTimeout();
+          let finalText = '';
+          let interimText = '';
+          let bestConfidence = 0.94;
+          const results = ev?.results;
+          const len = results?.length ?? 0;
+          for (let i = 0; i < len; i += 1) {
+            const item = results[i];
+            const alt = item?.[0];
+            const chunk = String(alt?.transcript || '').trim();
+            if (!chunk) continue;
+            if (typeof alt?.confidence === 'number' && alt.confidence > 0) {
+              bestConfidence = alt.confidence;
+            }
+            if (item?.isFinal) {
+              finalText = finalText ? `${finalText} ${chunk}` : chunk;
+            } else {
+              interimText = interimText ? `${interimText} ${chunk}` : chunk;
+            }
+          }
+
+          if (interimText) {
+            latestInterim = interimText;
+            setVoiceAgent((prev) => ({
+              ...prev,
+              capturePhase: 'SPEECH_DETECTED',
+              audioLevel: 0.82,
+              interimTranscript: interimText,
+              lastActionSummary: `Heard: "${interimText}"`,
+            }));
+          }
+
+          if (finalText) {
+            gotFinalResult = true;
+            clearVoiceTimers();
+            detachAndAbortRecognition();
+            voiceModeRef.current = 'STANDBY';
+            const capturedAt = Date.now();
+            setVoiceAgent((prev) => ({
+              ...prev,
+              mode: 'STANDBY',
+              listening: false,
+              micActive: false,
+              micVerified: true,
+              audioLevel: 0,
+              capturePhase: 'IDLE',
+              interimTranscript: '',
+              lastError: null,
+              lastErrorUrdu: null,
+              lastErrorCategory: null,
+              lastDiagnostic: micCheck.diagnostic,
+              lastTranscript: finalText,
+              lastSpeechEventAt: capturedAt,
+              lastActionSummary: `Captured speech: "${finalText}"`,
+            }));
+            void executeVoiceCommandRef.current(finalText, bestConfidence);
           }
         };
+
+        rec.onerror = (ev: any) => {
+          if (voiceSessionSeqRef.current !== sessionSeq) return;
+          didError = true;
+          clearVoiceTimers();
+          detachAndAbortRecognition();
+          const classified = classifySpeechRecognitionError(ev?.error, {
+            isEmbeddedIframe: micCheck.diagnostic.isEmbeddedIframe,
+            permissionsPolicyAllowsMic: micCheck.diagnostic.permissionsPolicyAllowsMic,
+            origin: micCheck.diagnostic.origin,
+          });
+          voiceModeRef.current = 'STANDBY';
+          setVoiceAgent((prev) => ({
+            ...prev,
+            mode: 'STANDBY',
+            listening: false,
+            micActive: false,
+            audioLevel: 0,
+            capturePhase: classified.category === 'RECOGNITION_ABORTED' ? 'CANCELLED' : 'ERROR',
+            permissionState: classified.permissionDenied ? 'DENIED' : prev.permissionState,
+            interimTranscript: '',
+            lastError: classified.category === 'RECOGNITION_ABORTED' ? null : classified.message,
+            lastErrorUrdu:
+              classified.category === 'RECOGNITION_ABORTED' ? null : classified.urduMessage,
+            lastErrorCategory: classified.category,
+            lastDiagnostic: {
+              ...micCheck.diagnostic,
+              rawErrorName: classified.rawErrorName,
+              sanitizedErrorMessage: classified.sanitizedErrorMessage,
+            },
+            lastActionSummary: classified.message,
+          }));
+        };
+
         rec.onend = () => {
-          if (!disposed && voiceModeRef.current === 'ALWAYS_LISTENING') {
-            window.setTimeout(boot, 450);
+          if (voiceSessionSeqRef.current !== sessionSeq) return;
+          clearVoiceTimers();
+          speechRecognitionRef.current = null;
+          voiceModeRef.current = 'STANDBY';
+
+          // Mobile browsers sometimes emit final text only as interim before firing onend
+          if (!gotFinalResult && !didError && latestInterim.trim()) {
+            const captured = latestInterim.trim();
+            gotFinalResult = true;
+            const capturedAt = Date.now();
+            setVoiceAgent((prev) => ({
+              ...prev,
+              mode: 'STANDBY',
+              listening: false,
+              micActive: false,
+              micVerified: true,
+              audioLevel: 0,
+              capturePhase: 'IDLE',
+              interimTranscript: '',
+              lastError: null,
+              lastErrorUrdu: null,
+              lastErrorCategory: null,
+              lastDiagnostic: micCheck.diagnostic,
+              lastTranscript: captured,
+              lastSpeechEventAt: capturedAt,
+              lastActionSummary: `Captured speech: "${captured}"`,
+            }));
+            void executeVoiceCommandRef.current(captured, 0.9);
+            return;
+          }
+
+          if (!gotFinalResult && !didError) {
+            setVoiceAgent((prev) => ({
+              ...prev,
+              mode: 'STANDBY',
+              listening: false,
+              micActive: false,
+              audioLevel: 0,
+              capturePhase: 'ERROR',
+              interimTranscript: '',
+              lastError:
+                'No speech was detected before the microphone closed. Tap Push-to-Talk and speak clearly, or type your command below.',
+              lastErrorUrdu:
+                'مائیک بند ہونے سے پہلے کوئی آواز سنائی نہیں دی۔ Push-to-Talk دبا کر واضح بولیں یا نیچے ٹیکسٹ کمانڈ لکھیں۔',
+              lastErrorCategory: 'NO_SPEECH',
+              lastDiagnostic: micCheck.diagnostic,
+              lastActionSummary: 'No speech detected — microphone closed cleanly.',
+            }));
+          } else {
+            setVoiceAgent((prev) => ({
+              ...prev,
+              listening: false,
+              micActive: false,
+              audioLevel: 0,
+            }));
           }
         };
-        rec.onerror = () => {
-          // Wait cleanly for manual toggle or next cycle
-        };
+
         speechRecognitionRef.current = rec;
         rec.start();
-      } catch {
-        // microphone permissions declined or busy
+      } catch (err) {
+        clearVoiceTimers();
+        detachAndAbortRecognition();
+        const errName =
+          err && typeof err === 'object' && 'name' in err
+            ? String((err as { name?: unknown }).name || '')
+            : '';
+        const errMsg = err instanceof Error ? err.message : '';
+        const classified = classifyMicrophoneMediaError({
+          errorName: errName,
+          errorMessage: errMsg,
+          isSecureContext: micCheck.diagnostic.isSecureContext,
+          isEmbeddedIframe: micCheck.diagnostic.isEmbeddedIframe,
+          permissionsPolicyAllowsMic: micCheck.diagnostic.permissionsPolicyAllowsMic,
+          browserPermissionState: micCheck.diagnostic.browserPermissionState,
+          isMobileChromeAndroid: micCheck.diagnostic.isMobileChromeAndroid,
+          origin: micCheck.diagnostic.origin,
+        });
+        voiceModeRef.current = 'STANDBY';
+        setVoiceAgent((prev) => ({
+          ...prev,
+          mode: 'STANDBY',
+          listening: false,
+          micActive: false,
+          micVerified: false,
+          audioLevel: 0,
+          capturePhase: 'ERROR',
+          permissionState: classified.permissionDenied ? 'DENIED' : prev.permissionState,
+          interimTranscript: '',
+          lastError: classified.message,
+          lastErrorUrdu: classified.urduMessage,
+          lastErrorCategory: classified.category,
+          lastDiagnostic: {
+            ...micCheck.diagnostic,
+            rawErrorName: classified.rawErrorName,
+            sanitizedErrorMessage: classified.sanitizedErrorMessage,
+          },
+          lastActionSummary: classified.message,
+        }));
       }
-    };
-    boot();
+    })();
+  }, [clearVoiceTimers, detachAndAbortRecognition, verifyMicrophoneAccess]);
 
+  // Clean up any active voice session and timers on provider unmount
+  useEffect(() => {
     return () => {
-      disposed = true;
-      try {
-        rec?.stop();
-      } catch {
-        // ignore stop failure
-      }
+      voiceSessionSeqRef.current += 1;
+      clearVoiceTimers();
+      detachAndAbortRecognition();
     };
-  }, [voiceAgent.mode]);
+  }, [clearVoiceTimers, detachAndAbortRecognition]);
 
   // Read-only hydration of microservice architecture, subscription gate, and runtime controls on mount (no unauthenticated POST mutations)
   useEffect(() => {
@@ -2823,15 +3889,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             return exists ? prev : [data.post, ...prev].slice(0, 40);
           });
           if (!data.deduped) {
-            pushNotification({
-              category: 'TELEGRAM',
-              title: `Routed to "Signal Forge" · ${plan.symbol}`,
-              message: `${plan.direction} ${plan.futuresMargin.leverage}x ${plan.futuresMargin.marginMode} (${plan.confidence}%) · ATR Trail $${formatCryptoPrice(plan.riskPlan.trailingStopLoss)}`,
-              symbol: plan.symbol,
-              severity: 'success',
-            });
+            const actuallyDelivered = Boolean(data.delivered || data.providerAccepted);
+            if (actuallyDelivered) {
+              pushNotification({
+                category: 'TELEGRAM',
+                title: `Delivered to "Signal Forge" · ${plan.symbol}`,
+                message: `${plan.direction} ${plan.futuresMargin.leverage}x ${plan.futuresMargin.marginMode} (${plan.confidence}%) · Provider accepted`,
+                symbol: plan.symbol,
+                severity: 'success',
+              });
+            } else if (data.suppressed) {
+              pushNotification({
+                category: 'TELEGRAM',
+                title: `Signal Recorded Locally (Suppressed) · ${plan.symbol}`,
+                message: String(
+                  data.deliveryError ||
+                    'External channel publication is withheld by the Public Signal Gate or Notification Governor.'
+                ),
+                symbol: plan.symbol,
+                severity: 'warning',
+              });
+            } else {
+              pushNotification({
+                category: 'TELEGRAM',
+                title: `Channel Delivery Failed · ${plan.symbol}`,
+                message: String(
+                  data.deliveryError ||
+                    'Provider did not accept the signal — check Telegram/Make/Discord health in Settings.'
+                ),
+                symbol: plan.symbol,
+                severity: 'warning',
+              });
+            }
           }
-          return true;
+          return Boolean(data.delivered || data.providerAccepted);
         }
       } catch {
         // ignore transient error
@@ -2878,23 +3969,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const res = await apiFetch('/api/security/live-otp/request', { method: 'POST' });
       const data = await res.json();
       if (!res.ok || !data.ok) {
-        return { ok: false, error: data.error || 'Unable to generate email OTP.' };
+        return {
+          ok: false,
+          error: data.error || 'Unable to generate email OTP.',
+          retryAfterSec: typeof data.retryAfterSec === 'number' ? data.retryAfterSec : undefined,
+        };
       }
-      const deliveryMode: 'email' | 'server_log' =
-        data.deliveryMode === 'email' ? 'email' : 'server_log';
+      const deliveryMode: 'email' | 'server_log' | 'delivery_failed' =
+        data.deliveryMode === 'email'
+          ? 'email'
+          : data.deliveryMode === 'delivery_failed'
+          ? 'delivery_failed'
+          : 'server_log';
       const challenge: LiveOtpChallengeState = {
         challengeId: String(data.challengeId),
         recipient: String(data.recipient),
         expiresAt: String(data.expiresAt),
+        ttlSeconds: typeof data.ttlSeconds === 'number' ? data.ttlSeconds : 300,
+        resendAvailableAt: data.resendAvailableAt ? String(data.resendAvailableAt) : undefined,
         emailSent: Boolean(data.emailSent),
+        deliveryStatus: data.deliveryStatus,
+        deliveryDiagnostic: data.deliveryDiagnostic ? String(data.deliveryDiagnostic) : undefined,
+        remediationHint: data.remediationHint ? String(data.remediationHint) : undefined,
+        attemptsRemaining:
+          typeof data.attemptsRemaining === 'number' ? data.attemptsRemaining : 5,
         deliveryMode,
       };
       pushNotification({
         category: 'EXECUTION',
-        title: `Live Switch Email OTP Dispatched (${challenge.recipient})`,
-        message: challenge.emailSent
-          ? `6-digit Live Futures OTP emailed to ${challenge.recipient} (valid 5 min).`
-          : `6-digit Live Futures OTP issued (valid 5 min). Check configured email inbox or operator server console.`,
+        title: challenge.emailSent
+          ? `Live Switch Email OTP Sent (${challenge.recipient})`
+          : `Live Switch Email OTP Delivery Failed`,
+        message:
+          challenge.deliveryDiagnostic ||
+          (challenge.emailSent
+            ? `6-digit Live Execution OTP emailed to ${challenge.recipient} (valid 5 min).`
+            : `Email delivery failed for ${challenge.recipient}. Live mode remains locked.`),
         severity: 'warning',
       });
       return { ok: true, challenge };
@@ -2908,7 +4018,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       challengeId: string;
       securityAnswer: string;
       otpCode: string;
-    }): Promise<{ ok: boolean; error?: string }> => {
+      safetyChecksCompleted: boolean;
+    }): Promise<{ ok: boolean; error?: string; attemptsRemaining?: number }> => {
       try {
         const res = await apiFetch('/api/execution/mode', {
           method: 'POST',
@@ -2918,11 +4029,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             challengeId: params.challengeId,
             securityAnswer: params.securityAnswer,
             otpCode: params.otpCode,
+            safetyChecksCompleted: params.safetyChecksCompleted,
           }),
         });
         const data = await res.json();
         if (!res.ok || !data.ok) {
-          return { ok: false, error: data.error || 'Verification rejected.' };
+          return {
+            ok: false,
+            error: data.error || 'Verification rejected.',
+            attemptsRemaining:
+              typeof data.attemptsRemaining === 'number' ? data.attemptsRemaining : undefined,
+          };
         }
         setHasSwitchedLiveOnce(true);
         setExecutionState((prev) => ({
@@ -2934,10 +4051,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }));
         pushNotification({
           category: 'EXECUTION',
-          title: 'Verified Switch to Binance Futures LIVE Mode',
+          title: 'Verified Switch to Live Execution Mode',
           message:
             data.warning ||
-            `Verified by Question-Mark Challenge & Email OTP · ${String(data.endpoint)}.`,
+            `Verified by Question-Mark Challenge, Safety Checklist & Email OTP · ${String(data.endpoint)}.`,
           severity: 'warning',
         });
         return { ok: true };
@@ -3484,17 +4601,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                   emailedGainerSymbolsRef.current.clear();
                 }
                 emailedGainerSymbolsRef.current.add(fresh.symbol);
-                apiFetch('/api/alerts/email', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    type: 'TOP_GAINER_ALERT',
-                    symbol: fresh.symbol,
-                    entryPrice: fresh.price,
-                    change24hPercent: fresh.change24hPercent,
-                    reason: fresh.reason,
-                  }),
-                }).catch(() => undefined);
+                hasVerifiedOperatorSession()
+                  .then((isOp) => {
+                    if (!isOp) return;
+                    return apiFetch('/api/alerts/email', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        type: 'TOP_GAINER_ALERT',
+                        symbol: fresh.symbol,
+                        entryPrice: fresh.price,
+                        change24hPercent: fresh.change24hPercent,
+                        reason: fresh.reason,
+                      }),
+                    });
+                  })
+                  .catch(() => undefined);
               }
             }
           }
@@ -3512,6 +4634,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     refreshTopGainers(false);
     if (!appLiveEnabled) return;
     const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       refreshTopGainers(true);
     }, TELEMETRY_POLL_INTERVAL_MS);
     return () => window.clearInterval(id);
@@ -3555,7 +4678,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     wsControllerRef.current?.updateTrackedSymbols(allKnownCoins);
   }, [allKnownCoins]);
 
-  // Flush coalesced WebSocket frames into React state on a calibrated 250ms cadence & reconcile state drift
+  const lastTelemetryMetricsCommitRef = useRef<number>(0);
+
+  // Flush coalesced WebSocket frames into React state on a calibrated cadence & reconcile state drift
   const flushBufferedFrames = useCallback(() => {
     const ctrl = wsControllerRef.current;
     const frames = wsBufferRef.current.flush();
@@ -3638,12 +4763,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
 
     const totalFlushed = wsBufferRef.current.getFlushedFramesTotal();
-    setTelemetryMetrics((prev) => ({
-      ...prev,
-      flushedFramesTotal: totalFlushed,
-      fallbackEnforced: false,
-      lastSyncAt: new Date().toISOString(),
-    }));
+    const nowTelemetryMs = Date.now();
+    if (nowTelemetryMs - lastTelemetryMetricsCommitRef.current >= 400) {
+      lastTelemetryMetricsCommitRef.current = nowTelemetryMs;
+      setTelemetryMetrics((prev) => ({
+        ...prev,
+        flushedFramesTotal: totalFlushed,
+        fallbackEnforced: false,
+        lastSyncAt: new Date(nowTelemetryMs).toISOString(),
+      }));
+    }
     if (ctrl) {
       syncReconciliationUiSnapshot(false);
     }
@@ -3684,11 +4813,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!appLiveEnabled || !liveFeedModulesEnabled) return;
-    const effectiveIntervalMs =
-      typeof wsBatchIntervalMs === 'number' && wsBatchIntervalMs >= 8
+    const isCoarseMobile =
+      typeof window !== 'undefined' &&
+      (window.innerWidth < 768 || window.matchMedia?.('(pointer: coarse)')?.matches);
+    const minCadenceMs = isCoarseMobile ? 250 : 100;
+    const requestedMs =
+      typeof wsBatchIntervalMs === 'number' && wsBatchIntervalMs >= 50
         ? wsBatchIntervalMs
         : WS_FLUSH_INTERVAL_MS;
+    const effectiveIntervalMs = Math.max(minCadenceMs, requestedMs);
     const flushTimer = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       flushBufferedFramesRef.current();
     }, effectiveIntervalMs);
     return () => {
@@ -4142,16 +5277,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (alert.emailNotify) {
-          apiFetch('/api/alerts/email', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              type: 'PRICE_ALERT',
-              symbol: alert.symbol,
-              condition: alert.condition,
-              targetPrice: alert.targetPrice,
-            }),
-          }).catch(() => undefined);
+          hasVerifiedOperatorSession()
+            .then((isOp) => {
+              if (!isOp) return;
+              return apiFetch('/api/alerts/email', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  type: 'PRICE_ALERT',
+                  symbol: alert.symbol,
+                  condition: alert.condition,
+                  targetPrice: alert.targetPrice,
+                }),
+              });
+            })
+            .catch(() => undefined);
         }
       }
     }
@@ -4929,6 +6069,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setVoiceMode,
       startPushToTalk,
       stopVoiceListening,
+      testMicrophoneCapture,
       executeVoiceCommand,
       forgeCapitalState,
       unifiedCapitalLedger,
@@ -5079,6 +6220,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setVoiceMode,
       startPushToTalk,
       stopVoiceListening,
+      testMicrophoneCapture,
       executeVoiceCommand,
       forgeCapitalState,
       unifiedCapitalLedger,

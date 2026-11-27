@@ -122,7 +122,7 @@ test('Manual Override Protocol strictly forbids autonomous agents and enforces u
   const badConfirm = engine.executeManualUserOverride({
     actorType: 'AUTHENTICATED_USER',
     actorId: 'uid_owner_1',
-    actorEmail: 'dillwalaa.69@gmail.com',
+    actorEmail: 'owner-test@example.com',
     action: 'RELEASE_TO_TRADING',
     amountUsd: 150,
     confirmationPhrase: 'WRONG_PHRASE',
@@ -135,7 +135,7 @@ test('Manual Override Protocol strictly forbids autonomous agents and enforces u
   const userRelease = engine.executeManualUserOverride({
     actorType: 'AUTHENTICATED_USER',
     actorId: 'uid_owner_1',
-    actorEmail: 'dillwalaa.69@gmail.com',
+    actorEmail: 'owner-test@example.com',
     action: 'RELEASE_TO_TRADING',
     amountUsd: 150,
     confirmationPhrase: 'UNLOCK_VAULT',
@@ -151,7 +151,7 @@ test('Manual Override Protocol strictly forbids autonomous agents and enforces u
   const userRebalance = engine.executeManualUserOverride({
     actorType: 'AUTHENTICATED_USER',
     actorId: 'uid_owner_1',
-    actorEmail: 'dillwalaa.69@gmail.com',
+    actorEmail: 'owner-test@example.com',
     action: 'REBALANCE_EXTERNAL',
     amountUsd: 100,
     confirmationPhrase: 'REBALANCE_VAULT',

@@ -132,6 +132,10 @@ test('120Hz Rendering Pipeline & Strict Modularity Audit: GPU scrolling, CSS con
     'src/lib/freqtradeCoreServer.ts',
     'src/lib/hybridArchitectureEngine.ts',
     'src/lib/hybridArchitectureServer.ts',
+    'src/lib/publicSignalValidationEngine.ts',
+    'src/lib/publicSignalValidationServer.ts',
+    'src/lib/marketPriceModel.ts',
+    'src/lib/aiCommandHubEngine.ts',
     'src/config/agenticCliRuntimeConfig.ts',
     'src/components/ui/ForgeDesignSystem.tsx',
     'src/components/AgentSyncAndRenderAuditPanel.tsx',
@@ -148,6 +152,7 @@ test('120Hz Rendering Pipeline & Strict Modularity Audit: GPU scrolling, CSS con
     'src/components/FableOrchestratorPanel.tsx',
     'src/components/FreqtradeUnifiedTerminal.tsx',
     'src/components/HybridArchitectureConsole.tsx',
+    'src/components/PublicSignalValidationGatePanel.tsx',
     'src/store/useWorkspaceStore.ts',
     'src/store/useCommandControlStore.ts',
     'src/store/useTradingArchitectureStore.ts',
@@ -191,6 +196,8 @@ test('120Hz Rendering Pipeline & Strict Modularity Audit: GPU scrolling, CSS con
     'src/components/FableOrchestratorPanel.tsx',
     'src/components/FreqtradeUnifiedTerminal.tsx',
     'src/components/HybridArchitectureConsole.tsx',
+    'src/components/MasterContainmentProtocolPanel.tsx',
+    'src/components/PublicSignalValidationGatePanel.tsx',
   ];
 
   for (const widgetPath of memoizedWidgets) {
@@ -202,7 +209,7 @@ test('120Hz Rendering Pipeline & Strict Modularity Audit: GPU scrolling, CSS con
   }
 });
 
-test('UI Roadmap Refactor Audit: continuous animated ticker, zero top voice controls, consolidated bottom voice widget, sticky WhatsApp/Telegram footer, social icons, and email icon', () => {
+test('UI Shell & AI Command Hub Audit: streamlined footer, zero top search/settings, circular social widgets, animated tap-to-top, and Gemini 4 Hydrogen hub', () => {
   const css = readFile('src/index.css');
   assert.ok(css.includes('@keyframes forgeTickerScroll'), 'index.css must define continuous marquee animation');
   assert.ok(css.includes('.forge-ticker-track'), 'index.css must define .forge-ticker-track');
@@ -215,24 +222,36 @@ test('UI Roadmap Refactor Audit: continuous animated ticker, zero top voice cont
   assert.equal(topBar.includes('voice-always-listening-btn'), false, 'Top header must NOT render Always-Listening button');
   assert.equal(topBar.includes('voice-emergency-stop-btn'), false, 'Top header must NOT render Voice Stop button');
 
+  const navbar = readFile('src/components/Navbar.tsx');
+  assert.equal(navbar.includes('nav-global-search-btn'), false, 'Navbar must NOT render top search bar');
+  assert.equal(navbar.includes('nav-settings-link'), false, 'Navbar must NOT render top settings shortcut');
+
   const bottomVoice = readFile('src/components/FloatingWidgetDock.tsx');
-  assert.ok(bottomVoice.includes('overlay-ptt-btn'), 'Bottom voice widget must include Push-to-Talk');
-  assert.ok(bottomVoice.includes('overlay-always-listening-btn'), 'Bottom voice widget must include Always-On');
-  assert.ok(bottomVoice.includes('overlay-standby-btn'), 'Bottom voice widget must include Standby');
-  assert.ok(bottomVoice.includes('overlay-emergency-toggle-btn'), 'Bottom voice widget must include Emergency Stop/Resume');
-  assert.ok(bottomVoice.includes('voice-overlay-audit-log'), 'Bottom voice widget must include consolidated Audit Log');
+  assert.ok(bottomVoice.includes('overlay-ptt-btn'), 'AI Hub must include Push-to-Talk');
+  assert.ok(bottomVoice.includes('overlay-always-listening-btn'), 'AI Hub must include Always-On');
+  assert.ok(bottomVoice.includes('overlay-standby-btn'), 'AI Hub must include Standby');
+  assert.ok(bottomVoice.includes('overlay-emergency-toggle-btn'), 'AI Hub must include Emergency Stop/Resume');
+  assert.ok(bottomVoice.includes('voice-overlay-audit-log'), 'AI Hub must include consolidated Audit Log');
+  assert.ok(bottomVoice.includes('ai-hub-dim-backdrop'), 'AI Hub must support dynamic state dimming');
+  assert.ok(bottomVoice.includes('ai-hub-waveform'), 'AI Hub must render waveform simulation');
+  assert.ok(bottomVoice.includes('ai-hub-shortcut-grid'), 'AI Hub must render expandable shortcut grid');
+  assert.ok(bottomVoice.includes('ai-hub-trade-snapshot'), 'AI Hub must present instant trade result snapshots');
+  assert.ok(bottomVoice.includes('Gemini 4 Hydrogen'), 'AI Hub must be powered by Gemini 4 Hydrogen');
+  assert.ok(bottomVoice.includes('dock-tap-to-top-btn'), 'Animated tap-to-top button must be anchored');
+  assert.ok(bottomVoice.includes('draggable-ai-hub-launcher'), 'Logged-in state must provide draggable AI hub launcher');
+  assert.ok(bottomVoice.includes('dragMomentum={false}'), 'Logged-in draggable launcher must configure dragMomentum={false}');
+  assert.ok(bottomVoice.includes('prelogin-compact-waveform'), 'Pre-login state must provide static compact bottom-right voice waveform button');
 
   const app = readFile('src/App.tsx');
-  assert.ok(app.includes('sticky bottom-0'), 'App must pin sticky footer bar');
-  assert.ok(app.includes('sticky-footer-whatsapp-widget'), 'Sticky footer must pin WhatsApp widget');
-  assert.ok(app.includes('<FloatingTelegramChannel />'), 'Sticky footer must pin Telegram widget');
-  assert.ok(app.includes('<FooterSocialIconsRow />'), 'Footer must include clickable social media icons row');
-  assert.ok(app.includes('<DedicatedEmailIconLink'), 'Footer must render dedicated email icon link');
-  assert.equal(
-    app.includes('amirshehzad2647tcs@gmail.com'),
-    false,
-    'Footer must not display raw email text directly in App.tsx'
-  );
+  assert.ok(app.includes('<AnchoredSocialWidgets />'), 'App must mount anchored circular social widgets');
+  assert.ok(app.includes('<FloatingWidgetDock isLoggedIn={Boolean(user)}'), 'App must mount auth-aware FloatingWidgetDock');
+  assert.equal(app.includes('Footer Navigation'), false, 'Footer must NOT contain obsolete navigation shortcuts');
+  assert.equal(app.includes('Developed by Amir Shahzad'), false, 'App.tsx must NOT render duplicate developer name');
+
+  const socialComp = readFile('src/components/FooterSocialAndContact.tsx');
+  assert.ok(socialComp.includes('social-circle-whatsapp'), 'Circular WhatsApp widget must be anchored');
+  assert.ok(socialComp.includes('social-circle-discord'), 'Circular Discord widget must be anchored');
+  assert.ok(socialComp.includes('<FloatingTelegramChannel />'), 'Circular Telegram widget must be anchored');
 });
 
 test('Codebase Refactoring Audit: obsolete FloatingWhatsApp & VoiceCommandAgentPanel pruned and signal_forge_core modules exist', () => {
@@ -261,7 +280,7 @@ test('Codebase Refactoring Audit: obsolete FloatingWhatsApp & VoiceCommandAgentP
   }
 });
 
-test('Hybrid Python+Rust Core & Footer Gemini Attribution Audit: verifies hybrid_core Rust/Python files, Amir Shahzad credit, Gemini logo, and exact disclaimer', () => {
+test('Hybrid Python+Rust Core & Streamlined Footer Gemini Attribution Audit: verifies hybrid_core Rust/Python files, Amir Shehzad credit, Gemini logo, and exact disclaimer', () => {
   for (const rel of [
     'hybrid_core/rust_engine/Cargo.toml',
     'hybrid_core/rust_engine/src/main.rs',
@@ -282,8 +301,8 @@ test('Hybrid Python+Rust Core & Footer Gemini Attribution Audit: verifies hybrid
   }
 
   const footerComp = readFile('src/components/FooterSocialAndContact.tsx');
+  assert.ok(footerComp.includes('Developed by Amir Shehzad'));
   assert.ok(footerComp.includes('Co-developed with Gemini'));
-  assert.ok(footerComp.includes('Amir Shahzad'));
   assert.ok(footerComp.includes('official-gemini-logo'));
   assert.ok(
     footerComp.includes(

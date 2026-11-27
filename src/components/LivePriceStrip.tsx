@@ -58,8 +58,8 @@ export const LivePriceStrip = memo(function LivePriceStrip() {
                 : wsConnected
                 ? 'Binance Spot Live'
                 : telemetryMetrics.fallbackEnforced
-                ? 'Deterministic Spot'
-                : 'Spot Feed'}
+                ? 'Cached / Simulated (Not Live)'
+                : 'Spot Syncing'}
             </span>
             <span className="font-mono text-[10px] text-slate-500 tabular-nums whitespace-nowrap">
               {!liveFeedModulesEnabled

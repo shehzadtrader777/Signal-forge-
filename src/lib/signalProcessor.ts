@@ -95,13 +95,29 @@ export interface SpamFilterHistoryEntry {
 
 export interface ProcessedSignalRecord extends ExtractedTradingSignalCard {
   filteredOut: boolean;
+  suppressed?: boolean;
+  suppressionReason?: string | null;
   spamVerdict: SpamFilterVerdict;
   targetChatId: string;
+  deliveryState?:
+    | 'SIGNAL_GENERATED'
+    | 'SIGNAL_APPROVED'
+    | 'QUEUED'
+    | 'DISPATCH_ATTEMPTED'
+    | 'PROVIDER_ACCEPTED'
+    | 'DELIVERED_WHEN_VERIFIABLE'
+    | 'FAILED'
+    | 'RETRYING'
+    | 'SUPPRESSED';
+  providerMessageId?: string | null;
   webhookDispatched: boolean;
   webhookHttpStatus: number | null;
   webhookLatencyMs: number | null;
   webhookError: string | null;
   telegramMirrorDelivered: boolean;
+  discordDispatched?: boolean;
+  discordMessageId?: string | null;
+  discordError?: string | null;
   transmittedAt: string | null;
 }
 
@@ -118,7 +134,23 @@ export interface SignalProcessorStatusSnapshot {
     totalSpamFiltered: number;
     totalWebhookDelivered: number;
     totalMilestoneUpdates: number;
+    totalSuppressed?: number;
+    totalFailed?: number;
+    totalRetrying?: number;
+    totalDiscordDelivered?: number;
   };
+  lifecycleCounters?: {
+    signalGenerated: number;
+    signalApproved: number;
+    queued: number;
+    dispatchAttempted: number;
+    providerAccepted: number;
+    deliveredWhenVerifiable: number;
+    failed: number;
+    retrying: number;
+    suppressed: number;
+  };
+  advisories?: string[];
   recentProcessed: ProcessedSignalRecord[];
   recentFiltered: ProcessedSignalRecord[];
 }
@@ -556,12 +588,15 @@ export function evaluateSignalSpamFilter(
 }
 
 export interface OutboundMakeWebhookPayload {
+  event_id: string;
   event_type: 'SIGNAL_CARD' | 'MILESTONE_PNL_UPDATE';
-  chat_id: string;
-  bot_token: string;
+  signal_category: 'GENERATED_SIGNAL' | 'PAPER_EXECUTED_TRADE' | 'REALIZED_RESULT';
+  execution_mode: string;
+  chat_id?: string;
   channel_name: string;
   signal_id: string;
   source: SignalAlertSource;
+  symbol: string;
   pair: string;
   direction: 'BUY' | 'SELL';
   timeframe: string;
@@ -587,9 +622,10 @@ export interface OutboundMakeWebhookPayload {
 export function buildOutboundWebhookPayload(
   card: ExtractedTradingSignalCard,
   routing: {
-    chatId: string;
-    botToken: string;
+    chatId?: string | null;
     channelName?: string;
+    signalCategory?: 'GENERATED_SIGNAL' | 'PAPER_EXECUTED_TRADE' | 'REALIZED_RESULT';
+    executionMode?: string;
   }
 ): OutboundMakeWebhookPayload {
   const isMilestone =
@@ -597,13 +633,33 @@ export function buildOutboundWebhookPayload(
     card.lifecycleStatus !== 'OPEN' ||
     card.finalPnlUsd !== null ||
     card.finalPnlPercent !== null;
+  const eventType: OutboundMakeWebhookPayload['event_type'] = isMilestone
+    ? 'MILESTONE_PNL_UPDATE'
+    : 'SIGNAL_CARD';
+  const inferredCategory: OutboundMakeWebhookPayload['signal_category'] =
+    routing.signalCategory ??
+    (card.finalPnlUsd !== null ||
+    card.lifecycleStatus === 'CLOSED_TP' ||
+    card.lifecycleStatus === 'CLOSED_SL' ||
+    card.lifecycleStatus === 'CLOSED_MANUAL'
+      ? 'REALIZED_RESULT'
+      : 'GENERATED_SIGNAL');
+
+  const safeChatId =
+    routing.chatId && !/^\d{6,15}:[A-Za-z0-9_-]{20,}$/.test(routing.chatId.trim())
+      ? routing.chatId.trim()
+      : undefined;
+
   return {
-    event_type: isMilestone ? 'MILESTONE_PNL_UPDATE' : 'SIGNAL_CARD',
-    chat_id: routing.chatId,
-    bot_token: routing.botToken,
+    event_id: `${card.signalId}::${eventType}::${card.lifecycleStatus}`,
+    event_type: eventType,
+    signal_category: inferredCategory,
+    execution_mode: routing.executionMode || 'PAPER_DRY_RUN',
+    ...(safeChatId ? { chat_id: safeChatId } : {}),
     channel_name: routing.channelName || 'Signal Forge',
     signal_id: card.signalId,
     source: card.source,
+    symbol: card.symbol,
     pair: card.symbol,
     direction: card.direction,
     timeframe: card.timeframe,

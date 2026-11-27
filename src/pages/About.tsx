@@ -1,6 +1,10 @@
 import { useState } from 'react';
 import { Mail, MessageCircle, ShieldCheck } from 'lucide-react';
-import { DedicatedEmailIconLink, CONTACT_EMAIL_ADDRESS } from '../components/FooterSocialAndContact';
+import {
+  DedicatedEmailIconLink,
+  CONTACT_EMAIL_ADDRESS,
+  WHATSAPP_DESK_URL,
+} from '../components/FooterSocialAndContact';
 import founderPortrait from '../assets/images/founder_amir_shehzad_1794687451706.jpg';
 
 export function About() {
@@ -58,19 +62,21 @@ export function About() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <a
-              href="https://wa.me/923015083557"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-5 py-2.5 text-xs font-bold text-slate-950 hover:bg-emerald-400 transition-colors whitespace-nowrap"
-            >
-              <MessageCircle className="h-4 w-4" aria-hidden="true" />
-              <span>Message on WhatsApp</span>
-            </a>
+            {WHATSAPP_DESK_URL ? (
+              <a
+                href={WHATSAPP_DESK_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-5 py-2.5 text-xs font-bold text-slate-950 hover:bg-emerald-400 transition-colors whitespace-nowrap"
+              >
+                <MessageCircle className="h-4 w-4" aria-hidden="true" />
+                <span>Message on WhatsApp</span>
+              </a>
+            ) : null}
 
             <a
               href={`mailto:${CONTACT_EMAIL_ADDRESS}`}
-              aria-label="Send email to Amir Shehzad"
+              aria-label="Send email to Signal Forge Support"
               className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-[#0d1323] px-5 py-2.5 text-xs font-semibold text-white hover:border-[#3b82f6] transition-colors whitespace-nowrap"
             >
               <Mail className="h-4 w-4 text-[#3b82f6]" aria-hidden="true" />

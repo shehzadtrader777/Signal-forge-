@@ -1,3 +1,10 @@
+import type {
+  VoiceCapturePhase,
+  VoiceDiagnosticSnapshot,
+  VoiceErrorCategory,
+  VoicePermissionStatus,
+} from './voiceCommandDiagnostics';
+
 export type VoiceListeningMode = 'STANDBY' | 'PUSH_TO_TALK' | 'ALWAYS_LISTENING';
 
 export type VoiceCommandIntent =
@@ -7,6 +14,7 @@ export type VoiceCommandIntent =
   | 'RUN_TICK'
   | 'RUN_AUDIT'
   | 'STATUS'
+  | 'GREETING'
   | 'NAVIGATE'
   | 'UNKNOWN';
 
@@ -33,6 +41,17 @@ export interface VoiceAgentState {
   mode: VoiceListeningMode;
   listening: boolean;
   supportedInBrowser: boolean;
+  capturePhase: VoiceCapturePhase;
+  micActive: boolean;
+  micVerified: boolean;
+  audioLevel: number; // 0..1 live capture activity indicator (never stored or uploaded)
+  permissionState: VoicePermissionStatus;
+  interimTranscript: string;
+  lastError: string | null;
+  lastErrorUrdu: string | null;
+  lastErrorCategory: VoiceErrorCategory | null;
+  lastDiagnostic: VoiceDiagnosticSnapshot | null;
+  lastSpeechEventAt: number | null;
   lastTranscript: string;
   lastIntent: VoiceCommandIntent | null;
   lastActionSummary: string;
@@ -45,6 +64,17 @@ export const DEFAULT_VOICE_AGENT_STATE: VoiceAgentState = {
   mode: 'STANDBY',
   listening: false,
   supportedInBrowser: false,
+  capturePhase: 'IDLE',
+  micActive: false,
+  micVerified: false,
+  audioLevel: 0,
+  permissionState: 'UNKNOWN',
+  interimTranscript: '',
+  lastError: null,
+  lastErrorUrdu: null,
+  lastErrorCategory: null,
+  lastDiagnostic: null,
+  lastSpeechEventAt: null,
   lastTranscript: '',
   lastIntent: null,
   lastActionSummary: 'Voice Command Agent ready (Push-to-Talk or Always-Listening emergency Stop guard).',
@@ -159,7 +189,24 @@ export function parseVoiceCommandTranscript(
       transcript,
       normalized,
       confidence,
-      summary: 'Fetched live Coordinator, App Live quota, and open position status.',
+      summary: 'Fetched read-only Signal Forge application status without modifying trading state.',
+      timestamp,
+    };
+  }
+
+  // Priority 4b: Harmless greetings & command-help prompts (never treated as trading instructions)
+  if (
+    /^(hello|hi|hey|salam|salaam|assalam o alaikum|assalamualaikum|good morning|good afternoon|good evening|testing|test|help|commands|what can you do)(\s+(signal forge|there|assistant|ai|hub))?$/.test(
+      normalized
+    )
+  ) {
+    return {
+      intent: 'GREETING',
+      transcript,
+      normalized,
+      confidence,
+      summary:
+        'Hello! Signal Forge AI Hub is ready (read-only Paper/Demo safety active). Try "status", "open signals", "open portfolio", a Trade ID (SF-TRD-...), or ask about BTCUSDT.',
       timestamp,
     };
   }
@@ -215,7 +262,7 @@ export function parseVoiceCommandTranscript(
     transcript,
     normalized,
     confidence,
-    summary: `Unrecognized voice command: "${transcript}". Say "Stop", "Resume", "Emergency Liquidate", "Run Tick", or "Open Signals".`,
+    summary: `Unrecognized voice command: "${transcript}". Say "Hello", "Status", "Open Signals", "Stop", or ask a market question.`,
     timestamp,
   };
 }

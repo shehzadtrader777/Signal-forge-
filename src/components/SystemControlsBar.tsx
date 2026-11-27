@@ -1,6 +1,7 @@
-import { memo } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { SlidersHorizontal } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import type { SmartMarketRouterStatus } from '../lib/smartMarketDataRouter';
 
 export const SystemControlsBar = memo(function SystemControlsBar() {
   const {
@@ -12,6 +13,29 @@ export const SystemControlsBar = memo(function SystemControlsBar() {
     autonomousState,
     toggleAutonomousCoordinator,
   } = useApp();
+
+  const [routerHealth, setRouterHealth] = useState<SmartMarketRouterStatus | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const load = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      fetch('/api/market/router/status?symbol=BTCUSDT')
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (active && data?.ok && data.router) {
+            setRouterHealth(data.router as SmartMarketRouterStatus);
+          }
+        })
+        .catch(() => undefined);
+    };
+    load();
+    const id = window.setInterval(load, 30_000);
+    return () => {
+      active = false;
+      window.clearInterval(id);
+    };
+  }, []);
 
   const lowLagActive = !appLiveEnabled || !testnetExecutionEnabled || !liveFeedModulesEnabled;
 
@@ -40,6 +64,25 @@ export const SystemControlsBar = memo(function SystemControlsBar() {
         <p className="text-[11px] text-slate-400 leading-relaxed">
           Active Safeguards: Signal Engine · Top Gainers · L2 Depth · 2.0% Max Risk / Min 1:5 R:R · Reversal Exit
         </p>
+        {routerHealth && (
+          <p
+            data-testid="market-router-health-summary"
+            className="font-mono text-[10px] text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-0.5"
+          >
+            <span className={routerHealth.executionAllowed ? 'text-emerald-400' : 'text-amber-300'}>
+              Market Router: {routerHealth.overallDataQuality} ({routerHealth.overallProvenance})
+            </span>
+            <span aria-hidden="true">·</span>
+            <span>Binance: {routerHealth.providers.binance.status}</span>
+            <span aria-hidden="true">·</span>
+            <span>
+              CoinGecko ({routerHealth.providers.coingecko.detail.tier.toUpperCase()}):{' '}
+              {routerHealth.providers.coingecko.detail.configured
+                ? routerHealth.providers.coingecko.detail.connectionStatus
+                : 'PENDING_KEY'}
+            </span>
+          </p>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-2.5 shrink-0">

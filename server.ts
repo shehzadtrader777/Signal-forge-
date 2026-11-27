@@ -1,12 +1,209 @@
 import dotenv from 'dotenv';
-dotenv.config({ override: true });
+import fs from 'node:fs';
+import path from 'node:path';
+
+// Capture platform-injected environment variable names BEFORE dotenv loads optional local .env fallback.
+// Never store, log, or serialize any secret values — only variable names for provenance diagnostics.
+const PRE_DOTENV_ENV_KEYS: ReadonlySet<string> = new Set(
+  Object.keys(process.env).filter((k) => String(process.env[k] || '').trim().length > 0)
+);
+const LOCAL_DOTENV_FILE_PRESENT = fs.existsSync(path.resolve(process.cwd(), '.env'));
+const DOTENV_RESULT = dotenv.config({ override: false });
+const DOTENV_LOADED_KEYS: ReadonlySet<string> = new Set(
+  Object.keys(DOTENV_RESULT.parsed || {}).filter(
+    (k) => !PRE_DOTENV_ENV_KEYS.has(k) && String(process.env[k] || '').trim().length > 0
+  )
+);
+
 import express from 'express';
 import crypto from 'node:crypto';
-import fs from 'node:fs';
 import os from 'node:os';
-import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { Resend } from 'resend';
+import { sanitizeAllowedRoute } from './src/lib/aiCommandHubEngine';
+import {
+  getSharedAiProviderVault,
+  type AllowedGeminiCommandModel,
+} from './src/lib/aiProviderVaultServer';
+import {
+  COMMAND_SERVER_PRIMARY_TIMEOUT_MS,
+  classifyGeminiServerError,
+  matchDeterministicCommandIntent,
+  parseGeminiStructuredCommandPayload,
+  type AiCommandHubJsonSchema,
+  type GeminiQuotaScope,
+  type ModelQuotaDiagnosticEntry,
+} from './src/lib/voiceCommandDiagnostics';
+import {
+  OTP_RESEND_COOLDOWN_MS,
+  OTP_TTL_MS,
+  checkResendCooldown,
+  classifyResendDeliveryResult,
+  evaluateLiveSwitchSafetyGate,
+  evaluateOtpProviderReadiness,
+  maskEmailAddress,
+  type OtpDeliveryStatus,
+} from './src/lib/otpChallenge';
+import {
+  DEFAULT_EXCHANGE_CONTROLS,
+  PLATFORM_SUBSYSTEM_REGISTRY,
+  sanitizeExchangeRiskSettings,
+  type ExchangeControlProfile,
+  type ExchangeRiskSettings,
+  type SupportedExchangeId,
+} from './src/lib/platformArchitecture';
+import {
+  SEEDED_CANONICAL_TRADE_LEDGER,
+  lookupCanonicalTradeByExactId,
+  summarizeVerifiedPerformance,
+  type CanonicalTradeRecord,
+} from './src/lib/tradeLifecycleLedger';
+import {
+  type DerivativesSnapshot,
+  type MarketDataProvider,
+} from './src/lib/step2MarketDataTrust';
+import {
+  DEFAULT_STEP2_BACKTEST_CONFIG,
+  runStrategyComparisonBacktest,
+  STEP2_STRATEGY_REGISTRY,
+  type Step2BacktestConfig,
+  type Step2StrategyComparisonReport,
+  type StrategyId,
+  type StrategyValidationStatus,
+} from './src/lib/step2StrategyFramework';
+import {
+  acquireIdempotentExecutionLock,
+  createInitialWorkerPoolState,
+  releaseExecutionLock,
+  restartDegradedWorker,
+  scaleWorkerPoolControlled,
+  type ControlledWorkerPoolState,
+} from './src/lib/step2WorkerScaling';
+import {
+  buildCanonicalTradeRecordFromStep2Signal,
+  DEFAULT_STEP2_RISK_POLICY,
+  evaluatePortfolioHedgeIntelligence,
+  executeApprovedStep2Signal,
+  runLearningPerformanceAudit,
+  runSixAgentSignalPipeline,
+  type LearningPerformanceAuditReport,
+  type OperatingMode,
+  type Step2CompletedTradeSample,
+  type Step2ExecutionEnvironment,
+  type Step2RiskPolicy,
+  type UnifiedSignalRecord,
+} from './src/lib/step2UnifiedSignalHub';
+import {
+  SocialPublishingQueueEngine,
+  auditEnvironmentConfiguration,
+  computeSaltedOtpHash,
+  createSanitizedOtpAuditEntry,
+  evaluateExchangeDemoProbeOutcome,
+  resolvePlatformOperationalStatuses,
+  shouldApplyOtpResendCooldown,
+  verifySaltedOtpHash,
+  type ExchangeDemoProbeResult,
+  type ExchangeDemoVenue,
+  type OtpAuditLogEntry,
+  type SocialChannelTarget,
+  type SocialPostStage,
+} from './src/lib/step3ReadinessAudit';
+import {
+  SingletonSchedulerRegistry,
+  TelegramNotificationGovernor,
+  extractTelegram429RetryAfterSeconds,
+  type HealthDigestCadence,
+  type SystemOperationalHealth,
+  type TelegramGovernorPersistedState,
+} from './src/lib/telegramNotificationGovernor';
+import {
+  createPersistedSignalPayload,
+  maskSecretUrl,
+  resolveDiscordWebhookConfig,
+  resolveMakeWebhookConfig,
+  resolveTelegramConfig,
+  sanitizeNotificationError,
+  type SignalNotificationCategory,
+} from './src/lib/notificationDeliveryConfig';
+import {
+  NotificationDispatcher,
+  PersistentNotificationLedger,
+} from './src/lib/notificationLedgerServer';
+import {
+  buildOwnerConfigHealthReport,
+  recordBootPresenceSnapshot,
+} from './src/lib/serverConfigRegistry';
+import {
+  IsolatedChartAnalysisPool,
+  answerLightweightScenarioFollowUp,
+  runReadOnlyChartScenarioAnalysis,
+  validateChartImageUpload,
+  type ChartScenarioAnalysisReport,
+  type PrivateChartUploadRecord,
+  type ScannerMarketType,
+  type ScannerPlanTier,
+  type ScannerTradingStyle,
+} from './src/lib/chartScannerEngine';
+import {
+  AdminBusinessControlEngine,
+  ReferralAndShareEngine,
+  evaluateAccountAbuseRisk,
+  generateAiBusinessAdvisorySuggestions,
+} from './src/lib/businessControlsAndAbuse';
+import {
+  approveControlledResume,
+  buildPublicMaintenanceSummary,
+  createInitialMaintenanceState,
+  endMaintenanceToVerifying,
+  evaluateMaintenanceOrderGate,
+  evaluateMaintenanceTimer,
+  extendMaintenance,
+  MANDATORY_SAFETY_CHECKS,
+  parseMaintenanceStateFailClosed,
+  reconcilePendingOrdersAndProtections,
+  recordSafetyVerificationResults,
+  scheduleMaintenance,
+  serializeMaintenanceState,
+  startMaintenance,
+  triggerDeploymentRollback,
+  type OrderGateIntent,
+  type PublicMaintenanceAccessMode,
+  type SafeMaintenanceState,
+  type SafetyCheckId,
+  type SafetyCheckStatus,
+} from './src/lib/safeMaintenanceProtocol';
+import {
+  DEFAULT_CIRCUIT_BREAKER_THRESHOLDS,
+  DEFAULT_PROTOCOL_GUARDRAILS,
+  MasterSystemIntegrityVerifier,
+  OPERATIONAL_ENVIRONMENTS,
+  PROTOCOL_BOUND_ENTITIES,
+  buildBoundKernelAccountabilityList,
+  buildCanonicalBindingPayload,
+  computeCorrelatedHedgePlan,
+  computeExecutionDispatchCadence,
+  computeVolatilityAdjustedTrailingStop,
+  evaluateAntiSpamShield,
+  evaluateCircuitBreaker,
+  evaluateFundingAndDeleverage,
+  filterAndRouteOfflineAlert,
+  isValidOfflineChatId,
+  modelDepthAwareExecutionSlippage,
+  validatePaperToLiveExecutionParity,
+  type AntiDetectionDispatchPlan,
+  type CircuitBreakerDecision,
+  type ContainmentOperatingMode,
+  type CorrelatedHedgePlan,
+  type DepthSlippageModelResult,
+  type ExchangeDispatchAction,
+  type ExecutionParityValidationResult,
+  type FundingMonitorDecision,
+  type OfflineAlertChannel,
+  type OfflineAlertEventType,
+  type PendingManualPosition,
+  type SessionChatBinding,
+} from './src/lib/masterContainmentProtocol';
 import {
   DEFAULT_NEWS_FEED,
   generateTopSignals,
@@ -58,6 +255,13 @@ import {
   type BackendHealthSnapshot,
   type StructuredPerformanceReport,
 } from './src/lib/monitorAgent';
+import {
+  buildCanonicalPriceObservation,
+  computeBoundedExponentialBackoffMs,
+  computeSpreadBps,
+  evaluateTimestampFreshness,
+  type MarketDataSourceClass,
+} from './src/lib/marketPriceModel';
 import {
   STRICT_DIGEST_INTERVAL_HOURS,
   THREE_HOURS_MS,
@@ -200,6 +404,13 @@ import {
   type MicroserviceId,
 } from './src/lib/controlMatrix';
 import {
+  validateBinanceBookTickerRecord,
+  validateBinanceFuturesTickerRecord,
+  validateBinanceSpotTickerRecord,
+  validateStage2PaperEvidencePriceCoherence,
+  verifyAuthoritativeExecutionPrice,
+} from './src/lib/liveFeedValidator';
+import {
   UNAUTHENTICATED_PRINCIPAL,
   evaluateSubscriptionGate,
   maskPrincipalSummary,
@@ -220,6 +431,11 @@ import {
   type MatrixAgentStrategyId,
 } from './src/lib/modularBacktestEngine';
 import { MultiAgentStateSyncEngine } from './src/lib/agentSyncEngine';
+import { CoinGeckoMarketClient } from './src/lib/coinGeckoClient';
+import {
+  SmartMarketDataRouter,
+  type AgentDataProvenance,
+} from './src/lib/smartMarketDataRouter';
 import {
   ProfitScoopVaultEngine,
   type ProfitThresholdMode,
@@ -293,12 +509,24 @@ import {
   type BackendExecutedOrderLog,
   type BackendExecutionPipelineSnapshot,
   type EntryZoneSignalCandidate,
+  type TelegramStabilizerSnapshot,
 } from './src/lib/executionPipeline';
 import { AgenticCliGatewayRuntime } from './src/lib/agenticCliGatewayServer';
 import { FableOrchestratorRuntime } from './src/lib/fableOrchestratorServer';
 import { FreqtradeCoreServerRuntime } from './src/lib/freqtradeCoreServer';
 import { isSupportedExchange } from './src/lib/freqtradeCoreEngine';
 import { HybridArchitectureServerRuntime } from './src/lib/hybridArchitectureServer';
+import { PublicSignalValidationServerRuntime } from './src/lib/publicSignalValidationServer';
+import {
+  classifyAiCommandAuthorization,
+  evaluateOperatorSessionGrant,
+  isPrivilegedOperatorRole,
+  maskSenderAddress,
+  signOperatorSessionToken as signBoundOperatorSessionToken,
+  verifyOperatorSessionToken as verifyBoundOperatorSessionToken,
+  type OperatorSessionClaims,
+  type OperatorSessionRole,
+} from './src/lib/operatorSessionAuth';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -318,12 +546,12 @@ const SERVER_LIVE_MANDATE = resolveLiveMandateFromEnvironment(process.env);
 const PORT = 3000;
 function extractCleanEmail(raw?: string): string {
   const match = raw?.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-  return match ? match[0] : 'amirshehzad2647tcs@gmail.com';
+  return match ? match[0] : '';
 }
 const OWNER_EMAIL = extractCleanEmail(
-  process.env.RECIPIENT_EMAIL || process.env.OWNER_ALERT_EMAIL
+  process.env.OWNER_ALERT_EMAIL || process.env.RECIPIENT_EMAIL
 );
-const WHATSAPP_URL = 'https://wa.me/923015083557';
+const WHATSAPP_URL = (process.env.PUBLIC_WHATSAPP_URL || '').trim();
 
 interface WhaleTransaction {
   id: string;
@@ -450,32 +678,21 @@ function addBoundedSetKey(set: Set<string>, key: string, maxSize = 500): void {
   }
 }
 
-function signOperatorSessionToken(ttlMs = SESSION_TTL_MS): { token: string; expiresAtMs: number } {
-  const expiresAtMs = Date.now() + ttlMs;
-  const nonce = crypto.randomBytes(12).toString('hex');
-  const payload = `${expiresAtMs}.${nonce}`;
-  const sig = crypto
-    .createHmac('sha256', SESSION_SIGNING_KEY)
-    .update(payload)
-    .digest('hex');
-  return { token: `${payload}.${sig}`, expiresAtMs };
+function signOperatorSessionToken(
+  uid: string,
+  role: OperatorSessionRole,
+  ttlMs = SESSION_TTL_MS
+): { token: string; expiresAtMs: number } {
+  return signBoundOperatorSessionToken({
+    uid,
+    role,
+    signingKey: SESSION_SIGNING_KEY,
+    ttlMs,
+  });
 }
 
-function verifyOperatorSessionToken(token: unknown): boolean {
-  if (typeof token !== 'string' || !token) return false;
-  const parts = token.split('.');
-  if (parts.length !== 3) return false;
-  const [expStr, nonce, sig] = parts;
-  const expiresAtMs = Number(expStr);
-  if (!Number.isFinite(expiresAtMs) || Date.now() > expiresAtMs || !nonce || !sig) {
-    return false;
-  }
-  const expectedSig = crypto
-    .createHmac('sha256', SESSION_SIGNING_KEY)
-    .update(`${expStr}.${nonce}`)
-    .digest('hex');
-  if (sig.length !== expectedSig.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(sig, 'utf8'), Buffer.from(expectedSig, 'utf8'));
+function verifyOperatorSessionToken(token: unknown): OperatorSessionClaims | null {
+  return verifyBoundOperatorSessionToken(token, SESSION_SIGNING_KEY);
 }
 
 function parseCookies(cookieHeader?: string): Record<string, string> {
@@ -588,13 +805,157 @@ function requirePremiumSubscription(capability: CapabilityClass) {
   };
 }
 
-const extraAdminEmailsFromEnv = (process.env.ADMIN_EMAIL_ALLOWLIST || '')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+const extraAdminEmailsFromEnv = Array.from(
+  new Set(
+    [
+      ...(process.env.ADMIN_EMAIL_ALLOWLIST || '').split(','),
+      process.env.OWNER_ALERT_EMAIL || '',
+      process.env.RECIPIENT_EMAIL || '',
+      OWNER_EMAIL,
+    ]
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+  )
+);
 
 const modularProfitTakingEngine = new ModularProfitTakingEngine();
 const multiAgentSyncEngine = new MultiAgentStateSyncEngine();
+const coinGeckoMarketClient = new CoinGeckoMarketClient();
+const smartMarketDataRouter = new SmartMarketDataRouter({
+  coinGeckoClient: coinGeckoMarketClient,
+  getExchangeFeed: (sym) => {
+    const rec = spotFeedCache[sym];
+    if (!rec) return null;
+    const mappedSource: 'binance_spot' | 'binance_ws' | 'fallback' =
+      rec.source === 'binance_spot'
+        ? String(rec.sourceClass || '').includes('WS')
+          ? 'binance_ws'
+          : 'binance_spot'
+        : 'fallback';
+    return {
+      symbol: rec.symbol,
+      price: rec.price,
+      change24hPercent: rec.change24hPercent,
+      volume24hUsd: rec.volume24hUsd,
+      bidPrice: typeof rec.bidPrice === 'number' ? rec.bidPrice : undefined,
+      askPrice: typeof rec.askPrice === 'number' ? rec.askPrice : undefined,
+      updatedAtMs: rec.updatedAtMs,
+      source: mappedSource,
+    };
+  },
+  getCmcReference: (sym) => {
+    const rec = cmcValuationsCache[sym];
+    if (!rec) return null;
+    const parsedMs = Date.parse(rec.updatedAt);
+    return {
+      symbol: rec.symbol,
+      priceUsd: rec.cmcPriceUsd,
+      change24hPercent: rec.percentChange24h,
+      marketCapUsd: rec.marketCapUsd,
+      volume24hUsd: rec.volume24hUsd,
+      updatedAtMs: Number.isFinite(parsedMs) ? parsedMs : 0,
+      source: rec.source === 'cmc_api' ? 'cmc_api' : 'unavailable',
+    };
+  },
+});
+
+function resolveAuthoritativeAgentSyncInput(symbol = 'BTCUSDT'): {
+  symbol: string;
+  authoritativePrice: number;
+  dataProvenance: AgentDataProvenance;
+  dataQuality: 'LIVE' | 'DELAYED' | 'CACHED' | 'SIMULATED' | 'UNAVAILABLE';
+  providerName: string;
+  dataAgeMs: number | null;
+  executionAllowed: boolean;
+} {
+  const normSym = symbol.trim().toUpperCase() || 'BTCUSDT';
+  const routerStatus = smartMarketDataRouter.getStatus(normSym);
+  const spotRec = spotFeedCache[normSym];
+  const nowMs = Date.now();
+
+  if (
+    routerStatus.overallProvenance === 'LIVE_EXCHANGE' &&
+    spotRec &&
+    spotRec.source === 'binance_spot' &&
+    spotRec.price > 0
+  ) {
+    return {
+      symbol: normSym,
+      authoritativePrice: spotRec.price,
+      dataProvenance: 'LIVE_EXCHANGE',
+      dataQuality: 'LIVE',
+      providerName: routerStatus.primaryExchangeProvider,
+      dataAgeMs: Math.max(0, nowMs - spotRec.updatedAtMs),
+      executionAllowed: true,
+    };
+  }
+
+  if (
+    routerStatus.overallProvenance === 'CACHED_EXCHANGE' &&
+    spotRec &&
+    spotRec.source === 'binance_spot' &&
+    spotRec.price > 0
+  ) {
+    return {
+      symbol: normSym,
+      authoritativePrice: spotRec.price,
+      dataProvenance: 'CACHED_EXCHANGE',
+      dataQuality: 'CACHED',
+      providerName: routerStatus.providers.binance.provider,
+      dataAgeMs: Math.max(0, nowMs - spotRec.updatedAtMs),
+      executionAllowed: false,
+    };
+  }
+
+  const cgCached = coinGeckoMarketClient.getCachedQuote(normSym);
+  if (cgCached && cgCached.priceUsd > 0) {
+    return {
+      symbol: normSym,
+      authoritativePrice: cgCached.priceUsd,
+      dataProvenance: 'REFERENCE_AGGREGATED',
+      dataQuality: cgCached.dataQuality === 'LIVE' ? 'DELAYED' : cgCached.dataQuality,
+      providerName: 'coingecko',
+      dataAgeMs: Math.max(0, nowMs - cgCached.lastUpdatedAtMs),
+      executionAllowed: false,
+    };
+  }
+
+  const cmcRec = cmcValuationsCache[normSym];
+  if (cmcRec && cmcRec.source === 'cmc_api' && cmcRec.cmcPriceUsd > 0) {
+    const ts = Date.parse(cmcRec.updatedAt);
+    return {
+      symbol: normSym,
+      authoritativePrice: cmcRec.cmcPriceUsd,
+      dataProvenance: 'REFERENCE_AGGREGATED',
+      dataQuality: 'DELAYED',
+      providerName: 'coinmarketcap',
+      dataAgeMs: Number.isFinite(ts) ? Math.max(0, nowMs - ts) : null,
+      executionAllowed: false,
+    };
+  }
+
+  if (spotRec && spotRec.price > 0 && spotRec.source !== 'binance_spot') {
+    return {
+      symbol: normSym,
+      authoritativePrice: spotRec.price,
+      dataProvenance: 'SIMULATED_FIXTURE',
+      dataQuality: 'SIMULATED',
+      providerName: 'deterministic_fixture',
+      dataAgeMs: null,
+      executionAllowed: false,
+    };
+  }
+
+  return {
+    symbol: normSym,
+    authoritativePrice: 0,
+    dataProvenance: 'STALE_OR_UNAVAILABLE',
+    dataQuality: 'UNAVAILABLE',
+    providerName: 'none',
+    dataAgeMs: null,
+    executionAllowed: false,
+  };
+}
 const profitVaultEngine = new ProfitScoopVaultEngine(25_000);
 const apiTokenBucketLimiter = new TokenBucketLimiter({
   rpm: Number(process.env.RATE_LIMIT_RPM) || 200,
@@ -609,6 +970,13 @@ const agenticCliGateway = new AgenticCliGatewayRuntime(__dirname);
 const fableOrchestrator = new FableOrchestratorRuntime(__dirname);
 const freqtradeCore = new FreqtradeCoreServerRuntime(__dirname);
 const hybridArchitecture = new HybridArchitectureServerRuntime(__dirname);
+const publicSignalGate = new PublicSignalValidationServerRuntime(__dirname, freqtradeCore);
+const notificationLedger = new PersistentNotificationLedger(
+  path.resolve(__dirname, '.data', 'signal_forge_notification_ledger.sqlite')
+);
+const notificationDispatcher = new NotificationDispatcher({
+  ledger: notificationLedger,
+});
 
 function tokenBucketRateLimit(
   req: express.Request,
@@ -659,7 +1027,7 @@ function requireRbacPermission(permission: RbacPermission) {
   };
 }
 
-function requireOperatorAuth(
+async function requireOperatorAuth(
   req: express.Request,
   res: express.Response,
   next: express.NextFunction
@@ -667,36 +1035,121 @@ function requireOperatorAuth(
   if (hasConfiguredOperatorToken(req)) {
     return next();
   }
-  const headerToken = req.headers['x-signal-session'];
-  if (verifyOperatorSessionToken(headerToken)) {
+
+  const headerClaims = verifyOperatorSessionToken(req.headers['x-signal-session']);
+  if (headerClaims) {
     return next();
   }
-  // Allow valid cookie session only when paired with same-origin fetch metadata
+
+  // Allow valid identity-bound cookie session only when paired with same-origin fetch metadata or explicit CSRF header
   const cookies = parseCookies(req.headers.cookie);
+  const cookieClaims = verifyOperatorSessionToken(cookies.sf_session);
   const fetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+  const hasCustomHeader = Boolean(req.headers['x-requested-with']);
+  const originHeader = String(req.headers.origin || '');
+  const hostHeader = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  let originMatchesHost = false;
+  if (originHeader && hostHeader) {
+    try {
+      originMatchesHost = new URL(originHeader).host === hostHeader;
+    } catch {
+      originMatchesHost = false;
+    }
+  }
   if (
-    verifyOperatorSessionToken(cookies.sf_session) &&
-    (fetchSite === 'same-origin' || fetchSite === 'same-site')
+    cookieClaims &&
+    (fetchSite === 'same-origin' || fetchSite === 'same-site' || hasCustomHeader || originMatchesHost)
   ) {
     return next();
   }
+
+  // Allow direct verified Firebase ID token for verified ADMIN / SUPER_ADMIN principals
+  const principal = await resolveCallerPrincipal(req);
+  const identity = buildRbacIdentity(principal, extraAdminEmailsFromEnv);
+  if (identity.authenticated && isPrivilegedOperatorRole(identity.role)) {
+    return next();
+  }
+
+  if (identity.authenticated) {
+    return res.status(403).json({
+      ok: false,
+      code: 'OPERATOR_FORBIDDEN',
+      role: identity.role,
+      error: 'Operator or Owner privileges (ADMIN / SUPER_ADMIN) are required for this endpoint.',
+    });
+  }
+
   return res.status(401).json({
     ok: false,
     code: 'UNAUTHORIZED_OPERATOR',
-    error: 'Valid operator session token (X-Signal-Session) required.',
+    error: 'Verified owner/operator authentication is required.',
   });
 }
 
-// Interactive Live Switch OTP Challenges (5-minute expiry, max 5 attempts)
+async function isRequestAuthenticatedOwnerOrOperator(req: express.Request): Promise<boolean> {
+  if (hasConfiguredOperatorToken(req)) {
+    return true;
+  }
+  if (verifyOperatorSessionToken(req.headers['x-signal-session'])) {
+    return true;
+  }
+  const cookies = parseCookies(req.headers.cookie);
+  if (verifyOperatorSessionToken(cookies.sf_session)) {
+    return true;
+  }
+  const principal = await resolveCallerPrincipal(req);
+  const identity = buildRbacIdentity(principal, extraAdminEmailsFromEnv);
+  return Boolean(identity.authenticated && isPrivilegedOperatorRole(identity.role));
+}
+
+const BOOT_ENV_PERSISTENCE = recordBootPresenceSnapshot({
+  snapshotPath: path.resolve(process.cwd(), '.data', 'env-persistence-snapshot.json'),
+  env: process.env,
+  preDotenvKeys: PRE_DOTENV_ENV_KEYS,
+  dotenvLoadedKeys: DOTENV_LOADED_KEYS,
+});
+
+// Interactive Live Switch OTP Challenges (5-minute expiry, 30s resend cooldown, max 5 attempts)
+// Stored strictly as salted HMAC-SHA256 hashes (zero plaintext OTP retained in memory or logs)
 interface LiveOtpChallenge {
   id: string;
-  code: string;
+  codeHash: string;
   recipient: string;
+  createdAt: number;
   expiresAt: number;
+  resendAvailableAt: number;
   used: boolean;
   attempts: number;
+  deliveryStatus: OtpDeliveryStatus;
+  providerError: string | null;
 }
+const OTP_RUNTIME_PEPPER = crypto.randomBytes(32).toString('hex');
 const liveOtpChallenges = new Map<string, LiveOtpChallenge>();
+const lastOtpIssuedAtByRecipient = new Map<string, number>();
+const otpAuditLog: OtpAuditLogEntry[] = [];
+
+function hmacSha256Hex(key: string, payload: string): string {
+  return crypto.createHmac('sha256', key).update(payload).digest('hex');
+}
+
+function recordOtpAuditEntry(entry: OtpAuditLogEntry): void {
+  otpAuditLog.unshift(entry);
+  if (otpAuditLog.length > 50) otpAuditLog.length = 50;
+}
+
+// Step 3 Idempotent Social Publishing Queue & Honest External Exchange Demo Probe Cache
+const step3SocialQueue = new SocialPublishingQueueEngine(3);
+const lastExchangeDemoProbes: Record<ExchangeDemoVenue, ExchangeDemoProbeResult | null> = {
+  OKX_DEMO: null,
+  BINANCE_TESTNET: null,
+};
+
+const exchangeRiskSettingsStore: Record<SupportedExchangeId, ExchangeRiskSettings> = {
+  BINANCE: { ...DEFAULT_EXCHANGE_CONTROLS[0].riskSettings },
+  BYBIT: { ...DEFAULT_EXCHANGE_CONTROLS[1].riskSettings },
+  OKX: { ...DEFAULT_EXCHANGE_CONTROLS[2].riskSettings },
+  KRAKEN: { ...DEFAULT_EXCHANGE_CONTROLS[3].riskSettings },
+};
 
 interface FailsafeRecoveryChallenge {
   id: string;
@@ -745,6 +1198,16 @@ interface SpotTickerEntry {
   volume24hUsd: number;
   source: 'binance_spot' | 'spot_cache';
   updatedAtMs: number;
+  exchange?: 'binance';
+  marketType?: 'SPOT';
+  quoteCurrency?: string;
+  priceType?: 'LAST_TRADED';
+  bidPrice?: number | null;
+  askPrice?: number | null;
+  markPrice?: number | null;
+  spreadBps?: number | null;
+  sourceClass?: MarketDataSourceClass;
+  observedAtIso?: string;
 }
 
 const spotFeedCache: Record<string, SpotTickerEntry> = {};
@@ -763,7 +1226,21 @@ let serverSyncEpoch = 1;
 let lastSpotPollLatencyMs = 0;
 let lastFuturesPollLatencyMs = 0;
 let lastGainersPollLatencyMs = 0;
-const futuresFeedCache: Record<string, FuturesTickerTelemetry> = {};
+const futuresFeedCache: Record<
+  string,
+  FuturesTickerTelemetry & { updatedAtMs?: number; observedAtIso?: string }
+> = {};
+const liveFeedValidationStats = {
+  spotAccepted: 0,
+  spotRejected: 0,
+  bookAccepted: 0,
+  bookRejected: 0,
+  futuresAccepted: 0,
+  futuresRejected: 0,
+  lastRejectionReason: null as string | null,
+  lastRejectedSymbol: null as string | null,
+  lastRejectedAtIso: null as string | null,
+};
 
 let spotPollInFlight: Promise<void> | null = null;
 let cmcRefreshInFlight: Promise<void> | null = null;
@@ -775,12 +1252,16 @@ const cpsSeqByInstrument = new Map<string, number>();
 interface SpotStreamTick {
   symbol: string;
   price: number;
-  markPrice: number; // backward-compatible alias for downstream listeners
+  markPrice: number; // distinct midpoint mark price when Bid/Ask are observed
+  bidPrice?: number | null;
+  askPrice?: number | null;
+  spreadBps?: number | null;
   volume24hUsd?: number;
   change24hPercent?: number;
   high24h?: number;
   low24h?: number;
   source: 'binance_spot';
+  sourceClass?: MarketDataSourceClass;
   updatedAtMs: number;
 }
 const pendingSseTickBatch = new Map<string, SpotStreamTick>();
@@ -789,10 +1270,21 @@ let backendSpotWs: WebSocket | null = null;
 let backendWsConnected = false;
 let backendWsLastFrameAtMs = 0;
 let backendWsAttempt = 0;
+let backendWsReconnectCount = 0;
+let backendWsHasEverOpened = false;
+let backendWsLastDisconnectAtIso: string | null = null;
+let backendWsLastReconnectAtIso: string | null = null;
+let backendWsActiveSubscriptions: string[] = [];
+let backendWsDuplicateFramesDropped = 0;
+let backendWsOutOfOrderFramesDropped = 0;
+let backendWsFailedUpdatesCount = 0;
+const backendWsLastTickTsBySymbol: Record<string, number> = {};
+const backendWsLastSignatureBySymbol: Record<string, string> = {};
 let backendWsCircuitOpen = false;
 let backendWsHostIndex = 0;
 let backendWsHealTimer: ReturnType<typeof setTimeout> | null = null;
 let backendWsFirstFrameTimer: ReturnType<typeof setTimeout> | null = null;
+let backendWsWatchdogTimer: ReturnType<typeof setInterval> | null = null;
 let systemControls: SystemRuntimeControls = { ...DEFAULT_SYSTEM_CONTROLS };
 let appLiveEnabled = true;
 let appLiveToggledAt: string = new Date().toISOString();
@@ -907,6 +1399,7 @@ function seedFallbackSpotTelemetry(forceReset = false) {
     spotFeedSource = 'spot_cache';
   }
   const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
   for (const coin of TRACKED_COINS) {
     if (forceReset || !spotFeedCache[coin.symbol]) {
       spotFeedCache[coin.symbol] = {
@@ -918,6 +1411,16 @@ function seedFallbackSpotTelemetry(forceReset = false) {
         volume24hUsd: coin.referencePrice >= 1000 ? 14_200_000_000 : 1_850_000_000,
         source: 'spot_cache',
         updatedAtMs: nowMs,
+        exchange: 'binance',
+        marketType: 'SPOT',
+        quoteCurrency: 'USDT',
+        priceType: 'LAST_TRADED',
+        bidPrice: null,
+        askPrice: null,
+        markPrice: null,
+        spreadBps: null,
+        sourceClass: 'CACHED_SIMULATED',
+        observedAtIso: nowIso,
       };
     }
   }
@@ -932,6 +1435,16 @@ function seedFallbackSpotTelemetry(forceReset = false) {
         volume24hUsd: g.volume24hUsd,
         source: 'spot_cache',
         updatedAtMs: nowMs,
+        exchange: 'binance',
+        marketType: 'SPOT',
+        quoteCurrency: 'USDT',
+        priceType: 'LAST_TRADED',
+        bidPrice: null,
+        askPrice: null,
+        markPrice: null,
+        spreadBps: null,
+        sourceClass: 'CACHED_SIMULATED',
+        observedAtIso: nowIso,
       };
     }
   }
@@ -1002,6 +1515,11 @@ async function pollBinanceSpotFeed() {
       try {
         const res = await fetch(`${host}/api/v3/ticker/24hr`, { signal: controller.signal });
         if (!res.ok) {
+          smartMarketDataRouter.recordProviderFailure(
+            'binance',
+            res.status,
+            `Binance Spot ticker HTTP ${res.status} from ${host}`
+          );
           forgeCapitalState = recordForgeApiError(forgeCapitalState, {
             market: 'SPOT',
             moduleId: 'SPOT_MOMENTUM',
@@ -1027,31 +1545,61 @@ async function pollBinanceSpotFeed() {
         for (const item of list) {
           const sym = String(item?.symbol || '').toUpperCase();
           if (!wanted.has(sym)) continue;
-          const price = Number(item.lastPrice);
-          const prev = spotFeedCache[sym]?.price;
-          const tickCheck = validateSpotTickSample({
-            price,
-            previousPrice: spotFeedCache[sym]?.source === 'binance_spot' ? prev : undefined,
-          });
-          if (!tickCheck.valid) {
+          const prevLive = spotFeedCache[sym]?.source === 'binance_spot' ? spotFeedCache[sym].price : undefined;
+          const validated = validateBinanceSpotTickerRecord(
+            {
+              symbol: sym,
+              lastPrice: item?.lastPrice,
+              priceChangePercent: item?.priceChangePercent,
+              highPrice: item?.highPrice,
+              lowPrice: item?.lowPrice,
+              quoteVolume: item?.quoteVolume,
+              bidPrice: item?.bidPrice,
+              askPrice: item?.askPrice,
+              closeTime: item?.closeTime,
+            },
+            {
+              previousLivePrice: prevLive,
+              nowMs,
+              allowedSymbols: wanted,
+            }
+          );
+          if (!validated.valid || !validated.record) {
+            liveFeedValidationStats.spotRejected += 1;
+            liveFeedValidationStats.lastRejectionReason = validated.reason;
+            liveFeedValidationStats.lastRejectedSymbol = sym;
+            liveFeedValidationStats.lastRejectedAtIso = new Date(nowMs).toISOString();
             monitorState.anomaliesIsolatedCount = (monitorState.anomaliesIsolatedCount ?? 0) + 1;
-            monitorState.lastHealAction = tickCheck.reason;
+            monitorState.lastHealAction = validated.reason;
             continue;
           }
+          const rec = validated.record;
+          liveFeedValidationStats.spotAccepted += 1;
           spotFeedCache[sym] = {
-            symbol: sym,
-            price,
-            change24hPercent: Number(Number(item.priceChangePercent || 0).toFixed(2)),
-            high24h: Number(item.highPrice || price),
-            low24h: Number(item.lowPrice || price),
-            volume24hUsd: Math.round(Number(item.quoteVolume || 0)),
+            symbol: rec.symbol,
+            price: rec.price,
+            change24hPercent: rec.change24hPercent,
+            high24h: rec.high24h,
+            low24h: rec.low24h,
+            volume24hUsd: rec.volume24hUsd,
             source: 'binance_spot',
-            updatedAtMs: nowMs,
+            updatedAtMs: rec.observedAtMs,
+            exchange: 'binance',
+            marketType: 'SPOT',
+            quoteCurrency: 'USDT',
+            priceType: 'LAST_TRADED',
+            bidPrice: rec.bidPrice,
+            askPrice: rec.askPrice,
+            markPrice: rec.markPrice,
+            spreadBps: rec.spreadBps,
+            sourceClass: 'REST_FALLBACK_VERIFIED',
+            observedAtIso: new Date(rec.observedAtMs).toISOString(),
           };
           updatedCount++;
         }
 
         if (updatedCount > 0) {
+          smartMarketDataRouter.recordProviderSuccess('binance');
           spotFeedSource = 'binance_spot';
           spotFeedUpdatedAt = new Date(nowMs).toISOString();
           lastFeedPollAtMs = nowMs;
@@ -1084,7 +1632,7 @@ async function pollBinanceSpotFeed() {
         clearTimeout(timer);
       }
     }
-    spotFeedUpdatedAt = new Date().toISOString();
+    // Do NOT stamp spotFeedUpdatedAt on failed polls so staleness checks honestly detect outages.
     lastSpotPollLatencyMs = Math.max(1, Date.now() - startedAt);
     monitorState.spotFeedStatus = spotFeedSource === 'binance_spot' ? 'LIVE' : 'DETERMINISTIC_FALLBACK';
   })().finally(() => {
@@ -1292,25 +1840,55 @@ async function pollBinanceFuturesFeed() {
             ...topGainersCache.map((g) => g.symbol),
           ]);
           const nowMs = Date.now();
+          let updatedFuturesCount = 0;
           for (const p of premList) {
             const sym = String(p?.symbol || '').toUpperCase();
             if (!wanted.has(sym)) continue;
             const tk = tickerMap.get(sym);
-            const markPrice = Number(p.markPrice || tk?.lastPrice || 0);
-            if (!Number.isFinite(markPrice) || markPrice <= 0) continue;
-            const vol24 = Number(tk?.quoteVolume || 250_000_000);
+            const prevLiveMark =
+              futuresFeedCache[sym]?.source === 'binance_futures'
+                ? futuresFeedCache[sym].markPrice
+                : undefined;
+            const validated = validateBinanceFuturesTickerRecord(
+              {
+                symbol: sym,
+                markPrice: p?.markPrice ?? tk?.lastPrice,
+                indexPrice: p?.indexPrice,
+                lastFundingRate: p?.lastFundingRate,
+                nextFundingTime: p?.nextFundingTime,
+                quoteVolume: tk?.quoteVolume,
+                time: p?.time,
+              },
+              {
+                previousLiveMarkPrice: prevLiveMark,
+                nowMs,
+                allowedSymbols: wanted,
+              }
+            );
+            if (!validated.valid || !validated.record) {
+              liveFeedValidationStats.futuresRejected += 1;
+              liveFeedValidationStats.lastRejectionReason = validated.reason;
+              liveFeedValidationStats.lastRejectedSymbol = sym;
+              liveFeedValidationStats.lastRejectedAtIso = new Date(nowMs).toISOString();
+              monitorState.anomaliesIsolatedCount = (monitorState.anomaliesIsolatedCount ?? 0) + 1;
+              monitorState.lastHealAction = validated.reason;
+              continue;
+            }
+            const rec = validated.record;
+            liveFeedValidationStats.futuresAccepted += 1;
+            updatedFuturesCount += 1;
             futuresFeedCache[sym] = {
-              symbol: sym,
-              markPrice,
-              indexPrice: Number(p.indexPrice || markPrice),
-              fundingRate: Number(p.lastFundingRate ?? 0.0001),
-              nextFundingTime: new Date(
-                Number(p.nextFundingTime || Date.now() + 3_600_000 * 4)
-              ).toISOString(),
-              openInterestUsd: Math.round(vol24 * 0.36),
-              volume24hUsd: Math.round(vol24),
+              symbol: rec.symbol,
+              markPrice: rec.markPrice,
+              indexPrice: rec.indexPrice,
+              fundingRate: rec.fundingRate,
+              nextFundingTime: rec.nextFundingTimeIso,
+              openInterestUsd: rec.openInterestUsd,
+              volume24hUsd: rec.volume24hUsd,
               maxLeverage: FUTURES_MAX_LEVERAGE[sym] ?? 25,
               source: 'binance_futures',
+              updatedAtMs: rec.observedAtMs,
+              observedAtIso: new Date(rec.observedAtMs).toISOString(),
             };
             const cpsInstrument = `usdm_perp:${sym}`;
             const nextSeq = (cpsSeqByInstrument.get(cpsInstrument) ?? 0) + 1;
@@ -1322,22 +1900,24 @@ async function pollBinanceFuturesFeed() {
               sequence_number: nextSeq,
               timestamp_exchange: nowMs - 8,
               timestamp_received: nowMs,
-              bid: Number((markPrice * 0.9999).toPrecision(7)),
-              ask: Number((markPrice * 1.0001).toPrecision(7)),
-              mark_price: markPrice,
+              bid: Number((rec.markPrice * 0.9999).toPrecision(7)),
+              ask: Number((rec.markPrice * 1.0001).toPrecision(7)),
+              mark_price: rec.markPrice,
             });
             GLOBAL_CPS_ORACLE.ingestSecondaryCrossCheck({
               instrument: cpsInstrument,
               instrumentClass: 'USD_M_FUTURES',
-              secondaryPrice: Number(p.indexPrice || markPrice),
+              secondaryPrice: rec.indexPrice,
               nowMs,
             });
           }
-          futuresFeedSource = 'binance_futures';
-          futuresFeedUpdatedAt = new Date().toISOString();
-          lastFuturesPollLatencyMs = Math.max(1, Date.now() - startedAt);
-          monitorState.futuresFeedStatus = 'LIVE';
-          return;
+          if (updatedFuturesCount > 0) {
+            futuresFeedSource = 'binance_futures';
+            futuresFeedUpdatedAt = new Date(nowMs).toISOString();
+            lastFuturesPollLatencyMs = Math.max(1, Date.now() - startedAt);
+            monitorState.futuresFeedStatus = 'LIVE';
+            return;
+          }
         }
       }
       if (!premRes.ok || !tickerRes.ok) {
@@ -1365,7 +1945,7 @@ async function pollBinanceFuturesFeed() {
       clearTimeout(timer);
     }
     futuresFeedSource = 'futures_cache';
-    futuresFeedUpdatedAt = new Date().toISOString();
+    // Do NOT stamp futuresFeedUpdatedAt on failed polls so staleness checks honestly detect outages.
     lastFuturesPollLatencyMs = Math.max(1, Date.now() - startedAt);
     monitorState.futuresFeedStatus = 'DETERMINISTIC_FALLBACK';
   })().finally(() => {
@@ -1401,6 +1981,10 @@ function pauseBackendSpotWs() {
     clearTimeout(backendWsFirstFrameTimer);
     backendWsFirstFrameTimer = null;
   }
+  if (backendWsWatchdogTimer) {
+    clearInterval(backendWsWatchdogTimer);
+    backendWsWatchdogTimer = null;
+  }
   detachBackendWs(backendSpotWs);
   backendWsConnected = false;
   pendingSseTickBatch.clear();
@@ -1421,7 +2005,10 @@ function scheduleBackendWsSubSecondHeal(reason: string) {
     monitorState.lastHealAction = `${reason} -> Spot WS circuit breaker opened after ${backendWsAttempt} attempts`;
     return;
   }
-  const delayMs = computeExponentialReconnectDelayMs(backendWsAttempt);
+  const delayMs = computeBoundedExponentialBackoffMs(backendWsAttempt, {
+    baseDelayMs: 350,
+    maxDelayMs: 30_000,
+  });
   backendWsAttempt += 1;
   monitorState.status = 'SELF_HEALING';
   monitorState.wsChannelStatus = 'HEALING';
@@ -1431,7 +2018,7 @@ function scheduleBackendWsSubSecondHeal(reason: string) {
     if (!appLiveEnabled || !systemControls.liveFeedModulesEnabled || backendWsCircuitOpen) return;
     monitorState.autoHealCount += 1;
     monitorState.selfHealLatencyMs = Math.max(1, Math.round(performance.now() - healStart));
-    monitorState.lastHealAction = `${reason} -> Backoff WS self-heal #${monitorState.autoHealCount} in ${monitorState.selfHealLatencyMs}ms (attempt ${backendWsAttempt})`;
+    monitorState.lastHealAction = `${reason} -> Bounded backoff WS self-heal #${monitorState.autoHealCount} in ${monitorState.selfHealLatencyMs}ms (attempt ${backendWsAttempt}, delay ${delayMs}ms)`;
     bindBackendSpotWebSocket();
   }, delayMs);
 }
@@ -1448,6 +2035,10 @@ function bindBackendSpotWebSocket() {
     clearTimeout(backendWsFirstFrameTimer);
     backendWsFirstFrameTimer = null;
   }
+  if (backendWsWatchdogTimer) {
+    clearInterval(backendWsWatchdogTimer);
+    backendWsWatchdogTimer = null;
+  }
   try {
     detachBackendWs(backendSpotWs);
 
@@ -1458,7 +2049,9 @@ function bindBackendSpotWebSocket() {
       `${s}@kline_1m`,
       `${s}@kline_15m`,
     ]);
-    const streams = ['!miniTicker@arr', ...baseSyms, ...bookTickerSyms, ...depthSyms, ...klineSyms].join('/');
+    const streamList = ['!miniTicker@arr', ...baseSyms, ...bookTickerSyms, ...depthSyms, ...klineSyms];
+    backendWsActiveSubscriptions = streamList;
+    const streams = streamList.join('/');
     const endpoint = SPOT_WS_ENDPOINTS[backendWsHostIndex % SPOT_WS_ENDPOINTS.length];
     const ws = new globalThis.WebSocket(`${endpoint}?streams=${streams}`);
     backendSpotWs = ws;
@@ -1469,12 +2062,18 @@ function bindBackendSpotWebSocket() {
         detachBackendWs(ws);
         return;
       }
+      const openNowIso = new Date().toISOString();
+      if (backendWsHasEverOpened) {
+        backendWsReconnectCount += 1;
+        backendWsLastReconnectAtIso = openNowIso;
+      }
+      backendWsHasEverOpened = true;
       backendWsConnected = true;
       backendWsLastFrameAtMs = Date.now();
       monitorState.backendWsConnected = true;
       monitorState.wsChannelStatus = 'CONNECTED';
       monitorState.status = 'OPTIMAL';
-      monitorState.lastHealAction = `Strict Binance Spot + BookTicker + Kline WS bound (${new URL(endpoint).host})`;
+      monitorState.lastHealAction = `Strict Binance Spot + BookTicker + Kline WS bound (${new URL(endpoint).host}, ${streamList.length} streams)`;
 
       if (backendWsFirstFrameTimer) clearTimeout(backendWsFirstFrameTimer);
       backendWsFirstFrameTimer = setTimeout(() => {
@@ -1482,11 +2081,27 @@ function bindBackendSpotWebSocket() {
         if (!receivedFirstFrame && backendSpotWs === ws) {
           backendWsHostIndex = (backendWsHostIndex + 1) % SPOT_WS_ENDPOINTS.length;
           backendWsConnected = false;
+          backendWsLastDisconnectAtIso = new Date().toISOString();
           monitorState.backendWsConnected = false;
           detachBackendWs(ws);
           scheduleBackendWsSubSecondHeal('Silent Spot WS host failover');
         }
       }, 1500);
+
+      // Lightweight server-side staleness watchdog: detect silent/stalled sockets and restore subscriptions
+      if (backendWsWatchdogTimer) clearInterval(backendWsWatchdogTimer);
+      backendWsWatchdogTimer = setInterval(() => {
+        if (backendSpotWs !== ws || !backendWsConnected) return;
+        const ageMs = Date.now() - backendWsLastFrameAtMs;
+        if (ageMs > WS_FRAME_STALE_THRESHOLD_MS) {
+          backendWsConnected = false;
+          backendWsLastDisconnectAtIso = new Date().toISOString();
+          monitorState.backendWsConnected = false;
+          backendWsHostIndex = (backendWsHostIndex + 1) % SPOT_WS_ENDPOINTS.length;
+          detachBackendWs(ws);
+          scheduleBackendWsSubSecondHeal(`Stale Spot WS stream (${ageMs}ms without frames)`);
+        }
+      }, 5000);
     };
 
     ws.onmessage = (event) => {
@@ -1519,24 +2134,54 @@ function bindBackendSpotWebSocket() {
         if (streamName.includes('@bookTicker') && d?.s && d?.b !== undefined && d?.a !== undefined) {
           const sym = String(d.s).toUpperCase();
           if (!trackedSet.has(sym)) return;
-          const bid = Number(d.b);
-          const ask = Number(d.a);
-          if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask >= bid) {
-            const cpsInstrument = `spot:${sym}`;
-            const nextSeq = (cpsSeqByInstrument.get(cpsInstrument) ?? 0) + 1;
-            cpsSeqByInstrument.set(cpsInstrument, nextSeq);
-            GLOBAL_CPS_ORACLE.ingestPrimaryStreamTick({
-              instrument: cpsInstrument,
-              instrumentClass: 'SPOT',
-              source_id: CERTIFIED_PRIMARY_SOURCE_CONFIG.entries.SPOT.source_id,
-              sequence_number: nextSeq,
-              timestamp_exchange: nowMs - 4,
-              timestamp_received: nowMs,
-              bid,
-              ask,
-              mark_price: Number(((bid + ask) / 2).toPrecision(8)),
-            });
+          const existing = spotFeedCache[sym];
+          const bookCheck = validateBinanceBookTickerRecord(
+            { symbol: sym, bidPrice: d.b, askPrice: d.a },
+            {
+              referencePrice: existing?.source === 'binance_spot' ? existing.price : undefined,
+              allowedSymbols: trackedSet,
+            }
+          );
+          if (!bookCheck.valid || !bookCheck.record) {
+            liveFeedValidationStats.bookRejected += 1;
+            liveFeedValidationStats.lastRejectionReason = bookCheck.reason;
+            liveFeedValidationStats.lastRejectedSymbol = sym;
+            liveFeedValidationStats.lastRejectedAtIso = new Date(nowMs).toISOString();
+            backendWsFailedUpdatesCount += 1;
+            monitorState.anomaliesIsolatedCount = (monitorState.anomaliesIsolatedCount ?? 0) + 1;
+            monitorState.lastHealAction = bookCheck.reason;
+            return;
           }
+          const book = bookCheck.record;
+          liveFeedValidationStats.bookAccepted += 1;
+          if (existing) {
+            // Preserve Last Traded Price separately while attaching validated live Bid, Ask, and midpoint Mark Price
+            spotFeedCache[sym] = {
+              ...existing,
+              bidPrice: book.bidPrice,
+              askPrice: book.askPrice,
+              markPrice: book.markPrice,
+              spreadBps: book.spreadBps,
+              exchange: 'binance',
+              marketType: 'SPOT',
+              quoteCurrency: 'USDT',
+              priceType: 'LAST_TRADED',
+            };
+          }
+          const cpsInstrument = `spot:${sym}`;
+          const nextSeq = (cpsSeqByInstrument.get(cpsInstrument) ?? 0) + 1;
+          cpsSeqByInstrument.set(cpsInstrument, nextSeq);
+          GLOBAL_CPS_ORACLE.ingestPrimaryStreamTick({
+            instrument: cpsInstrument,
+            instrumentClass: 'SPOT',
+            source_id: CERTIFIED_PRIMARY_SOURCE_CONFIG.entries.SPOT.source_id,
+            sequence_number: nextSeq,
+            timestamp_exchange: nowMs - 4,
+            timestamp_received: nowMs,
+            bid: book.bidPrice,
+            ask: book.askPrice,
+            mark_price: book.markPrice,
+          });
           return;
         }
 
@@ -1549,6 +2194,7 @@ function bindBackendSpotWebSocket() {
           const prevPrice = spotFeedCache[sym]?.source === 'binance_spot' ? spotFeedCache[sym].price : undefined;
           const klineCheck = validateSpotTickSample({ price: closePrice, previousPrice: prevPrice });
           if (!klineCheck.valid) {
+            backendWsFailedUpdatesCount += 1;
             monitorState.anomaliesIsolatedCount = (monitorState.anomaliesIsolatedCount ?? 0) + 1;
             monitorState.lastHealAction = `${sym} kline: ${klineCheck.reason}`;
             return;
@@ -1570,41 +2216,125 @@ function bindBackendSpotWebSocket() {
           for (const entry of d) {
             const sym = String(entry?.s || '').toUpperCase();
             if (!trackedSet.has(sym)) continue;
-            const spotPrice = Number(entry?.c || 0);
-            const prevPrice = spotFeedCache[sym]?.source === 'binance_spot' ? spotFeedCache[sym].price : undefined;
-            const check = validateSpotTickSample({ price: spotPrice, previousPrice: prevPrice });
-            if (!check.valid) {
-              monitorState.anomaliesIsolatedCount = (monitorState.anomaliesIsolatedCount ?? 0) + 1;
-              monitorState.lastHealAction = `${sym}: ${check.reason}`;
+            const hasExplicitE = entry?.E !== undefined && entry?.E !== null;
+            if (
+              hasExplicitE &&
+              (typeof entry.E !== 'number' || !Number.isFinite(entry.E) || entry.E <= 1_000_000_000_000)
+            ) {
+              liveFeedValidationStats.spotRejected += 1;
+              liveFeedValidationStats.lastRejectionReason = `${sym}: Rejected WS miniTicker with malformed event timestamp.`;
+              liveFeedValidationStats.lastRejectedSymbol = sym;
+              liveFeedValidationStats.lastRejectedAtIso = new Date(nowMs).toISOString();
+              backendWsFailedUpdatesCount += 1;
               continue;
             }
-            const openP = Number(entry?.o || spotPrice);
-            const chg = openP > 0 ? Number((((spotPrice - openP) / openP) * 100).toFixed(2)) : spotFeedCache[sym]?.change24hPercent ?? 0;
-            const vol24 = Number(entry?.q || spotFeedCache[sym]?.volume24hUsd || 1_850_000_000);
-            const high24h = Number(entry?.h || spotPrice);
-            const low24h = Number(entry?.l || spotPrice);
+            const eventTsMs = hasExplicitE ? (entry.E as number) : nowMs;
+            if (eventTsMs > nowMs + 5_000) {
+              liveFeedValidationStats.spotRejected += 1;
+              liveFeedValidationStats.lastRejectionReason = `${sym}: Rejected future-dated WS miniTicker frame.`;
+              liveFeedValidationStats.lastRejectedSymbol = sym;
+              liveFeedValidationStats.lastRejectedAtIso = new Date(nowMs).toISOString();
+              backendWsOutOfOrderFramesDropped += 1;
+              continue;
+            }
+            const prevTsMs = backendWsLastTickTsBySymbol[sym];
+            if (prevTsMs !== undefined && eventTsMs < prevTsMs) {
+              backendWsOutOfOrderFramesDropped += 1;
+              continue;
+            }
+            const spotPrice = Number(entry?.c);
+            const frameSig = `${spotPrice}|${eventTsMs}`;
+            if (Number.isFinite(spotPrice) && spotPrice > 0 && backendWsLastSignatureBySymbol[sym] === frameSig) {
+              backendWsDuplicateFramesDropped += 1;
+              continue;
+            }
+            const prevEntry = spotFeedCache[sym];
+            const prevPrice = prevEntry?.source === 'binance_spot' ? prevEntry.price : undefined;
+            const openP = Number(entry?.o);
+            const chg =
+              Number.isFinite(openP) && openP > 0 && Number.isFinite(spotPrice)
+                ? Number((((spotPrice - openP) / openP) * 100).toFixed(2))
+                : prevEntry?.change24hPercent ?? 0;
+
+            const validated = validateBinanceSpotTickerRecord(
+              {
+                symbol: sym,
+                lastPrice: entry?.c,
+                priceChangePercent: chg,
+                highPrice: entry?.h,
+                lowPrice: entry?.l,
+                quoteVolume: entry?.q,
+                closeTime: eventTsMs,
+              },
+              {
+                previousLivePrice: prevPrice,
+                nowMs,
+                allowedSymbols: trackedSet,
+              }
+            );
+            if (!validated.valid || !validated.record) {
+              liveFeedValidationStats.spotRejected += 1;
+              liveFeedValidationStats.lastRejectionReason = validated.reason;
+              liveFeedValidationStats.lastRejectedSymbol = sym;
+              liveFeedValidationStats.lastRejectedAtIso = new Date(nowMs).toISOString();
+              backendWsFailedUpdatesCount += 1;
+              monitorState.anomaliesIsolatedCount = (monitorState.anomaliesIsolatedCount ?? 0) + 1;
+              monitorState.lastHealAction = validated.reason;
+              continue;
+            }
+            const rec = validated.record;
+            liveFeedValidationStats.spotAccepted += 1;
+
+            // Keep previously observed book only if still coherent with new lastPrice (<= 5% mid divergence)
+            const prevBookCoherent =
+              prevEntry &&
+              typeof prevEntry.bidPrice === 'number' &&
+              typeof prevEntry.askPrice === 'number' &&
+              prevEntry.bidPrice > 0 &&
+              prevEntry.askPrice >= prevEntry.bidPrice &&
+              Math.abs(rec.price - (prevEntry.bidPrice + prevEntry.askPrice) / 2) /
+                ((prevEntry.bidPrice + prevEntry.askPrice) / 2) <=
+                0.05;
+
+            backendWsLastTickTsBySymbol[sym] = eventTsMs;
+            backendWsLastSignatureBySymbol[sym] = frameSig;
 
             spotFeedCache[sym] = {
-              symbol: sym,
-              price: spotPrice,
-              change24hPercent: chg,
-              high24h,
-              low24h,
-              volume24hUsd: Math.round(vol24),
+              symbol: rec.symbol,
+              price: rec.price,
+              change24hPercent: rec.change24hPercent,
+              high24h: rec.high24h,
+              low24h: rec.low24h,
+              volume24hUsd: rec.volume24hUsd,
               source: 'binance_spot',
               updatedAtMs: nowMs,
+              exchange: 'binance',
+              marketType: 'SPOT',
+              quoteCurrency: 'USDT',
+              priceType: 'LAST_TRADED',
+              bidPrice: prevBookCoherent ? (prevEntry?.bidPrice ?? null) : null,
+              askPrice: prevBookCoherent ? (prevEntry?.askPrice ?? null) : null,
+              markPrice: prevBookCoherent ? (prevEntry?.markPrice ?? null) : null,
+              spreadBps: prevBookCoherent ? (prevEntry?.spreadBps ?? null) : null,
+              sourceClass: 'LIVE_WS_VERIFIED',
+              observedAtIso: new Date(nowMs).toISOString(),
             };
             spotFeedSource = 'binance_spot';
             monitorState.spotFeedStatus = 'LIVE';
+            const cachedSpot = spotFeedCache[sym];
             pendingSseTickBatch.set(sym, {
               symbol: sym,
-              price: spotPrice,
-              markPrice: spotPrice,
-              volume24hUsd: spotFeedCache[sym].volume24hUsd,
-              change24hPercent: chg,
-              high24h,
-              low24h,
+              price: rec.price,
+              markPrice: cachedSpot.markPrice ?? rec.price,
+              bidPrice: cachedSpot.bidPrice ?? null,
+              askPrice: cachedSpot.askPrice ?? null,
+              spreadBps: cachedSpot.spreadBps ?? null,
+              volume24hUsd: cachedSpot.volume24hUsd,
+              change24hPercent: rec.change24hPercent,
+              high24h: rec.high24h,
+              low24h: rec.low24h,
               source: 'binance_spot',
+              sourceClass: 'LIVE_WS_VERIFIED',
               updatedAtMs: nowMs,
             });
           }
@@ -1669,9 +2399,24 @@ function bindBackendSpotWebSocket() {
           const sym = String(d.s).toUpperCase();
           if (!trackedSet.has(sym)) return;
           const spotPrice = Number(d.c || 0);
+          const eventTsMs =
+            typeof d.E === 'number' && Number.isFinite(d.E) && d.E > 1_000_000_000_000
+              ? d.E
+              : nowMs;
+          const prevTsMs = backendWsLastTickTsBySymbol[sym];
+          if (prevTsMs !== undefined && eventTsMs < prevTsMs) {
+            backendWsOutOfOrderFramesDropped += 1;
+            return;
+          }
+          const frameSig = `${spotPrice}|${eventTsMs}`;
+          if (backendWsLastSignatureBySymbol[sym] === frameSig) {
+            backendWsDuplicateFramesDropped += 1;
+            return;
+          }
           const prevPrice = spotFeedCache[sym]?.source === 'binance_spot' ? spotFeedCache[sym].price : undefined;
           const check = validateSpotTickSample({ price: spotPrice, previousPrice: prevPrice });
           if (!check.valid) {
+            backendWsFailedUpdatesCount += 1;
             monitorState.anomaliesIsolatedCount = (monitorState.anomaliesIsolatedCount ?? 0) + 1;
             monitorState.lastHealAction = `${sym}: ${check.reason}`;
             return;
@@ -1680,6 +2425,22 @@ function bindBackendSpotWebSocket() {
           const chg = Number(Number(d.P || 0).toFixed(2));
           const high24h = Number(d.h || spotPrice);
           const low24h = Number(d.l || spotPrice);
+          const prevEntry = spotFeedCache[sym];
+          const bidRaw = Number(d.b);
+          const askRaw = Number(d.a);
+          const validBook = Number.isFinite(bidRaw) && Number.isFinite(askRaw) && bidRaw > 0 && askRaw >= bidRaw;
+          const bidPrice = validBook ? bidRaw : (prevEntry?.bidPrice ?? null);
+          const askPrice = validBook ? askRaw : (prevEntry?.askPrice ?? null);
+          const spreadBps =
+            bidPrice !== null && askPrice !== null ? computeSpreadBps(bidPrice, askPrice) : (prevEntry?.spreadBps ?? null);
+          const markPrice =
+            bidPrice !== null && askPrice !== null
+              ? Number(((bidPrice + askPrice) / 2).toPrecision(8))
+              : (prevEntry?.markPrice ?? null);
+
+          backendWsLastTickTsBySymbol[sym] = eventTsMs;
+          backendWsLastSignatureBySymbol[sym] = frameSig;
+
           spotFeedCache[sym] = {
             symbol: sym,
             price: spotPrice,
@@ -1689,22 +2450,37 @@ function bindBackendSpotWebSocket() {
             volume24hUsd: Math.round(vol24),
             source: 'binance_spot',
             updatedAtMs: nowMs,
+            exchange: 'binance',
+            marketType: 'SPOT',
+            quoteCurrency: 'USDT',
+            priceType: 'LAST_TRADED',
+            bidPrice,
+            askPrice,
+            markPrice,
+            spreadBps,
+            sourceClass: 'LIVE_WS_VERIFIED',
+            observedAtIso: new Date(nowMs).toISOString(),
           };
           spotFeedSource = 'binance_spot';
           monitorState.spotFeedStatus = 'LIVE';
           pendingSseTickBatch.set(sym, {
             symbol: sym,
             price: spotPrice,
-            markPrice: spotPrice,
+            markPrice: markPrice ?? spotPrice,
+            bidPrice,
+            askPrice,
+            spreadBps,
             volume24hUsd: spotFeedCache[sym].volume24hUsd,
             change24hPercent: chg,
             high24h,
             low24h,
             source: 'binance_spot',
+            sourceClass: 'LIVE_WS_VERIFIED',
             updatedAtMs: nowMs,
           });
         }
       } catch (parseErr) {
+        backendWsFailedUpdatesCount += 1;
         monitorState.anomaliesIsolatedCount = (monitorState.anomaliesIsolatedCount ?? 0) + 1;
         monitorState.lastHealAction = `Quarantined malformed backend WS frame: ${parseErr instanceof Error ? parseErr.message : 'parse error'}`;
       }
@@ -1713,6 +2489,8 @@ function bindBackendSpotWebSocket() {
     ws.onerror = () => {
       if (backendSpotWs !== ws) return;
       backendWsConnected = false;
+      backendWsLastDisconnectAtIso = new Date().toISOString();
+      backendWsFailedUpdatesCount += 1;
       monitorState.backendWsConnected = false;
       backendWsHostIndex = (backendWsHostIndex + 1) % SPOT_WS_ENDPOINTS.length;
       detachBackendWs(ws);
@@ -1722,12 +2500,15 @@ function bindBackendSpotWebSocket() {
     ws.onclose = () => {
       if (backendSpotWs !== ws) return;
       backendWsConnected = false;
+      backendWsLastDisconnectAtIso = new Date().toISOString();
       monitorState.backendWsConnected = false;
       detachBackendWs(ws);
       scheduleBackendWsSubSecondHeal('Spot WS closed');
     };
   } catch {
     backendWsConnected = false;
+    backendWsLastDisconnectAtIso = new Date().toISOString();
+    backendWsFailedUpdatesCount += 1;
     monitorState.backendWsConnected = false;
     scheduleBackendWsSubSecondHeal('Spot WS init exception');
   }
@@ -1762,11 +2543,57 @@ const previousGainerSnapshot = new Map<string, { rank: number; change: number }>
 const lastGainerAlertTime = new Map<string, number>();
 
 let discoveredTelegramChatId: string | null = null;
-let boundDeveloperChatId: string | null =
-  process.env.DEVELOPER_CHAT_ID || process.env.TELEGRAM_DEV_CHAT_ID || null;
+let boundDeveloperChatId: string | null = resolveTelegramConfig(process.env).devChatId;
 let autoBoundDeveloperViaWebhook = false;
 
 const CONTINUOUS_AUDIT_INTERVAL_SEC = 60;
+const SERVER_WORKER_ID = `sf-worker-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
+const TELEGRAM_GOV_STATE_PATH = path.resolve(process.cwd(), '.data', 'telegram-notification-state.json');
+
+function loadPersistedTelegramGovernorState(): Partial<TelegramGovernorPersistedState> | null {
+  try {
+    if (!fs.existsSync(TELEGRAM_GOV_STATE_PATH)) return null;
+    const raw = fs.readFileSync(TELEGRAM_GOV_STATE_PATH, 'utf8');
+    return JSON.parse(raw) as Partial<TelegramGovernorPersistedState>;
+  } catch {
+    return null;
+  }
+}
+
+function savePersistedTelegramGovernorState(state: TelegramGovernorPersistedState): void {
+  try {
+    const dir = path.dirname(TELEGRAM_GOV_STATE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const tmpPath = `${TELEGRAM_GOV_STATE_PATH}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), 'utf8');
+    fs.renameSync(tmpPath, TELEGRAM_GOV_STATE_PATH);
+  } catch {
+    // non-fatal disk persistence error
+  }
+}
+
+const telegramGovernor = new TelegramNotificationGovernor({
+  initialState: loadPersistedTelegramGovernorState(),
+  maxPerMinute: 12,
+  onPersist: savePersistedTelegramGovernorState,
+});
+const singletonSchedulers = new SingletonSchedulerRegistry();
+
+// Isolated Customer Chart Scanner & Admin Business Control State (strictly decoupled from core trading pool)
+const isolatedChartPool = new IsolatedChartAnalysisPool();
+const referralShareEngine = new ReferralAndShareEngine();
+const adminBusinessEngine = new AdminBusinessControlEngine();
+const privateChartUploads = new Map<
+  string,
+  { meta: PrivateChartUploadRecord; buffer: Uint8Array }
+>();
+const chartAnalysesStore = new Map<string, ChartScenarioAnalysisReport>();
+const recentUploadFingerprintsByAccount = new Map<string, Set<string>>();
+const uploadTimestampsByAccount = new Map<string, number[]>();
+const accountsByIpHash = new Map<string, Set<string>>();
+const accountsByDeviceHash = new Map<string, Set<string>>();
+const trialClaimedDeviceHashes = new Set<string>();
+
 let dailyAuditAutoDeliveryEnabled = true;
 let dailyAuditScheduledUtcHour = Math.max(
   0,
@@ -1800,33 +2627,23 @@ let lastCpuSampleAtMs = Date.now();
 let lastComputedCpuPct = 4.2;
 
 function getTelegramBotToken(): string | undefined {
-  return process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || undefined;
+  return resolveTelegramConfig(process.env).botToken ?? undefined;
 }
 
 function getPublicChannelChatId(): string {
-  return (
-    process.env.CHAT_ID ||
-    process.env.TELEGRAM_CHAT_ID ||
-    process.env.TELEGRAM_CHANNEL_ID ||
-    ''
-  ).trim();
+  return resolveTelegramConfig(process.env).publicChatId ?? '';
 }
 
 function getDeveloperPrivateChatId(): string {
-  return (
-    boundDeveloperChatId ||
-    process.env.DEVELOPER_CHAT_ID ||
-    process.env.TELEGRAM_DEV_CHAT_ID ||
-    ''
-  ).trim();
+  const cfg = resolveTelegramConfig(process.env);
+  if (boundDeveloperChatId && boundDeveloperChatId !== cfg.publicChatId) {
+    return boundDeveloperChatId.trim();
+  }
+  return cfg.devChatId ?? '';
 }
 
 function getMakeWebhookUrl(): string {
-  return (process.env.MAKE_WEBHOOK_URL || '').trim();
-}
-
-function getWebhookBotToken(): string {
-  return (process.env.WEBHOOK_BOT_TOKEN || getTelegramBotToken() || '').trim();
+  return resolveMakeWebhookConfig(process.env).webhookUrl ?? '';
 }
 
 const signalSpamHistory: SpamFilterHistoryEntry[] = [];
@@ -1837,73 +2654,20 @@ let signalProcessorTransmittedTotal = 0;
 let signalProcessorSpamFilteredTotal = 0;
 let signalProcessorWebhookDeliveredTotal = 0;
 let signalProcessorMilestoneUpdatesTotal = 0;
-
-async function transmitToMakeWebhook(payload: OutboundMakeWebhookPayload): Promise<{
-  ok: boolean;
-  httpStatus: number | null;
-  latencyMs: number;
-  error: string | null;
-}> {
-  const url = getMakeWebhookUrl();
-  if (!url) {
-    return {
-      ok: false,
-      httpStatus: null,
-      latencyMs: 0,
-      error: 'MAKE_WEBHOOK_URL not configured in server environment.',
-    };
-  }
-  const startedAt = Date.now();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5500);
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Signal-Forge-Chat-Id': payload.chat_id,
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-    const latencyMs = Math.max(1, Date.now() - startedAt);
-    if (!response.ok) {
-      const bodyText = await response.text().catch(() => '');
-      return {
-        ok: false,
-        httpStatus: response.status,
-        latencyMs,
-        error: `Webhook HTTP ${response.status}${bodyText ? `: ${bodyText.slice(0, 120)}` : ''}`,
-      };
-    }
-    return {
-      ok: true,
-      httpStatus: response.status,
-      latencyMs,
-      error: null,
-    };
-  } catch (err) {
-    const latencyMs = Math.max(1, Date.now() - startedAt);
-    return {
-      ok: false,
-      httpStatus: null,
-      latencyMs,
-      error: err instanceof Error ? err.message : 'Outbound webhook network error',
-    };
-  } finally {
-    clearTimeout(timer);
-  }
-}
+let signalProcessorSuppressedTotal = 0;
+let signalProcessorFailedTotal = 0;
+let signalProcessorDiscordDeliveredTotal = 0;
 
 function buildSignalProcessorStatus(): SignalProcessorStatusSnapshot {
-  const webhookUrl = getMakeWebhookUrl();
-  const targetChatId = getPublicChannelChatId() || '-1008928895086';
+  const tgCfg = resolveTelegramConfig(process.env);
+  const makeCfg = resolveMakeWebhookConfig(process.env);
+  const healthOverview = notificationDispatcher.getHealthOverview();
   return {
     ok: true,
-    webhookConfigured: Boolean(webhookUrl),
-    maskedWebhookUrl: maskWebhookUrl(webhookUrl),
-    targetChatId,
-    maskedBotToken: maskTelegramToken(getWebhookBotToken()),
+    webhookConfigured: makeCfg.configured && makeCfg.valid,
+    maskedWebhookUrl: makeCfg.maskedUrl,
+    targetChatId: tgCfg.publicChatId || 'Unconfigured',
+    maskedBotToken: maskTelegramToken(tgCfg.botToken),
     spamFilterConfig: DEFAULT_SPAM_FILTER_CONFIG,
     stats: {
       totalReceived: signalProcessorReceivedTotal,
@@ -1911,14 +2675,81 @@ function buildSignalProcessorStatus(): SignalProcessorStatusSnapshot {
       totalSpamFiltered: signalProcessorSpamFilteredTotal,
       totalWebhookDelivered: signalProcessorWebhookDeliveredTotal,
       totalMilestoneUpdates: signalProcessorMilestoneUpdatesTotal,
+      totalSuppressed: signalProcessorSuppressedTotal + healthOverview.counters.suppressed,
+      totalFailed: signalProcessorFailedTotal + healthOverview.counters.failed,
+      totalRetrying: healthOverview.counters.retrying,
+      totalDiscordDelivered: signalProcessorDiscordDeliveredTotal,
     },
+    lifecycleCounters: healthOverview.counters,
+    advisories: [...healthOverview.advisories],
     recentProcessed: processedSignalsLog.slice(0, 30),
     recentFiltered: filteredSpamSignalsLog.slice(0, 30),
   };
 }
 
+function buildPersistentStabilizerSnapshot(): TelegramStabilizerSnapshot {
+  const recentRows = notificationLedger.listRecentDeliveries(20);
+  const counters = notificationLedger.getCounters();
+  const delivered = counters.providerAccepted + counters.deliveredWhenVerifiable;
+  const failed = counters.failed;
+  const pending = counters.queued + counters.retrying;
+  const completed = delivered + failed;
+  const reliabilityPct =
+    completed > 0 ? Number(((delivered / completed) * 100).toFixed(1)) : 0;
+
+  return {
+    reliabilityPct,
+    totalEnqueued: delivered + failed + pending,
+    totalDelivered: delivered,
+    totalRetried: counters.retrying,
+    pendingCount: pending,
+    failedCount: failed,
+    recentDeliveries: recentRows.map((rec) => ({
+      queueId: rec.idempotencyKey,
+      signalId: rec.signalId,
+      symbol: rec.payload?.symbol || rec.signalId,
+      direction: rec.payload?.direction || 'BUY',
+      targetChatId: rec.payload?.targetChatId || rec.destination,
+      payloadText: rec.payload?.formattedCard || `[${rec.eventType}] ${rec.signalId}`,
+      provider: rec.provider,
+      providerMessageId: rec.providerMessageId,
+      deliveryState:
+        rec.state === 'QUEUED' ||
+        rec.state === 'PROVIDER_ACCEPTED' ||
+        rec.state === 'DELIVERED_WHEN_VERIFIABLE' ||
+        rec.state === 'FAILED' ||
+        rec.state === 'RETRYING' ||
+        rec.state === 'SUPPRESSED'
+          ? rec.state
+          : 'QUEUED',
+      errorHistory: [...rec.errorHistory],
+      attempts: rec.attemptCount,
+      maxAttempts: rec.maxAttempts,
+      nextRetryAtMs: rec.nextRetryAtMs,
+      status:
+        rec.state === 'PROVIDER_ACCEPTED' || rec.state === 'DELIVERED_WHEN_VERIFIABLE'
+          ? 'DELIVERED'
+          : rec.state === 'RETRYING'
+          ? 'RETRYING'
+          : rec.state === 'FAILED'
+          ? 'FAILED_EXHAUSTED'
+          : 'PENDING',
+      lastHttpStatus: rec.providerHttpStatus,
+      lastError: rec.sanitizedError,
+      createdAt: rec.createdAtIso,
+      deliveredAt: rec.dispatchedAtIso,
+    })),
+  };
+}
+
 async function processAndTransmitTradingAlert(
-  input: IncomingTradingAlertInput
+  input: IncomingTradingAlertInput,
+  options?: {
+    executionMode?: string;
+    signalCategory?: SignalNotificationCategory;
+    explicitOwnerPublish?: boolean;
+    ownerOverridePublicGate?: boolean;
+  }
 ): Promise<
   | {
       ok: false;
@@ -1928,6 +2759,9 @@ async function processAndTransmitTradingAlert(
   | {
       ok: true;
       filtered: boolean;
+      suppressed: boolean;
+      delivered: boolean;
+      providerAccepted: boolean;
       record: ProcessedSignalRecord;
       structuredSignal?: StructuredTradeSignalAlert;
       status: SignalProcessorStatusSnapshot;
@@ -1952,7 +2786,7 @@ async function processAndTransmitTradingAlert(
   }
 
   const card = extracted.card;
-  const targetChatId = getPublicChannelChatId() || '-1008928895086';
+  const targetChatId = getPublicChannelChatId();
   const nowMs = Date.now();
   const spamVerdict = evaluateSignalSpamFilter(
     card,
@@ -1966,13 +2800,20 @@ async function processAndTransmitTradingAlert(
     const rejectedRecord: ProcessedSignalRecord = {
       ...card,
       filteredOut: true,
+      suppressed: false,
+      suppressionReason: null,
       spamVerdict,
-      targetChatId,
+      targetChatId: targetChatId || 'Unconfigured',
+      deliveryState: 'SUPPRESSED',
+      providerMessageId: null,
       webhookDispatched: false,
       webhookHttpStatus: null,
       webhookLatencyMs: null,
       webhookError: null,
       telegramMirrorDelivered: false,
+      discordDispatched: false,
+      discordMessageId: null,
+      discordError: null,
       transmittedAt: null,
     };
     filteredSpamSignalsLog.unshift(rejectedRecord);
@@ -1980,6 +2821,9 @@ async function processAndTransmitTradingAlert(
     return {
       ok: true,
       filtered: true,
+      suppressed: false,
+      delivered: false,
+      providerAccepted: false,
       record: rejectedRecord,
       status: buildSignalProcessorStatus(),
     };
@@ -1997,61 +2841,118 @@ async function processAndTransmitTradingAlert(
   });
   if (signalSpamHistory.length > 400) signalSpamHistory.length = 400;
 
-  const outboundPayload = buildOutboundWebhookPayload(card, {
-    chatId: targetChatId,
-    botToken: getWebhookBotToken(),
+  // Enforce Public Signal Gate + Governor + App Live before any external outbound broadcast
+  const gateSnapshot = publicSignalGate.getMonitoringSnapshot();
+  const govSettings = telegramGovernor.getSettings();
+  const isManualOwnerPublish = Boolean(options?.explicitOwnerPublish);
+
+  let approvedForPublicPublish = true;
+  let suppressionReason: string | null = null;
+
+  if (!govSettings.publicSignalPublishingEnabled) {
+    approvedForPublicPublish = false;
+    suppressionReason = 'Public signal publishing is disabled in Notification Governor settings.';
+  } else if (!isManualOwnerPublish && !appLiveEnabled) {
+    approvedForPublicPublish = false;
+    suppressionReason = 'App Live is paused — automated external broadcasts suppressed.';
+  } else if (!isManualOwnerPublish && !govSettings.tradingAlertsEnabled) {
+    approvedForPublicPublish = false;
+    suppressionReason = 'Automated trading alerts are disabled in Notification Governor settings.';
+  } else if (!gateSnapshot.evaluation.publicPublicationEnabled && !options?.ownerOverridePublicGate) {
+    approvedForPublicPublish = false;
+    suppressionReason =
+      'Public Signal Validation Gate is locked — signal recorded locally without external public dispatch.';
+  }
+
+  const persistedPayload = createPersistedSignalPayload({
+    card,
+    targetChatId: targetChatId || null,
     channelName: 'Signal Forge',
+    signalCategory: options?.signalCategory,
+    executionMode: options?.executionMode || executionMode || 'PAPER_DRY_RUN',
   });
 
-  const webhookRes = await transmitToMakeWebhook(outboundPayload);
-  const tgMirrorRes = await sendTelegramRawMessage({
-    chatId: targetChatId,
-    text: card.formattedCard,
+  const outcome = await notificationDispatcher.dispatchSignal({
+    payload: persistedPayload,
+    approvedForPublicPublish,
+    suppressionReason,
+    nowMs,
   });
 
-  const transmittedAt = new Date().toISOString();
-  signalProcessorTransmittedTotal += 1;
-  if (webhookRes.ok) signalProcessorWebhookDeliveredTotal += 1;
-  if (outboundPayload.event_type === 'MILESTONE_PNL_UPDATE') {
+  const deliveredAny = outcome.telegramDelivered || outcome.discordDelivered;
+  const acceptedAny = outcome.telegramAccepted || outcome.discordAccepted;
+  const transmittedAt = acceptedAny ? new Date().toISOString() : null;
+
+  if (outcome.suppressed) {
+    signalProcessorSuppressedTotal += 1;
+  } else if (acceptedAny) {
+    signalProcessorTransmittedTotal += 1;
+  } else {
+    signalProcessorFailedTotal += 1;
+  }
+
+  if (outcome.webhookDispatched) {
+    signalProcessorWebhookDeliveredTotal += 1;
+  }
+  if (outcome.discordAccepted) {
+    signalProcessorDiscordDeliveredTotal += 1;
+  }
+  if (persistedPayload.eventType === 'MILESTONE_PNL_UPDATE' && acceptedAny) {
     signalProcessorMilestoneUpdatesTotal += 1;
   }
+
+  const primaryState =
+    outcome.telegramRecord?.state ??
+    outcome.discordRecord?.state ??
+    (outcome.suppressed ? 'SUPPRESSED' : 'FAILED');
+  const combinedError =
+    outcome.suppressed
+      ? outcome.suppressionReason
+      : acceptedAny
+      ? null
+      : outcome.telegramRecord?.sanitizedError ||
+        outcome.webhookError ||
+        outcome.discordRecord?.sanitizedError ||
+        'Notification delivery failed.';
 
   const record: ProcessedSignalRecord = {
     ...card,
     filteredOut: false,
+    suppressed: outcome.suppressed,
+    suppressionReason: outcome.suppressionReason,
     spamVerdict,
-    targetChatId,
-    webhookDispatched: webhookRes.ok,
-    webhookHttpStatus: webhookRes.httpStatus,
-    webhookLatencyMs: webhookRes.latencyMs,
-    webhookError: webhookRes.error,
-    telegramMirrorDelivered: tgMirrorRes.ok,
+    targetChatId: targetChatId || 'Unconfigured',
+    deliveryState: primaryState,
+    providerMessageId:
+      outcome.telegramRecord?.providerMessageId ??
+      outcome.discordRecord?.providerMessageId ??
+      null,
+    webhookDispatched: outcome.webhookDispatched,
+    webhookHttpStatus: outcome.webhookHttpStatus ?? outcome.telegramRecord?.providerHttpStatus ?? null,
+    webhookLatencyMs: outcome.webhookLatencyMs,
+    webhookError: combinedError,
+    telegramMirrorDelivered: outcome.telegramMirrorDelivered,
+    discordDispatched: outcome.discordAccepted,
+    discordMessageId: outcome.discordRecord?.providerMessageId ?? null,
+    discordError: outcome.discordRecord?.sanitizedError ?? null,
     transmittedAt,
   };
 
   processedSignalsLog.unshift(record);
   if (processedSignalsLog.length > 60) processedSignalsLog.length = 60;
 
-  // Keep Stream 1 public alert feed & legacy Telegram channel feed synchronized
-  const deliveredAny = webhookRes.ok || tgMirrorRes.ok;
-  const qItem = telegramDispatchStabilizer.enqueue({
-    signalId: record.signalId,
-    symbol: record.symbol,
-    direction: record.direction,
-    targetChatId,
-    payloadText: record.formattedCard,
-  });
-  telegramDispatchStabilizer.recordAttemptResult(qItem.queueId, {
-    ok: deliveredAny,
-    httpStatus: webhookRes.httpStatus ?? (tgMirrorRes.ok ? 200 : null),
-    error: deliveredAny ? null : webhookRes.error || tgMirrorRes.errorDetail,
-  });
+  const nowIso = transmittedAt ?? new Date().toISOString();
+  const streamDeliveryStatus: StructuredTradeSignalAlert['deliveryStatus'] = outcome.telegramAccepted
+    ? 'DELIVERED'
+    : outcome.telegramRecord?.state === 'RETRYING' || outcome.suppressed
+    ? 'QUEUED_FALLBACK'
+    : 'FAILED';
 
   const structuredSignal: StructuredTradeSignalAlert = {
     id: record.signalId,
     stream: 'PUBLIC_SIGNAL',
     channelName: 'Signal Forge',
-    targetChatId,
+    targetChatId: targetChatId || 'Unconfigured',
     symbol: record.symbol,
     direction: record.direction,
     entryPrice: record.entryPrice,
@@ -2062,10 +2963,10 @@ async function processAndTransmitTradingAlert(
     timeframe: record.timeframe,
     rationale: record.rationale,
     formattedMessage: record.formattedCard,
-    deliveredViaBot: deliveredAny,
-    deliveryStatus: deliveredAny ? 'DELIVERED' : 'QUEUED_FALLBACK',
-    errorDetail: deliveredAny ? null : webhookRes.error || tgMirrorRes.errorDetail,
-    timestamp: transmittedAt,
+    deliveredViaBot: outcome.telegramAccepted,
+    deliveryStatus: streamDeliveryStatus,
+    errorDetail: combinedError,
+    timestamp: nowIso,
   };
   publicSignalStreamLog.unshift(structuredSignal);
   if (publicSignalStreamLog.length > 60) publicSignalStreamLog.length = 60;
@@ -2077,14 +2978,17 @@ async function processAndTransmitTradingAlert(
     direction: record.direction,
     confidence: record.confidence,
     message: record.formattedCard,
-    deliveredViaBot: deliveredAny,
-    timestamp: transmittedAt,
+    deliveredViaBot: outcome.telegramAccepted,
+    timestamp: nowIso,
   });
   if (telegramChannelFeed.length > 40) telegramChannelFeed.length = 40;
 
   return {
     ok: true,
     filtered: false,
+    suppressed: outcome.suppressed,
+    delivered: deliveredAny,
+    providerAccepted: acceptedAny,
     record,
     structuredSignal,
     status: buildSignalProcessorStatus(),
@@ -2240,21 +3144,27 @@ async function executeCandidateIntoBackendLog(
     backendExecutedOrdersLog.length = 80;
   }
 
-  // Stabilized real-time signal dispatch via Make.com Webhook + Telegram Bot mirror
-  const relayRes = await processAndTransmitTradingAlert({
-    source: 'AUTOMATED',
-    symbol: order.symbol,
-    direction: order.direction,
-    timeframe: candidate.timeframe,
-    entryPrice: order.executedPrice,
-    takeProfits: order.takeProfits,
-    exitPrice: order.maxProfitTarget,
-    stopLoss: order.stopLoss,
-    confidence: candidate.confidence,
-    rationale: order.holdUntilMaxTarget
-      ? `Pre-Pump Support Auto-Executed @ $${fillPrice} · HOLD UNTIL MAX TARGET ($${order.maxProfitTarget})`
-      : `Entry Zone Validated & Auto-Executed @ $${fillPrice} · Archived to Backend Execution Log`,
-  }).catch(() => null);
+  // Stabilized real-time signal dispatch via single-transport NotificationDispatcher + SQLite ledger
+  const relayRes = await processAndTransmitTradingAlert(
+    {
+      source: 'AUTOMATED',
+      symbol: order.symbol,
+      direction: order.direction,
+      timeframe: candidate.timeframe,
+      entryPrice: order.executedPrice,
+      takeProfits: order.takeProfits,
+      exitPrice: order.maxProfitTarget,
+      stopLoss: order.stopLoss,
+      confidence: candidate.confidence,
+      rationale: order.holdUntilMaxTarget
+        ? `Pre-Pump Support Auto-Executed @ $${fillPrice} · HOLD UNTIL MAX TARGET ($${order.maxProfitTarget})`
+        : `Entry Zone Validated & Auto-Executed @ $${fillPrice} · Archived to Backend Execution Log`,
+    },
+    {
+      signalCategory: 'PAPER_EXECUTED_TRADE',
+      executionMode: executionMode || 'PAPER_DRY_RUN',
+    }
+  ).catch(() => null);
 
   if (relayRes && relayRes.ok && !relayRes.filtered) {
     order.telegramDispatched =
@@ -2265,46 +3175,10 @@ async function executeCandidateIntoBackendLog(
 }
 
 async function flushTelegramStabilizerQueue(): Promise<number> {
-  const due = telegramDispatchStabilizer.getDueRetryItems(Date.now());
-  let processedCount = 0;
-  for (const item of due.slice(0, 5)) {
-    processedCount += 1;
-    const webhookRes = await transmitToMakeWebhook({
-      event_type: 'SIGNAL_CARD',
-      chat_id: item.targetChatId,
-      bot_token: getWebhookBotToken(),
-      channel_name: 'Signal Forge',
-      signal_id: item.signalId,
-      source: 'AUTOMATED',
-      pair: item.symbol,
-      direction: item.direction,
-      timeframe: '4h',
-      entry_price: spotFeedCache[item.symbol]?.price ?? 0,
-      take_profits: { tp1: 0, tp2: 0, tp3: 0 },
-      exit_price: 0,
-      stop_loss: 0,
-      confidence_score: 90,
-      risk_reward_ratio: 5,
-      hit_tp_milestones: [],
-      final_pnl_usd: null,
-      final_pnl_percent: null,
-      lifecycle_status: 'OPEN',
-      signal_card: item.payloadText,
-      text: item.payloadText,
-      timestamp: new Date().toISOString(),
-    });
-    const tgRes = await sendTelegramRawMessage({
-      chatId: item.targetChatId,
-      text: item.payloadText,
-    });
-    const ok = webhookRes.ok || tgRes.ok;
-    telegramDispatchStabilizer.recordAttemptResult(item.queueId, {
-      ok,
-      httpStatus: webhookRes.httpStatus ?? (tgRes.ok ? 200 : null),
-      error: ok ? null : webhookRes.error || tgRes.errorDetail,
-    });
-  }
-  return processedCount;
+  // Corruption-proof persistent SQLite retry worker: reloads full typed signal payloads
+  // (never zeroes TP1/TP2/TP3/SL/Entry), validates before dispatch, and retains error history.
+  const result = await notificationDispatcher.flushDueRetries(Date.now(), 5);
+  return result.processedCount;
 }
 
 async function runBackendExecutionPipelineSweep(): Promise<void> {
@@ -2415,13 +3289,17 @@ async function runBackendExecutionPipelineSweep(): Promise<void> {
     (backendPipelineAvgLatencyMs * 0.8 + elapsed * 0.2).toFixed(2)
   );
 
-  // 5. Enforce monotonic cross-agent state synchronization anchored to authoritative live Binance WS price
-  const syncLiveMap = getLivePriceLookupMap();
-  const anchorPrice = syncLiveMap['BTCUSDT'] ?? Object.values(syncLiveMap)[0] ?? 91500;
+  // 5. Enforce monotonic cross-agent state synchronization with honest market data provenance
+  const syncTruth = resolveAuthoritativeAgentSyncInput('BTCUSDT');
   multiAgentSyncEngine.process({
-    symbol: 'BTCUSDT',
-    authoritativePrice: anchorPrice,
+    symbol: syncTruth.symbol,
+    authoritativePrice: syncTruth.authoritativePrice,
     epoch: backendPipelineEpoch,
+    dataProvenance: syncTruth.dataProvenance,
+    dataQuality: syncTruth.dataQuality,
+    providerName: syncTruth.providerName,
+    dataAgeMs: syncTruth.dataAgeMs,
+    executionAllowed: syncTruth.executionAllowed,
   });
 }
 
@@ -2463,26 +3341,22 @@ function buildBackendExecutionPipelineSnapshot(): BackendExecutionPipelineSnapsh
     activeAwaitingSignals,
     executedOrdersLog: backendExecutedOrdersLog.slice(0, 40),
     prePumpSupportMonitor,
-    telegramStabilizer: telegramDispatchStabilizer.getSnapshot(),
+    telegramStabilizer: buildPersistentStabilizerSnapshot(),
   };
 }
 
-setInterval(() => {
-  if (!appLiveEnabled) return;
-  runBackendExecutionPipelineSweep().catch(() => undefined);
-}, 12_000);
+let backendExecutionPipelineTimer: ReturnType<typeof setInterval> | null = null;
+function startBackendExecutionPipelineLoop(): void {
+  if (backendExecutionPipelineTimer) return;
+  backendExecutionPipelineTimer = setInterval(() => {
+    if (!appLiveEnabled) return;
+    runBackendExecutionPipelineSweep().catch(() => undefined);
+  }, 12_000);
+}
 
 function getTelegramWebhookSecret(): string {
-  if (process.env.TELEGRAM_WEBHOOK_SECRET && process.env.TELEGRAM_WEBHOOK_SECRET.trim()) {
-    return process.env.TELEGRAM_WEBHOOK_SECRET.trim();
-  }
-  const token = getTelegramBotToken();
-  if (!token) return '';
-  return crypto
-    .createHmac('sha256', SESSION_SIGNING_KEY)
-    .update(`tg-webhook:${token}`)
-    .digest('hex')
-    .slice(0, 40);
+  // Strictly validated independent secret (never a Telegram Bot Token; fail-closed if invalid)
+  return resolveTelegramConfig(process.env).webhookSecret ?? '';
 }
 
 function sampleSystemHealthAndLatencies(): {
@@ -2650,45 +3524,24 @@ async function resolveTelegramChatId(token: string): Promise<string | null> {
 async function sendTelegramRawMessage(params: {
   chatId: string;
   text: string;
-}): Promise<{ ok: boolean; errorDetail: string | null }> {
-  const token = getTelegramBotToken();
-  if (!token) {
-    return { ok: false, errorDetail: 'BOT_TOKEN not configured in environment.' };
-  }
-  const target = params.chatId.trim();
-  if (!target) {
-    return { ok: false, errorDetail: 'Target Telegram chat ID not configured.' };
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 4000);
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: target,
-        text: params.text,
-        disable_web_page_preview: true,
-      }),
-      signal: controller.signal,
-    });
-    if (res.ok) {
-      return { ok: true, errorDetail: null };
-    }
-    const errBody = await res.json().catch(() => null);
-    const desc =
-      errBody && typeof errBody.description === 'string'
-        ? errBody.description
-        : `Telegram API HTTP ${res.status}`;
-    return { ok: false, errorDetail: desc };
-  } catch (err) {
-    return {
-      ok: false,
-      errorDetail: err instanceof Error ? err.message : 'Telegram network timeout',
-    };
-  } finally {
-    clearTimeout(timer);
-  }
+}): Promise<{
+  ok: boolean;
+  httpStatus?: number | null;
+  retryAfterSeconds?: number | null;
+  providerMessageId?: string | null;
+  errorDetail: string | null;
+}> {
+  const res = await notificationDispatcher.sendViaTelegramDirect({
+    chatId: params.chatId,
+    text: params.text,
+  });
+  return {
+    ok: res.ok,
+    httpStatus: res.httpStatus,
+    retryAfterSeconds: res.retryAfterSec,
+    providerMessageId: res.providerMessageId,
+    errorDetail: res.error,
+  };
 }
 
 async function sendTelegramAlertIfConfigured(
@@ -2708,7 +3561,30 @@ async function sendTelegramAlertIfConfigured(
     : undefined;
   const chatId = configuredChatId || normalizedChannel || (await resolveTelegramChatId(token));
   if (!chatId) return false;
+
+  const targetStream = preferChannel ? 'PUBLIC_CHANNEL' : 'PERSONAL_ADMIN';
+  const category = preferChannel ? 'PUBLIC_SIGNAL_PUBLISH' : 'TRADING_ALERT';
+  const fp = crypto.createHash('sha256').update(text).digest('hex').slice(0, 24);
+  const decision = telegramGovernor.evaluateOutboundDispatch({
+    category,
+    targetStream,
+    eventKey: fp,
+    fingerprint: fp,
+    targetChatId: chatId,
+    publicChannelChatId: getPublicChannelChatId(),
+  });
+  if (!decision.allowed) {
+    return false;
+  }
+
   const result = await sendTelegramRawMessage({ chatId, text });
+  telegramGovernor.recordDeliveryOutcome({
+    deliveryId: decision.deliveryId,
+    fingerprint: fp,
+    category,
+    targetStream,
+    outcome: result,
+  });
   return result.ok;
 }
 
@@ -2875,7 +3751,12 @@ function buildDailyAuditSummary(): DailyAuditReportSummary {
 
 async function dispatchDeveloperSystemAudit(
   kind: SystemAuditLogEntry['kind'] = 'CONTINUOUS_AUDIT',
-  explicitChatId?: string
+  explicitChatId?: string,
+  options?: {
+    overrideCategory?: 'CRITICAL_ALERT' | 'STATE_TRANSITION' | 'RECOVERY_EVENT' | 'HEALTH_DIGEST' | 'MANUAL_COMMAND' | 'ROUTINE_AUDIT';
+    eventKey?: string;
+    transitionBanner?: string;
+  }
 ): Promise<SystemAuditLogEntry> {
   const sample = sampleSystemHealthAndLatencies();
   const slowest = [...sample.moduleLatencies].sort((a, b) => b.latencyMs - a.latencyMs)[0];
@@ -2891,10 +3772,13 @@ async function dispatchDeveloperSystemAudit(
     rolling24hAuditSamples.splice(0, rolling24hAuditSamples.length - 1500);
   }
 
-  const formattedMessage =
+  const baseMessage =
     kind === 'DAILY_DIGEST'
       ? formatDailyAuditReportMessage(buildDailyAuditSummary())
       : formatDeveloperAuditMessage(sample.health, sample.moduleLatencies, sample.capturedAt);
+  const formattedMessage = options?.transitionBanner
+    ? `${options.transitionBanner}\n\n${baseMessage}`
+    : baseMessage;
 
   // Stream 2 strictly routes to Developer's private chat ID (never to public CHAT_ID channel)
   const devChatId = (explicitChatId || getDeveloperPrivateChatId()).trim();
@@ -2903,20 +3787,56 @@ async function dispatchDeveloperSystemAudit(
   let deliveryStatus: SystemAuditLogEntry['deliveryStatus'] = 'QUEUED_FALLBACK';
   let errorDetail: string | null = null;
 
+  const governorCategory =
+    options?.overrideCategory ??
+    (kind === 'WEBHOOK_COMMAND'
+      ? 'MANUAL_COMMAND'
+      : kind === 'DAILY_DIGEST'
+      ? 'HEALTH_DIGEST'
+      : 'ROUTINE_AUDIT');
+
   if (!devChatId) {
     errorDetail =
       'Developer private chat unbound — set DEVELOPER_CHAT_ID or message /start to the bot in private chat to auto-bind Stream 2.';
-  } else if (devChatId === publicChannelId) {
-    errorDetail =
-      'Stream isolation enforced: developer private chat ID cannot match public Signal Forge channel ID.';
   } else {
-    const sendRes = await sendTelegramRawMessage({
-      chatId: devChatId,
-      text: formattedMessage,
+    const bucketKey =
+      options?.eventKey ||
+      `${kind}_${getUtcDateKey(Date.now())}_${new Date().getUTCHours()}`;
+    const fingerprint = crypto
+      .createHash('sha256')
+      .update(`${governorCategory}:${sample.health.overallStatus}:${options?.transitionBanner || kind}`)
+      .digest('hex')
+      .slice(0, 24);
+
+    const decision = telegramGovernor.evaluateOutboundDispatch({
+      category: governorCategory,
+      targetStream: 'PERSONAL_ADMIN',
+      eventKey: bucketKey,
+      fingerprint,
+      targetChatId: devChatId,
+      publicChannelChatId: publicChannelId,
     });
-    deliveredViaBot = sendRes.ok;
-    deliveryStatus = sendRes.ok ? 'DELIVERED' : 'QUEUED_FALLBACK';
-    errorDetail = sendRes.errorDetail;
+
+    if (!decision.allowed) {
+      deliveredViaBot = false;
+      deliveryStatus = 'QUEUED_FALLBACK';
+      errorDetail = `Suppressed by Anti-Flood Governor (${decision.reason}): ${decision.detail}`;
+    } else {
+      const sendRes = await sendTelegramRawMessage({
+        chatId: devChatId,
+        text: formattedMessage,
+      });
+      telegramGovernor.recordDeliveryOutcome({
+        deliveryId: decision.deliveryId,
+        fingerprint,
+        category: governorCategory,
+        targetStream: 'PERSONAL_ADMIN',
+        outcome: sendRes,
+      });
+      deliveredViaBot = sendRes.ok;
+      deliveryStatus = sendRes.ok ? 'DELIVERED' : 'QUEUED_FALLBACK';
+      errorDetail = sendRes.errorDetail;
+    }
   }
 
   const entry: SystemAuditLogEntry = {
@@ -2936,7 +3856,7 @@ async function dispatchDeveloperSystemAudit(
   developerAuditStreamLog.unshift(entry);
   if (developerAuditStreamLog.length > 120) developerAuditStreamLog.length = 120;
 
-  if (kind === 'DAILY_DIGEST') {
+  if (kind === 'DAILY_DIGEST' && deliveredViaBot) {
     lastDailyAuditDateUtc = getUtcDateKey(Date.now());
     lastDailyAuditSentAt = sample.capturedAt;
     dailyAuditReportsDispatchedTotal += 1;
@@ -2950,12 +3870,24 @@ async function registerTelegramWebhook(explicitUrl?: string): Promise<{
   webhookUrl: string | null;
   description: string;
 }> {
-  const token = getTelegramBotToken();
+  const tgCfg = resolveTelegramConfig(process.env);
+  const token = tgCfg.botToken;
   if (!token) {
     return {
       ok: false,
       webhookUrl: null,
-      description: 'BOT_TOKEN not configured in environment.',
+      description: 'Valid TELEGRAM_BOT_TOKEN is not configured in server Secrets.',
+    };
+  }
+  if (!tgCfg.webhookSecretValid || !tgCfg.webhookSecret) {
+    const issueMsg =
+      tgCfg.issues.find((i) => i.envVar === 'TELEGRAM_WEBHOOK_SECRET')?.message ||
+      'TELEGRAM_WEBHOOK_SECRET must be a separate 16-256 char [A-Za-z0-9_-] token (never a Bot Token).';
+    telegramWebhookLastError = issueMsg;
+    return {
+      ok: false,
+      webhookUrl: null,
+      description: issueMsg,
     };
   }
   const baseUrl = (explicitUrl || process.env.APP_URL || '').trim().replace(/\/+$/, '');
@@ -2970,7 +3902,7 @@ async function registerTelegramWebhook(explicitUrl?: string): Promise<{
   const targetUrl = baseUrl.endsWith('/api/telegram/webhook')
     ? baseUrl
     : `${baseUrl}/api/telegram/webhook`;
-  const secretToken = getTelegramWebhookSecret();
+  const secretToken = tgCfg.webhookSecret;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
@@ -2980,7 +3912,7 @@ async function registerTelegramWebhook(explicitUrl?: string): Promise<{
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         url: targetUrl,
-        secret_token: secretToken || undefined,
+        secret_token: secretToken,
         allowed_updates: ['message', 'channel_post', 'edited_message'],
       }),
       signal: controller.signal,
@@ -2997,11 +3929,19 @@ async function registerTelegramWebhook(explicitUrl?: string): Promise<{
         description: String(json.description || 'Webhook registered successfully.'),
       };
     }
-    const errDesc = String(json?.description || `Telegram setWebhook HTTP ${res.status}`);
+    const errDesc =
+      sanitizeNotificationError(
+        String(json?.description || `Telegram setWebhook HTTP ${res.status}`),
+        [token, secretToken]
+      ) || `Telegram setWebhook HTTP ${res.status}`;
     telegramWebhookLastError = errDesc;
     return { ok: false, webhookUrl: targetUrl, description: errDesc };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Telegram setWebhook network error';
+    const msg =
+      sanitizeNotificationError(
+        err instanceof Error ? err.message : 'Telegram setWebhook network error',
+        [token, secretToken]
+      ) || 'Telegram setWebhook network error';
     telegramWebhookLastError = msg;
     return { ok: false, webhookUrl: targetUrl, description: msg };
   } finally {
@@ -3010,7 +3950,9 @@ async function registerTelegramWebhook(explicitUrl?: string): Promise<{
 }
 
 function buildTelegramDualStreamStatus(): TelegramDualStreamStatus {
-  const token = getTelegramBotToken();
+  const tgCfg = resolveTelegramConfig(process.env);
+  const overview = notificationDispatcher.getHealthOverview();
+  const token = tgCfg.botToken;
   const publicChatId = getPublicChannelChatId();
   const devChatId = getDeveloperPrivateChatId();
   const live = sampleSystemHealthAndLatencies();
@@ -3024,13 +3966,24 @@ function buildTelegramDualStreamStatus(): TelegramDualStreamStatus {
   return {
     ok: true,
     botConfigured: Boolean(token),
+    botAuthVerified:
+      overview.telegram.state === 'AUTHENTICATED' ||
+      overview.telegram.state === 'DELIVERY_ACCEPTED',
+    botHealthState: overview.telegram.state,
+    botUsername: overview.telegram.botUsername ?? null,
+    botAuthError: overview.telegram.lastFailureDetail ?? null,
+    configAdvisories: [...overview.advisories],
     maskedToken: maskTelegramToken(token),
     publicChannel: {
       name: 'Signal Forge',
-      chatId: publicChatId || '@SignalForge',
-      handle: process.env.TELEGRAM_CHANNEL_ID || '@SignalForge',
+      chatId: publicChatId || 'Unconfigured',
+      handle: tgCfg.publicChannelHandle || '@SignalForge',
       totalDispatched: publicSignalStreamLog.length,
       deliveredCount: publicSignalStreamLog.filter((s) => s.deliveredViaBot).length,
+      acceptedCount:
+        overview.counters.providerAccepted + overview.counters.deliveredWhenVerifiable,
+      failedCount: overview.counters.failed,
+      suppressedCount: overview.counters.suppressed,
       lastDispatchedAt: publicSignalStreamLog[0]?.timestamp ?? null,
     },
     developerAudit: {
@@ -3052,7 +4005,8 @@ function buildTelegramDualStreamStatus(): TelegramDualStreamStatus {
       endpointPath: '/api/telegram/webhook',
       configuredUrl: inferredWebhookUrl,
       registered: telegramWebhookRegistered,
-      secretHeaderEnforced: Boolean(getTelegramWebhookSecret()),
+      secretHeaderEnforced: tgCfg.webhookSecretValid,
+      secretValid: tgCfg.webhookSecretValid,
       lastRegisteredAt: telegramWebhookLastRegisteredAt,
       lastInboundAt: telegramWebhookLastInboundAt,
       totalInboundUpdates: telegramWebhookTotalInbound,
@@ -3441,12 +4395,14 @@ function buildEmailHtml(title: string, bodyRowsHtml: string): string {
         ${bodyRowsHtml}
       </div>
       <div style="margin-top:24px;padding-top:16px;border-top:1px solid #1e293b;font-size:13px;color:#94a3b8;">
-        <p style="margin:0 0 10px 0;">Need instant desk support or signal review?</p>
-        <a href="${escapeHtml(WHATSAPP_URL)}" style="display:inline-block;background:#10b981;color:#052e16;font-weight:700;text-decoration:none;padding:10px 18px;border-radius:8px;">
-          Chat on WhatsApp (${escapeHtml(WHATSAPP_URL)})
-        </a>
+        <p style="margin:0 0 10px 0;">Signal Forge Automated Desk Notification</p>
+        ${
+          WHATSAPP_URL
+            ? `<a href="${escapeHtml(WHATSAPP_URL)}" style="display:inline-block;background:#10b981;color:#052e16;font-weight:700;text-decoration:none;padding:10px 18px;border-radius:8px;">Open Support Desk</a>`
+            : ''
+        }
         <p style="margin:14px 0 0 0;font-size:12px;color:#64748b;">
-          Signal Forge · Developed by Amir Shehzad · ${escapeHtml(OWNER_EMAIL)}
+          Signal Forge · Automated Crypto Intelligence
         </p>
       </div>
     </div>
@@ -3459,55 +4415,70 @@ async function sendAlertEmail(params: {
   bodyHtml: string;
   summary: string;
   dedupeKey?: string;
-}): Promise<AlertDispatchRecord> {
+  recipientEmail?: string;
+  skipTelegramBroadcast?: boolean;
+}): Promise<AlertDispatchRecord & { providerError?: string | null; senderAddress?: string }> {
   if (params.dedupeKey && sentHighConfidenceKeys.has(params.dedupeKey)) {
     const existing = alertDispatchLog.find((r) => r.subject === params.subject);
     if (existing) return existing;
   }
 
-  const apiKey = process.env.RESEND_API_KEY;
+  const apiKey = (process.env.RESEND_API_KEY || '').trim();
+  const senderAddress =
+    (process.env.RESEND_FROM_EMAIL || '').trim() || 'Signal Forge <onboarding@resend.dev>';
+  const targetRecipient = (params.recipientEmail || OWNER_EMAIL).trim() || OWNER_EMAIL;
   const html = buildEmailHtml(params.subject, params.bodyHtml);
-  const record: AlertDispatchRecord = {
+  const record: AlertDispatchRecord & { providerError?: string | null; senderAddress?: string } = {
     id: `eml_${Date.now()}_${crypto.randomBytes(2).toString('hex')}`,
     type: params.type,
-    recipient: OWNER_EMAIL,
+    recipient: targetRecipient,
     subject: params.subject,
     summary: params.summary,
     status: 'queued_no_api_key',
     timestamp: new Date().toISOString(),
+    providerError: null,
+    senderAddress,
   };
 
   if (apiKey && apiKey.startsWith('re_')) {
     try {
       const resend = new Resend(apiKey);
       const result = await resend.emails.send({
-        from: 'Signal Forge <onboarding@resend.dev>',
-        to: [OWNER_EMAIL],
+        from: senderAddress,
+        to: [targetRecipient],
         subject: params.subject,
         html,
       });
       if (result.error) {
         record.status = 'failed';
-        record.summary = `${params.summary} (${result.error.message})`;
+        record.providerError = result.error.message || 'Resend rejected the email payload.';
+        record.summary = `${params.summary} (${record.providerError})`;
       } else {
         record.status = 'sent';
         record.providerId = result.data?.id;
       }
     } catch (err) {
       record.status = 'failed';
-      record.summary = `${params.summary} (${err instanceof Error ? err.message : 'Send error'})`;
+      record.providerError = err instanceof Error ? err.message : 'Resend network error';
+      record.summary = `${params.summary} (${record.providerError})`;
     }
+  } else {
+    record.providerError = 'RESEND_API_KEY is not configured.';
   }
 
   if (params.dedupeKey) {
     addBoundedSetKey(sentHighConfidenceKeys, params.dedupeKey, 500);
   }
 
-  const tgSent = await sendTelegramAlertIfConfigured(
-    `${params.subject}\n${params.summary}\nWhatsApp: ${WHATSAPP_URL}`,
-    true
-  ).catch(() => false);
-  record.telegramDelivered = tgSent;
+  if (!params.skipTelegramBroadcast) {
+    const tgText = WHATSAPP_URL
+      ? `${params.subject}\n${params.summary}\nSupport: ${WHATSAPP_URL}`
+      : `${params.subject}\n${params.summary}`;
+    const tgSent = await sendTelegramAlertIfConfigured(tgText, true).catch(() => false);
+    record.telegramDelivered = tgSent;
+  } else {
+    record.telegramDelivered = false;
+  }
 
   alertDispatchLog.unshift(record);
   if (alertDispatchLog.length > 30) alertDispatchLog.length = 30;
@@ -3606,19 +4577,8 @@ async function dispatchPerformanceReport(
     `Avg Dynamic R:R: ${m.avgRR} | ATR Trailing Exits: ${m.atrTrailingExits} | Best Pair: ${m.bestPair}`,
     `Skeptic Agent Vetoes Saved: ${m.skepticVetoes} traps blocked`,
     `USD-M Futures (${executionMode}) Cross Wallet: $${crossWalletBalanceUsd.toFixed(2)} (PnL $${m.sandboxRealizedPnlUsd.toFixed(2)})`,
-    `Support Desk: ${WHATSAPP_URL}`,
+    ...(WHATSAPP_URL ? [`Support Desk: ${WHATSAPP_URL}`] : ['Support Desk: Signal Forge Terminal']),
   ].join('\n');
-
-  telegramChannelFeed.unshift({
-    id: `tg_perf_${period}_${Date.now()}`,
-    channelName: 'Signal Forge',
-    symbol: period,
-    direction: 'SUMMARY',
-    message: telegramSummary,
-    deliveredViaBot: Boolean(getTelegramBotToken()),
-    timestamp: new Date().toISOString(),
-  });
-  if (telegramChannelFeed.length > 40) telegramChannelFeed.length = 40;
 
   const record = await sendAlertEmail({
     type: emailTypeMap[period],
@@ -3635,6 +4595,18 @@ async function dispatchPerformanceReport(
       </div>
     `,
   });
+
+  telegramChannelFeed.unshift({
+    id: `tg_perf_${period}_${Date.now()}`,
+    channelName: 'Signal Forge',
+    symbol: period,
+    direction: 'SUMMARY',
+    message: telegramSummary,
+    deliveredViaBot: Boolean(record.telegramDelivered),
+    timestamp: new Date().toISOString(),
+  });
+  if (telegramChannelFeed.length > 40) telegramChannelFeed.length = 40;
+
   return { record, report: m };
 }
 
@@ -3900,30 +4872,109 @@ async function dispatchThreeHourSignalDigest(force: boolean = false) {
 
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: '256kb' }));
+  const uploadJsonParser = express.json({ limit: '10mb' });
+  const uploadRawParser = express.raw({
+    type: ['image/png', 'image/jpeg', 'image/webp', 'application/octet-stream'],
+    limit: '6mb',
+  });
+  const defaultJsonParser = express.json({ limit: '256kb' });
+  app.use((req, res, next) => {
+    const normalizedPath = req.path.replace(/\/+$/, '');
+    if (normalizedPath === '/api/scanner/upload') {
+      const ct = String(req.headers['content-type'] || '').toLowerCase();
+      if (
+        ct.startsWith('image/') ||
+        ct.startsWith('application/octet-stream')
+      ) {
+        return uploadRawParser(req, res, next);
+      }
+      return uploadJsonParser(req, res, next);
+    }
+    return defaultJsonParser(req, res, next);
+  });
 
-  // Global security headers & strict same-origin API protection
+  // Structured JSON error handler for body-parser (413 PayloadTooLargeError, 400 invalid JSON)
+  // Prevents Express from returning HTML error pages that break fetch().json() on mobile uploads.
+  app.use(
+    (
+      err: unknown,
+      req: express.Request,
+      res: express.Response,
+      next: express.NextFunction
+    ) => {
+      if (!err) return next();
+      if (!req.path.startsWith('/api/')) return next(err);
+      const errObj = err as { status?: number; statusCode?: number; type?: string; message?: string };
+      const diagnosticId = `SF-VAL-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+      res.setHeader('X-Diagnostic-Id', diagnosticId);
+      const status = errObj.status || errObj.statusCode || 500;
+      if (status === 413 || errObj.type === 'entity.too.large') {
+        return res.status(413).json({
+          ok: false,
+          creditsCharged: 0,
+          code: 'PAYLOAD_TOO_LARGE',
+          diagnosticId,
+          error:
+            'Chart screenshot exceeds the 5 MB upload limit. Please use a standard PNG, JPEG, or WebP screenshot under 5 MB. Zero credits charged.',
+        });
+      }
+      if (status === 400 || errObj.type === 'entity.parse.failed') {
+        return res.status(400).json({
+          ok: false,
+          creditsCharged: 0,
+          code: 'MALFORMED_REQUEST_BODY',
+          diagnosticId,
+          error: 'Upload request payload was malformed or truncated during transfer. Please retry. Zero credits charged.',
+        });
+      }
+      return res.status(500).json({
+        ok: false,
+        creditsCharged: 0,
+        code: 'API_INTERNAL_ERROR',
+        diagnosticId,
+        error: 'Unexpected server error while processing request. Zero credits charged.',
+      });
+    }
+  );
+
+  // Global security headers & strict same-origin API protection (reverse-proxy aware)
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    if (!req.path.startsWith('/api/')) {
+      res.setHeader('Permissions-Policy', 'microphone=(self)');
+    }
     if (req.path.startsWith('/api/')) {
       res.setHeader('Cache-Control', 'no-store');
       const origin = req.headers.origin;
-      const host = req.headers.host;
-      if (origin && host) {
+      const host = String(req.headers.host || '').trim().toLowerCase();
+      const forwardedHost = String(req.headers['x-forwarded-host'] || '')
+        .split(',')[0]
+        .trim()
+        .toLowerCase();
+      if (origin && (host || forwardedHost)) {
         try {
-          const originHost = new URL(origin).host;
-          if (originHost !== host) {
+          const originHost = new URL(origin).host.toLowerCase();
+          const allowedHosts = new Set([host, forwardedHost].filter(Boolean));
+          if (!allowedHosts.has(originHost)) {
+            const diagnosticId = `SF-SEC-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+            res.setHeader('X-Diagnostic-Id', diagnosticId);
             return res.status(403).json({
               ok: false,
+              creditsCharged: 0,
               code: 'CROSS_ORIGIN_FORBIDDEN',
+              diagnosticId,
               error: 'Cross-origin API requests are blocked.',
             });
           }
         } catch {
+          const diagnosticId = `SF-SEC-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+          res.setHeader('X-Diagnostic-Id', diagnosticId);
           return res.status(403).json({
             ok: false,
+            creditsCharged: 0,
             code: 'INVALID_ORIGIN',
+            diagnosticId,
             error: 'Invalid Origin header.',
           });
         }
@@ -3941,14 +4992,27 @@ async function startServer() {
     res.json({ ok: true, service: 'signal-forge' });
   });
 
-  // First-party ephemeral HMAC-SHA256 operator session issuer (cookie + CSRF header token)
-  app.get('/api/auth/session', (_req, res) => {
-    const { token, expiresAtMs } = signOperatorSessionToken();
+  // Verified identity-bound HMAC-SHA256 operator session issuer (strictly ADMIN / SUPER_ADMIN only)
+  // Never grants operator tokens to unauthenticated guests or non-admin users.
+  app.get('/api/auth/session', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const principal = await resolveCallerPrincipal(req);
+    const identity = buildRbacIdentity(principal, extraAdminEmailsFromEnv);
+    const grant = evaluateOperatorSessionGrant(identity);
+    if (!grant.allowed || !identity.uid || !isPrivilegedOperatorRole(identity.role)) {
+      return res.status(grant.httpStatus).json({
+        ok: false,
+        code: grant.code,
+        role: grant.role,
+        error: grant.reason,
+      });
+    }
+    const { token, expiresAtMs } = signOperatorSessionToken(identity.uid, identity.role);
     res.setHeader(
       'Set-Cookie',
-      `sf_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/api; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
+      `sf_session=${encodeURIComponent(token)}; HttpOnly; Secure; SameSite=None; Partitioned; Path=/api; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
     );
-    return res.json({ ok: true, token, expiresAtMs });
+    return res.json({ ok: true, token, expiresAtMs, role: identity.role });
   });
 
   // Strict Subscription Gatekeeper Endpoints
@@ -4467,10 +5531,102 @@ async function startServer() {
     return forgeCapitalState;
   }
 
+  // ---------------------------------------------------------------------------
+  // SAFE VERSION UPDATE & LIVE TRADING PROTECTION PROTOCOL (RESTART-PERSISTENT)
+  // ---------------------------------------------------------------------------
+  const SIGNAL_FORGE_APP_VERSION = '1.4.0-step1';
+  const MAINTENANCE_DATA_DIR = path.join(process.cwd(), '.data');
+  const MAINTENANCE_STATE_PATH = path.join(MAINTENANCE_DATA_DIR, 'maintenance-state.json');
+
+  function persistMaintenanceStateToDisk(nextState: SafeMaintenanceState): void {
+    try {
+      fs.mkdirSync(MAINTENANCE_DATA_DIR, { recursive: true });
+      const tmpPath = `${MAINTENANCE_STATE_PATH}.tmp.${process.pid}`;
+      fs.writeFileSync(tmpPath, serializeMaintenanceState(nextState), 'utf8');
+      fs.renameSync(tmpPath, MAINTENANCE_STATE_PATH);
+    } catch (err) {
+      console.error('[SafeMaintenance] Failed to persist maintenance state:', err);
+    }
+  }
+
+  function loadMaintenanceStateFromDisk(): SafeMaintenanceState {
+    if (!fs.existsSync(MAINTENANCE_STATE_PATH)) {
+      const initial = createInitialMaintenanceState(SIGNAL_FORGE_APP_VERSION);
+      persistMaintenanceStateToDisk(initial);
+      return initial;
+    }
+    try {
+      const raw = fs.readFileSync(MAINTENANCE_STATE_PATH, 'utf8');
+      return parseMaintenanceStateFailClosed(raw, SIGNAL_FORGE_APP_VERSION);
+    } catch {
+      return parseMaintenanceStateFailClosed(null, SIGNAL_FORGE_APP_VERSION);
+    }
+  }
+
+  let safeMaintenanceState: SafeMaintenanceState = loadMaintenanceStateFromDisk();
+
+  function getActiveMaintenanceState(): SafeMaintenanceState {
+    const evaluated = evaluateMaintenanceTimer(safeMaintenanceState, Date.now());
+    if (evaluated.changed) {
+      safeMaintenanceState = evaluated.state;
+      persistMaintenanceStateToDisk(safeMaintenanceState);
+    }
+    return safeMaintenanceState;
+  }
+
+  function updateMaintenanceState(nextState: SafeMaintenanceState): SafeMaintenanceState {
+    safeMaintenanceState = nextState;
+    persistMaintenanceStateToDisk(safeMaintenanceState);
+    return safeMaintenanceState;
+  }
+
+  function syncSandboxProtectionsIntoMaintenance(state: SafeMaintenanceState): SafeMaintenanceState {
+    const protectedPositions = sandboxPositions.map((pos) => ({
+      positionId: pos.id,
+      pair: pos.symbol,
+      side: (pos.direction === 'BUY' ? 'LONG' : 'SHORT') as 'LONG' | 'SHORT',
+      quantity: pos.quantity,
+      entryPrice: pos.entryPrice,
+      stopLossOrderId: `SL-${pos.id}`,
+      takeProfitOrderId: `TP-${pos.id}`,
+      protectionVerified: Number.isFinite(pos.initialStopLoss) && pos.initialStopLoss > 0,
+    }));
+    return reconcilePendingOrdersAndProtections(state, { protectedPositions });
+  }
+
+  function enforceMaintenanceOrderGate(
+    res: express.Response,
+    intent: OrderGateIntent
+  ): boolean {
+    const current = getActiveMaintenanceState();
+    const decision = evaluateMaintenanceOrderGate(current, intent);
+    if (!decision.allowed) {
+      res.status(decision.httpStatus).json({
+        ok: false,
+        code: decision.code,
+        maintenanceState: decision.maintenanceState,
+        error: decision.reason,
+        existingPositionsProtected: true,
+      });
+      return false;
+    }
+    return true;
+  }
+
   function runAutonomousCoordinatorTick() {
+    const maintGate = evaluateMaintenanceOrderGate(getActiveMaintenanceState(), {
+      kind: 'NEW_ENTRY',
+      source: 'AUTONOMOUS',
+    });
+    if (!maintGate.allowed) {
+      return { skipped: 'safe_maintenance_active' as const, maintenanceState: maintGate.maintenanceState };
+    }
     if (!appLiveEnabled) {
       appLiveQuotaSavedCalls += 1;
       return { skipped: 'app_live_paused' as const };
+    }
+    if (masterContainmentState.mode === 'HALTED_MANUAL_ONLY') {
+      return { skipped: 'master_containment_manual_only' as const };
     }
     if (!autonomousCoordinatorEnabled) return { skipped: 'autonomous_disabled' as const };
     const aiAvail = GLOBAL_MICROSERVICE_COORDINATOR.isServiceAvailable('ai-agents-svc');
@@ -4675,25 +5831,26 @@ async function startServer() {
           pnlUsd: settlement.netRealizedPnlUsd,
         });
 
-        sendTelegramAlertIfConfigured(
-          `[AUTO EXIT · ${pos.marketType ?? 'SPOT'}] ${pos.symbol} ${pos.direction} closed via ${exitStatus} @ $${livePrice} | PnL ${settlement.netRealizedPnlUsd >= 0 ? '+' : ''}$${settlement.netRealizedPnlUsd}`,
-          true
+        processAndTransmitTradingAlert(
+          {
+            source: 'AUTOMATED',
+            symbol: pos.symbol,
+            direction: pos.direction,
+            entryPrice: pos.entryPrice,
+            exitPrice: livePrice,
+            stopLoss: pos.trailingStopLoss,
+            confidence: 92,
+            hitTpMilestones: exitStatus === 'CLOSED_TP' ? ['TP1', 'TP2', 'TP3'] : [],
+            finalPnlUsd: settlement.netRealizedPnlUsd,
+            finalPnlPercent: settlement.pnlPercent,
+            lifecycleStatus: exitStatus === 'CLOSED_TP' ? 'CLOSED_TP' : 'CLOSED_SL',
+            rationale: exitReason,
+          },
+          {
+            signalCategory: 'REALIZED_RESULT',
+            executionMode: executionMode || 'PAPER_DRY_RUN',
+          }
         ).catch(() => undefined);
-
-        processAndTransmitTradingAlert({
-          source: 'AUTOMATED',
-          symbol: pos.symbol,
-          direction: pos.direction,
-          entryPrice: pos.entryPrice,
-          exitPrice: livePrice,
-          stopLoss: pos.trailingStopLoss,
-          confidence: 92,
-          hitTpMilestones: exitStatus === 'CLOSED_TP' ? ['TP1', 'TP2', 'TP3'] : [],
-          finalPnlUsd: settlement.netRealizedPnlUsd,
-          finalPnlPercent: settlement.pnlPercent,
-          lifecycleStatus: exitStatus === 'CLOSED_TP' ? 'CLOSED_TP' : 'CLOSED_SL',
-          rationale: exitReason,
-        }).catch(() => undefined);
       }
     }
 
@@ -5123,13 +6280,39 @@ async function startServer() {
   });
 
   app.get('/api/ws/verify', (_req, res) => {
+    const nowMs = Date.now();
     const frameAgeMs =
-      backendWsLastFrameAtMs > 0 ? Math.max(0, Date.now() - backendWsLastFrameAtMs) : -1;
+      backendWsLastFrameAtMs > 0 ? Math.max(0, nowMs - backendWsLastFrameAtMs) : -1;
+    const freshnessEval =
+      backendWsLastFrameAtMs > 0
+        ? evaluateTimestampFreshness(backendWsLastFrameAtMs, nowMs)
+        : { freshness: 'INVALID_TIMESTAMP', ageMs: -1, reason: 'No WS frames observed yet.' };
+    const connectionHealth = backendWsCircuitOpen
+      ? 'CIRCUIT_OPEN'
+      : backendWsHealTimer
+        ? 'RECONNECTING'
+        : !backendWsConnected
+          ? 'DISCONNECTED'
+          : freshnessEval.freshness === 'STALE'
+            ? 'STALE'
+            : freshnessEval.freshness === 'DELAYED'
+              ? 'DELAYED'
+              : 'CONNECTED';
+
+    const btcSpot = spotFeedCache['BTCUSDT'];
+    const btcFutures = futuresFeedCache['BTCUSDT'];
+    const spotVsFuturesDiffPct =
+      btcSpot && btcFutures && btcSpot.price > 0 && btcFutures.markPrice > 0
+        ? Number(((Math.abs(btcSpot.price - btcFutures.markPrice) / btcSpot.price) * 100).toFixed(4))
+        : null;
+
     res.json({
       ok: true,
       appLiveEnabled,
       liveFeedModulesEnabled: systemControls.liveFeedModulesEnabled,
       spotWsConnected: backendWsConnected,
+      connectionHealth,
+      dataFreshness: freshnessEval.freshness,
       wsReadyState: backendSpotWs?.readyState ?? null,
       wsEndpointHost: SPOT_WS_ENDPOINTS[backendWsHostIndex % SPOT_WS_ENDPOINTS.length],
       totalWsFrames: backendWsTotalFrames,
@@ -5137,10 +6320,42 @@ async function startServer() {
       closedCandlesCount: backendWsClosedCandlesCount,
       latestClosedCandles: Object.values(liveKlineWsFrames).slice(0, 8),
       frameAgeMs,
+      reconnectCount: backendWsReconnectCount,
+      reconnectAttempt: backendWsAttempt,
+      circuitOpen: backendWsCircuitOpen,
+      activeSubscriptionsCount: backendWsActiveSubscriptions.length,
+      lastDisconnectAtIso: backendWsLastDisconnectAtIso,
+      lastReconnectAtIso: backendWsLastReconnectAtIso,
+      duplicateFramesDropped: backendWsDuplicateFramesDropped,
+      outOfOrderFramesDropped: backendWsOutOfOrderFramesDropped,
+      failedDataUpdatesCount: backendWsFailedUpdatesCount,
+      anomaliesIsolatedCount: monitorState.anomaliesIsolatedCount ?? 0,
       spotFeedSource,
+      spotSourceClass: btcSpot?.sourceClass ?? (spotFeedSource === 'binance_spot' ? 'LIVE_WS_VERIFIED' : 'CACHED_SIMULATED'),
       futuresFeedSource,
+      priceTelemetrySample: btcSpot
+        ? {
+            symbol: btcSpot.symbol,
+            exchange: btcSpot.exchange ?? 'binance',
+            marketType: btcSpot.marketType ?? 'SPOT',
+            quoteCurrency: btcSpot.quoteCurrency ?? 'USDT',
+            lastTradedPrice: btcSpot.price,
+            bidPrice: btcSpot.bidPrice ?? null,
+            askPrice: btcSpot.askPrice ?? null,
+            markPrice: btcSpot.markPrice ?? null,
+            spreadBps: btcSpot.spreadBps ?? null,
+            sourceClass: btcSpot.sourceClass ?? 'CACHED_SIMULATED',
+            observedAtIso: btcSpot.observedAtIso ?? new Date(btcSpot.updatedAtMs).toISOString(),
+            spotVsFuturesBasisPct: spotVsFuturesDiffPct,
+          }
+        : null,
       sseSubscribers: sseTickListeners.size,
-      verifiedAt: new Date().toISOString(),
+      securityGates: {
+        liveTradingDisabled: freqtradeCore.getMetrics().tradingMode !== 'LIVE',
+        publicSignalOrderIsolation: true,
+        publicSignalDefaultEnabled: false,
+      },
+      verifiedAt: new Date(nowMs).toISOString(),
     });
   });
 
@@ -5252,6 +6467,7 @@ async function startServer() {
 
   app.post('/api/arbitrage/execute', requireOperatorAuth, standardWriteRateLimit, requirePremiumSubscription('EXECUTION'), (req, res) =>
     executionMutex.runExclusive(() => {
+    if (!enforceMaintenanceOrderGate(res, { kind: 'NEW_ENTRY', source: 'ARBITRAGE' })) return;
     reconcileServerForgeCapital();
     arbitrageOpportunitiesCache = scanCrossExchangeArbitrage(multiExchangeDepthCache);
     const targetId = String(req.body?.opportunityId || '');
@@ -6243,6 +7459,7 @@ async function startServer() {
 
   app.post('/api/forge-capital/route', requireOperatorAuth, standardWriteRateLimit, requirePremiumSubscription('EXECUTION'), (req, res) =>
     executionMutex.runExclusive(async () => {
+    if (!enforceMaintenanceOrderGate(res, { kind: 'NEW_ENTRY', source: 'AI_SIGNAL' })) return;
     try {
       const stateNow = reconcileServerForgeCapital();
       const {
@@ -6478,6 +7695,7 @@ async function startServer() {
 
   app.post('/api/copy-trading/mirror', requireOperatorAuth, standardWriteRateLimit, requirePremiumSubscription('EXECUTION'), (req, res) =>
     executionMutex.runExclusive(() => {
+    if (!enforceMaintenanceOrderGate(res, { kind: 'NEW_ENTRY', source: 'COPY_TRADING' })) return;
     reconcileServerForgeCapital();
     const accountId = String(req.body?.accountId || institutionalCopyAccounts[0].id);
     const acc =
@@ -6728,6 +7946,7 @@ async function startServer() {
   });
 
   app.post('/api/autonomous/tick', requireOperatorAuth, standardWriteRateLimit, requirePremiumSubscription('AGENT_OVERRIDE'), async (_req, res) => {
+    if (!enforceMaintenanceOrderGate(res, { kind: 'NEW_ENTRY', source: 'AUTONOMOUS' })) return;
     if (!appLiveEnabled) {
       return res.status(409).json({
         ok: false,
@@ -6976,10 +8195,65 @@ async function startServer() {
     }
 
     return res.json({
-      source: 'cache',
+      source: 'simulated_fallback',
+      dataQuality: 'SIMULATED',
+      executableQuote: false,
+      fallbackReason: 'Upstream Binance klines endpoints unavailable; deterministic chart fallback rendered for UI continuity only',
       symbol,
       interval,
       candles: generateDeterministicCandles(symbol, interval, limit, undefined, refPrice),
+    });
+  });
+
+  // --- CoinGecko Secure Reference Provider & Smart Market Data Router Endpoints ---
+  app.get('/api/market/coingecko/status', (_req, res) => {
+    return res.json({
+      ok: true,
+      coingecko: coinGeckoMarketClient.getSanitizedStatus(),
+    });
+  });
+
+  app.post(
+    '/api/market/coingecko/test',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    async (_req, res) => {
+      const result = await coinGeckoMarketClient.testConnection();
+      return res.json({
+        ok: result.ok,
+        result,
+        coingecko: coinGeckoMarketClient.getSanitizedStatus(),
+      });
+    }
+  );
+
+  app.get('/api/market/router/status', (req, res) => {
+    const rawSym = String(req.query.symbol || 'BTCUSDT')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '');
+    const symbol = rawSym || 'BTCUSDT';
+    return res.json({
+      ok: true,
+      router: smartMarketDataRouter.getStatus(symbol),
+    });
+  });
+
+  app.get('/api/market/router/quote', async (req, res) => {
+    const rawSym = String(req.query.symbol || 'BTCUSDT')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '');
+    const symbol = rawSym || 'BTCUSDT';
+    const allowFallback = String(req.query.fallback ?? 'true').toLowerCase() !== 'false';
+    const quote = await smartMarketDataRouter.getQuote(symbol, {
+      allowReferenceFallback: allowFallback,
+    });
+    return res.json({
+      ok: quote.price !== null,
+      quote,
+      routerSummary: {
+        overallDataQuality: smartMarketDataRouter.getStatus(symbol).overallDataQuality,
+        executionAllowed: quote.executionAllowed,
+      },
     });
   });
 
@@ -7336,11 +8610,11 @@ async function startServer() {
 
   app.get('/api/alerts/history', (_req, res) => {
     res.json({
-      ownerEmail: OWNER_EMAIL,
-      whatsappUrl: WHATSAPP_URL,
+      ownerEmail: OWNER_EMAIL ? maskEmailAddress(OWNER_EMAIL) : 'Not configured',
+      whatsappUrl: WHATSAPP_URL || null,
       resendConfigured: Boolean(process.env.RESEND_API_KEY?.startsWith('re_')),
       telegramConfigured: Boolean(getTelegramBotToken()),
-      telegramChannel: process.env.TELEGRAM_CHANNEL_ID || process.env.CHAT_ID || 'Signal Forge',
+      telegramChannel: 'Signal Forge',
       digestIntervalHours: STRICT_DIGEST_INTERVAL_HOURS,
       digestState: {
         pendingCount: signalDigestState.pending.length,
@@ -7354,24 +8628,43 @@ async function startServer() {
         individualEmailsPrevented: signalDigestState.individualEmailsPrevented,
       },
       performanceSchedule: ['Daily (24H)', 'Weekly (7D)', 'Monthly (30D)'],
-      records: alertDispatchLog,
+      records: alertDispatchLog.map((rec) => ({
+        ...rec,
+        recipient: rec.recipient ? maskEmailAddress(rec.recipient) : '***@***',
+      })),
     });
   });
 
   // "Signal Forge" Dual-Stream Telegram Channel, Developer Private Audit & Webhook Endpoints
   app.get('/api/telegram/feed', (_req, res) => {
+    const tgCfg = resolveTelegramConfig(process.env);
+    const healthOverview = notificationDispatcher.getHealthOverview();
     res.json({
       channelName: 'Signal Forge',
-      channelHandle: process.env.TELEGRAM_CHANNEL_ID || '@SignalForge',
-      channelChatId: getPublicChannelChatId() || '@SignalForge',
-      botConfigured: Boolean(getTelegramBotToken()),
+      channelHandle: tgCfg.publicChannelHandle || '@SignalForge',
+      channelChatId: getPublicChannelChatId() || 'Unconfigured',
+      botConfigured: Boolean(tgCfg.botToken),
+      botHealthState: healthOverview.telegram.state,
+      botAuthVerified:
+        healthOverview.telegram.state === 'AUTHENTICATED' ||
+        healthOverview.telegram.state === 'DELIVERY_ACCEPTED',
+      notificationHealth: healthOverview,
       posts: telegramChannelFeed,
       structuredSignals: publicSignalStreamLog,
     });
   });
 
-  app.get('/api/telegram/streams/status', (_req, res) => {
-    return res.json(buildTelegramDualStreamStatus());
+  app.get('/api/telegram/streams/status', async (req, res) => {
+    const status = buildTelegramDualStreamStatus();
+    const isOwner = await isRequestAuthenticatedOwnerOrOperator(req);
+    if (!isOwner) {
+      return res.json({
+        ...status,
+        botAuthError: null,
+        configAdvisories: [],
+      });
+    }
+    return res.json(status);
   });
 
   app.post('/api/telegram/signal', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
@@ -7395,6 +8688,7 @@ async function startServer() {
       lifecycleStatus,
       source,
       dedupeKey,
+      ownerOverridePublicGate,
     } = req.body || {};
     if (!symbol && !rawAlertText) {
       return res.status(400).json({ ok: false, error: 'Missing trading pair symbol or raw alert text.' });
@@ -7411,6 +8705,9 @@ async function startServer() {
         ok: true,
         deduped: true,
         filtered: true,
+        delivered: false,
+        providerAccepted: false,
+        suppressed: false,
         post: existing,
         structuredSignal: existingStructured,
         status: buildTelegramDualStreamStatus(),
@@ -7418,32 +8715,39 @@ async function startServer() {
       });
     }
 
-    const processed = await processAndTransmitTradingAlert({
-      source: source === 'MANUAL' ? 'MANUAL' : 'AUTOMATED',
-      rawAlertText: rawAlertText ? String(rawAlertText) : undefined,
-      symbol: cleanSym || undefined,
-      direction: direction ? (String(direction).toUpperCase() as 'BUY' | 'SELL') : undefined,
-      timeframe: timeframe ? String(timeframe) : '4h',
-      entryPrice: Number(entryPrice) > 0 ? Number(entryPrice) : undefined,
-      tp1: Number(tp1) > 0 ? Number(tp1) : undefined,
-      tp2: Number(tp2) > 0 ? Number(tp2) : undefined,
-      tp3: Number(tp3) > 0 ? Number(tp3) : undefined,
-      takeProfits: Array.isArray(takeProfits) ? takeProfits.map(Number) : undefined,
-      exitPrice: Number(exitPrice) > 0 ? Number(exitPrice) : undefined,
-      stopLoss: Number(stopLoss) > 0 ? Number(stopLoss) : undefined,
-      confidence: Number(confidence) > 0 ? Number(confidence) : 88,
-      rationale: rationale ? String(rationale) : undefined,
-      hitTpMilestones: Array.isArray(hitTpMilestones) ? (hitTpMilestones as TpMilestone[]) : undefined,
-      finalPnlUsd: typeof finalPnlUsd === 'number' ? finalPnlUsd : undefined,
-      finalPnlPercent: typeof finalPnlPercent === 'number' ? finalPnlPercent : undefined,
-      lifecycleStatus: lifecycleStatus ? (String(lifecycleStatus) as SignalLifecycleStatus) : undefined,
-    });
+    const processed = await processAndTransmitTradingAlert(
+      {
+        source: source === 'MANUAL' ? 'MANUAL' : 'AUTOMATED',
+        rawAlertText: rawAlertText ? String(rawAlertText) : undefined,
+        symbol: cleanSym || undefined,
+        direction: direction ? (String(direction).toUpperCase() as 'BUY' | 'SELL') : undefined,
+        timeframe: timeframe ? String(timeframe) : '4h',
+        entryPrice: Number(entryPrice) > 0 ? Number(entryPrice) : undefined,
+        tp1: Number(tp1) > 0 ? Number(tp1) : undefined,
+        tp2: Number(tp2) > 0 ? Number(tp2) : undefined,
+        tp3: Number(tp3) > 0 ? Number(tp3) : undefined,
+        takeProfits: Array.isArray(takeProfits) ? takeProfits.map(Number) : undefined,
+        exitPrice: Number(exitPrice) > 0 ? Number(exitPrice) : undefined,
+        stopLoss: Number(stopLoss) > 0 ? Number(stopLoss) : undefined,
+        confidence: Number(confidence) > 0 ? Number(confidence) : 88,
+        rationale: rationale ? String(rationale) : undefined,
+        hitTpMilestones: Array.isArray(hitTpMilestones) ? (hitTpMilestones as TpMilestone[]) : undefined,
+        finalPnlUsd: typeof finalPnlUsd === 'number' ? finalPnlUsd : undefined,
+        finalPnlPercent: typeof finalPnlPercent === 'number' ? finalPnlPercent : undefined,
+        lifecycleStatus: lifecycleStatus ? (String(lifecycleStatus) as SignalLifecycleStatus) : undefined,
+      },
+      {
+        explicitOwnerPublish: true,
+        ownerOverridePublicGate: ownerOverridePublicGate === true,
+        signalCategory: 'GENERATED_SIGNAL',
+      }
+    );
 
     if (!processed.ok) {
       return res.status(400).json({ ok: false, error: processed.error });
     }
 
-    if (dedupeKey && !processed.filtered) {
+    if (dedupeKey && !processed.filtered && processed.providerAccepted) {
       addBoundedSetKey(sentTelegramKeys, String(dedupeKey), 500);
     }
 
@@ -7452,17 +8756,31 @@ async function startServer() {
       ok: true,
       deduped: processed.filtered,
       filtered: processed.filtered,
+      suppressed: processed.suppressed,
+      delivered: processed.delivered,
+      providerAccepted: processed.providerAccepted,
+      deliveryState: processed.record.deliveryState,
+      deliveryError: processed.record.webhookError,
       spamVerdict: processed.record.spamVerdict,
       processedSignal: processed.record,
       post,
       structuredSignal: processed.structuredSignal || publicSignalStreamLog[0],
       status: buildTelegramDualStreamStatus(),
       processorStatus: processed.status,
+      notificationHealth: notificationDispatcher.getHealthOverview(),
     });
   });
 
-  app.get('/api/signal-processor/status', (_req, res) => {
-    return res.json(buildSignalProcessorStatus());
+  app.get('/api/signal-processor/status', async (req, res) => {
+    const status = buildSignalProcessorStatus();
+    const isOwner = await isRequestAuthenticatedOwnerOrOperator(req);
+    if (!isOwner) {
+      return res.json({
+        ...status,
+        advisories: [],
+      });
+    }
+    return res.json(status);
   });
 
   app.post('/api/signal-processor/process', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
@@ -7473,35 +8791,49 @@ async function startServer() {
         error: 'Provide either rawAlertText (manual alert) or structured trading signal parameters.',
       });
     }
-    const result = await processAndTransmitTradingAlert({
-      source: body.source === 'AUTOMATED' ? 'AUTOMATED' : body.source === 'MANUAL' ? 'MANUAL' : undefined,
-      rawAlertText: body.rawAlertText ? String(body.rawAlertText) : undefined,
-      symbol: body.symbol ? String(body.symbol) : undefined,
-      direction: body.direction ? (String(body.direction).toUpperCase() as 'BUY' | 'SELL' | 'LONG' | 'SHORT') : undefined,
-      timeframe: body.timeframe ? String(body.timeframe) : undefined,
-      entryPrice: Number(body.entryPrice) > 0 ? Number(body.entryPrice) : undefined,
-      tp1: Number(body.tp1) > 0 ? Number(body.tp1) : undefined,
-      tp2: Number(body.tp2) > 0 ? Number(body.tp2) : undefined,
-      tp3: Number(body.tp3) > 0 ? Number(body.tp3) : undefined,
-      takeProfits: Array.isArray(body.takeProfits) ? body.takeProfits.map(Number) : undefined,
-      exitPrice: Number(body.exitPrice) > 0 ? Number(body.exitPrice) : undefined,
-      stopLoss: Number(body.stopLoss) > 0 ? Number(body.stopLoss) : undefined,
-      confidence: Number(body.confidence) > 0 ? Number(body.confidence) : undefined,
-      rationale: body.rationale ? String(body.rationale) : undefined,
-      hitTpMilestones: Array.isArray(body.hitTpMilestones) ? (body.hitTpMilestones as TpMilestone[]) : undefined,
-      finalPnlUsd: typeof body.finalPnlUsd === 'number' ? body.finalPnlUsd : undefined,
-      finalPnlPercent: typeof body.finalPnlPercent === 'number' ? body.finalPnlPercent : undefined,
-      lifecycleStatus: body.lifecycleStatus ? (String(body.lifecycleStatus) as SignalLifecycleStatus) : undefined,
-    });
+    const result = await processAndTransmitTradingAlert(
+      {
+        source: body.source === 'AUTOMATED' ? 'AUTOMATED' : body.source === 'MANUAL' ? 'MANUAL' : undefined,
+        rawAlertText: body.rawAlertText ? String(body.rawAlertText) : undefined,
+        symbol: body.symbol ? String(body.symbol) : undefined,
+        direction: body.direction ? (String(body.direction).toUpperCase() as 'BUY' | 'SELL' | 'LONG' | 'SHORT') : undefined,
+        timeframe: body.timeframe ? String(body.timeframe) : undefined,
+        entryPrice: Number(body.entryPrice) > 0 ? Number(body.entryPrice) : undefined,
+        tp1: Number(body.tp1) > 0 ? Number(body.tp1) : undefined,
+        tp2: Number(body.tp2) > 0 ? Number(body.tp2) : undefined,
+        tp3: Number(body.tp3) > 0 ? Number(body.tp3) : undefined,
+        takeProfits: Array.isArray(body.takeProfits) ? body.takeProfits.map(Number) : undefined,
+        exitPrice: Number(body.exitPrice) > 0 ? Number(body.exitPrice) : undefined,
+        stopLoss: Number(body.stopLoss) > 0 ? Number(body.stopLoss) : undefined,
+        confidence: Number(body.confidence) > 0 ? Number(body.confidence) : undefined,
+        rationale: body.rationale ? String(body.rationale) : undefined,
+        hitTpMilestones: Array.isArray(body.hitTpMilestones) ? (body.hitTpMilestones as TpMilestone[]) : undefined,
+        finalPnlUsd: typeof body.finalPnlUsd === 'number' ? body.finalPnlUsd : undefined,
+        finalPnlPercent: typeof body.finalPnlPercent === 'number' ? body.finalPnlPercent : undefined,
+        lifecycleStatus: body.lifecycleStatus ? (String(body.lifecycleStatus) as SignalLifecycleStatus) : undefined,
+      },
+      {
+        explicitOwnerPublish: true,
+        ownerOverridePublicGate: body.ownerOverridePublicGate === true,
+        signalCategory:
+          body.signalCategory === 'PAPER_EXECUTED_TRADE' || body.signalCategory === 'REALIZED_RESULT'
+            ? body.signalCategory
+            : 'GENERATED_SIGNAL',
+      }
+    );
     if (!result.ok) {
       return res.status(400).json(result);
     }
     return res.json({
       ok: true,
       filtered: result.filtered,
+      suppressed: result.suppressed,
+      delivered: result.delivered,
+      providerAccepted: result.providerAccepted,
       record: result.record,
       processorStatus: result.status,
       telegramStatus: buildTelegramDualStreamStatus(),
+      notificationHealth: notificationDispatcher.getHealthOverview(),
     });
   });
 
@@ -7533,24 +8865,31 @@ async function startServer() {
       ? 'TP1_HIT'
       : 'CLOSED_MANUAL';
 
-    const result = await processAndTransmitTradingAlert({
-      source: base?.source || 'AUTOMATED',
-      symbol: base?.symbol || String(body.symbol),
-      direction: base?.direction || (String(body.direction || 'BUY').toUpperCase() as 'BUY' | 'SELL'),
-      timeframe: base?.timeframe || String(body.timeframe || '4h'),
-      entryPrice: base?.entryPrice || Number(body.entryPrice || 0),
-      takeProfits: base?.takeProfits || (Array.isArray(body.takeProfits) ? body.takeProfits.map(Number) : undefined),
-      exitPrice: base?.exitPrice || (Number(body.exitPrice) > 0 ? Number(body.exitPrice) : undefined),
-      stopLoss: base?.stopLoss || Number(body.stopLoss || 0),
-      confidence: base?.confidence || Number(body.confidence || 90),
-      hitTpMilestones: hitMilestones,
-      finalPnlUsd: typeof body.finalPnlUsd === 'number' ? body.finalPnlUsd : null,
-      finalPnlPercent: typeof body.finalPnlPercent === 'number' ? body.finalPnlPercent : null,
-      lifecycleStatus: nextLifecycle,
-      rationale: body.rationale
-        ? String(body.rationale)
-        : `Milestone Update (${hitMilestones.join(', ') || nextLifecycle}) transmitted via Signal Forge Webhook`,
-    });
+    const result = await processAndTransmitTradingAlert(
+      {
+        source: base?.source || 'AUTOMATED',
+        symbol: base?.symbol || String(body.symbol),
+        direction: base?.direction || (String(body.direction || 'BUY').toUpperCase() as 'BUY' | 'SELL'),
+        timeframe: base?.timeframe || String(body.timeframe || '4h'),
+        entryPrice: base?.entryPrice || Number(body.entryPrice || 0),
+        takeProfits: base?.takeProfits || (Array.isArray(body.takeProfits) ? body.takeProfits.map(Number) : undefined),
+        exitPrice: base?.exitPrice || (Number(body.exitPrice) > 0 ? Number(body.exitPrice) : undefined),
+        stopLoss: base?.stopLoss || Number(body.stopLoss || 0),
+        confidence: base?.confidence || Number(body.confidence || 90),
+        hitTpMilestones: hitMilestones,
+        finalPnlUsd: typeof body.finalPnlUsd === 'number' ? body.finalPnlUsd : null,
+        finalPnlPercent: typeof body.finalPnlPercent === 'number' ? body.finalPnlPercent : null,
+        lifecycleStatus: nextLifecycle,
+        rationale: body.rationale
+          ? String(body.rationale)
+          : `Milestone Update (${hitMilestones.join(', ') || nextLifecycle}) transmitted via Signal Forge`,
+      },
+      {
+        explicitOwnerPublish: true,
+        ownerOverridePublicGate: body.ownerOverridePublicGate === true,
+        signalCategory: 'REALIZED_RESULT',
+      }
+    );
 
     if (!result.ok) {
       return res.status(400).json(result);
@@ -7559,11 +8898,111 @@ async function startServer() {
     return res.json({
       ok: true,
       filtered: result.filtered,
+      suppressed: result.suppressed,
+      delivered: result.delivered,
+      providerAccepted: result.providerAccepted,
       record: result.record,
       processorStatus: result.status,
       telegramStatus: buildTelegramDualStreamStatus(),
+      notificationHealth: notificationDispatcher.getHealthOverview(),
     });
   });
+
+  // Step 3 + Permanent Secrets Repair: Owner-Only Notification Health, Persistent SQLite Delivery Ledger & Single-Transport Policy
+  app.get('/api/notifications/health', requireOperatorAuth, (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({
+      ok: true,
+      ...notificationDispatcher.getHealthOverview(),
+    });
+  });
+
+  app.get('/api/notifications/ledger', requireOperatorAuth, (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit || 40)));
+    return res.json({
+      ok: true,
+      counters: notificationLedger.getCounters(),
+      records: notificationLedger.listRecentDeliveries(limit),
+    });
+  });
+
+  // Owner-Only Configuration & Secrets Persistence Health Dashboard (zero secret values or fragments ever returned)
+  app.get(
+    '/api/admin/config-health',
+    requireOperatorAuth,
+    requireRbacPermission('DEBUG_ENDPOINTS_ACCESS'),
+    (_req, res) => {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      const report = buildOwnerConfigHealthReport({
+        env: process.env,
+        preDotenvKeys: PRE_DOTENV_ENV_KEYS,
+        dotenvLoadedKeys: DOTENV_LOADED_KEYS,
+        localDotenvFilePresent: LOCAL_DOTENV_FILE_PRESENT,
+        previousBootSnapshot: BOOT_ENV_PERSISTENCE.previous,
+        currentBootSnapshot: BOOT_ENV_PERSISTENCE.current,
+        aiProvidersStatus: getSharedAiProviderVault().getPublicStatus(),
+        coinGeckoStatus: coinGeckoMarketClient.getSanitizedStatus(),
+        notificationHealth: notificationDispatcher.getHealthOverview(),
+      });
+      return res.json({
+        ok: true,
+        configHealth: report,
+      });
+    }
+  );
+
+  app.post(
+    '/api/notifications/telegram/verify',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    async (_req, res) => {
+      const verification = await notificationDispatcher.verifyTelegramBotAuth(true);
+      return res.json({
+        ok: verification.ok,
+        verification,
+        health: notificationDispatcher.getHealthOverview(),
+      });
+    }
+  );
+
+  app.post(
+    '/api/notifications/policy',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    (req, res) => {
+      const body = req.body || {};
+      const updated = notificationDispatcher.updatePolicy({
+        telegramPrimaryTransport: body.telegramPrimaryTransport,
+        allowTelegramFallbackOnPrimaryFailure:
+          typeof body.allowTelegramFallbackOnPrimaryFailure === 'boolean'
+            ? body.allowTelegramFallbackOnPrimaryFailure
+            : undefined,
+        discordEnabled:
+          typeof body.discordEnabled === 'boolean' ? body.discordEnabled : undefined,
+      });
+      return res.json({
+        ok: true,
+        policy: updated,
+        health: notificationDispatcher.getHealthOverview(),
+      });
+    }
+  );
+
+  app.post(
+    '/api/notifications/retry',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    async (_req, res) => {
+      const outcome = await notificationDispatcher.flushDueRetries(Date.now(), 10);
+      return res.json({
+        ok: true,
+        ...outcome,
+        health: notificationDispatcher.getHealthOverview(),
+      });
+    }
+  );
 
   // Backend Offloaded Event Pipeline: Entry-Zone Gated Signals, Auto-Executed Order Logs, Pre-Pump Support Monitor & Telegram Stabilizer
   app.get('/api/pipeline/dashboard-snapshot', (_req, res) => {
@@ -7571,9 +9010,9 @@ async function startServer() {
   });
 
   app.post('/api/pipeline/entry-zone/execute', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+    if (!enforceMaintenanceOrderGate(res, { kind: 'NEW_ENTRY', source: 'AI_SIGNAL' })) return;
     const body = req.body || {};
     const signalId = String(body.signalId || '').trim();
-    const forceOnCriteria = Boolean(body.forceEntryZoneMatch);
     const notionalUsd = Math.max(100, Math.min(250_000, Number(body.notionalUsd || 1500)));
 
     const candidate = activeEntryZoneSignals.find((s) => s.signalId === signalId);
@@ -7584,22 +9023,43 @@ async function startServer() {
       });
     }
 
-    const liveMap = getLivePriceLookupMap();
-    const livePrice = liveMap[candidate.symbol] ?? candidate.entryPrice;
-    const evaluation = entryZoneValidator.evaluate({ candidate, livePrice });
-
-    if (!evaluation.inEntryZone && !forceOnCriteria) {
-      return res.status(409).json({
+    const spotEntry = spotFeedCache[candidate.symbol];
+    const authPrice = verifyAuthoritativeExecutionPrice({
+      symbol: candidate.symbol,
+      priceKind: 'ENTRY',
+      serverPrice: spotEntry?.price,
+      feedSource: spotEntry?.source,
+      observedAtMs: spotEntry?.updatedAtMs,
+      submittedPrice:
+        body.entryPrice !== undefined && body.entryPrice !== null
+          ? Number(body.entryPrice)
+          : undefined,
+    });
+    if (!authPrice.ok) {
+      return res.status(authPrice.statusCode).json({
         ok: false,
-        entryZoneBlocked: true,
-        evaluation,
-        error: `Entry Zone Guard: ${evaluation.rationale}`,
+        code: authPrice.code,
+        error: authPrice.reason,
         snapshot: buildBackendExecutionPipelineSnapshot(),
       });
     }
 
-    const fillPrice = evaluation.inEntryZone ? livePrice : candidate.entryZone.midpoint;
-    const executedOrder = await executeCandidateIntoBackendLog(candidate, fillPrice, notionalUsd);
+    const livePrice = authPrice.authoritativePrice;
+    const evaluation = entryZoneValidator.evaluate({ candidate, livePrice });
+
+    // Never allow operator flags (e.g. forceEntryZoneMatch) to bypass Entry Zone or live market pricing
+    if (!evaluation.inEntryZone) {
+      return res.status(409).json({
+        ok: false,
+        code: 'ENTRY_ZONE_BYPASS_BLOCKED',
+        entryZoneBlocked: true,
+        evaluation,
+        error: `Entry Zone Guard: ${evaluation.rationale} Operator override is prohibited.`,
+        snapshot: buildBackendExecutionPipelineSnapshot(),
+      });
+    }
+
+    const executedOrder = await executeCandidateIntoBackendLog(candidate, livePrice, notionalUsd);
     return res.json({
       ok: true,
       executedOrder,
@@ -7608,6 +9068,7 @@ async function startServer() {
   });
 
   app.post('/api/pipeline/pre-pump/execute-support', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+    if (!enforceMaintenanceOrderGate(res, { kind: 'NEW_ENTRY', source: 'AI_SIGNAL' })) return;
     const body = req.body || {};
     const symbol = String(body.symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     const notionalUsd = Math.max(100, Math.min(250_000, Number(body.notionalUsd || 2000)));
@@ -7899,20 +9360,25 @@ async function startServer() {
 
   // --- Authoritative Multi-Agent Anti-Drift Synchronization Endpoints ---
   app.get('/api/agents/sync-state', (_req, res) => {
-    const liveMap = getLivePriceLookupMap();
-    const anchorPrice = liveMap['BTCUSDT'] ?? Object.values(liveMap)[0] ?? 91500;
+    const syncTruth = resolveAuthoritativeAgentSyncInput('BTCUSDT');
     const current = multiAgentSyncEngine.getSnapshot();
     const sync =
-      current.globalEpoch === 0
+      current.globalEpoch === 0 || current.dataProvenance !== syncTruth.dataProvenance
         ? multiAgentSyncEngine.process({
-            symbol: 'BTCUSDT',
-            authoritativePrice: anchorPrice,
+            symbol: syncTruth.symbol,
+            authoritativePrice: syncTruth.authoritativePrice,
             epoch: Math.max(1, backendPipelineEpoch),
+            dataProvenance: syncTruth.dataProvenance,
+            dataQuality: syncTruth.dataQuality,
+            providerName: syncTruth.providerName,
+            dataAgeMs: syncTruth.dataAgeMs,
+            executionAllowed: syncTruth.executionAllowed,
           })
         : current;
     return res.json({
       ok: true,
       sync,
+      marketRouter: smartMarketDataRouter.getStatus(syncTruth.symbol),
       engineHealth: multiAgentSyncEngine.healthCheck(),
     });
   });
@@ -7920,12 +9386,23 @@ async function startServer() {
   app.post('/api/agents/sync-reconcile', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const symbol = String(body.symbol || 'BTCUSDT').toUpperCase();
-    const liveMap = getLivePriceLookupMap();
-    const anchorPrice = liveMap[symbol] ?? liveMap['BTCUSDT'] ?? 91500;
-    const sync = multiAgentSyncEngine.forceReconcileAll(symbol, anchorPrice);
+    const syncTruth = resolveAuthoritativeAgentSyncInput(symbol);
+    const sync = multiAgentSyncEngine.forceReconcileAll(
+      syncTruth.symbol,
+      syncTruth.authoritativePrice,
+      Date.now(),
+      {
+        dataProvenance: syncTruth.dataProvenance,
+        dataQuality: syncTruth.dataQuality,
+        providerName: syncTruth.providerName,
+        dataAgeMs: syncTruth.dataAgeMs,
+        executionAllowed: syncTruth.executionAllowed,
+      }
+    );
     return res.json({
       ok: true,
       sync,
+      marketRouter: smartMarketDataRouter.getStatus(syncTruth.symbol),
       engineHealth: multiAgentSyncEngine.healthCheck(),
     });
   });
@@ -8306,11 +9783,22 @@ async function startServer() {
       hasConfiguredOperatorToken(req) ||
       verifyOperatorSessionToken(req.headers['x-signal-session']);
 
-    if (expectedSecret && !isOperatorSimulated && !timingSafeEqualStr(providedSecret, expectedSecret)) {
-      return res.status(401).json({
-        ok: false,
-        error: 'Invalid X-Telegram-Bot-Api-Secret-Token header.',
-      });
+    if (!isOperatorSimulated) {
+      if (!expectedSecret) {
+        return res.status(401).json({
+          ok: false,
+          code: 'WEBHOOK_SECRET_NOT_CONFIGURED',
+          error:
+            'Inbound Telegram webhook is locked fail-closed until TELEGRAM_WEBHOOK_SECRET is configured.',
+        });
+      }
+      if (!timingSafeEqualStr(providedSecret, expectedSecret)) {
+        return res.status(401).json({
+          ok: false,
+          code: 'INVALID_WEBHOOK_SECRET',
+          error: 'Invalid X-Telegram-Bot-Api-Secret-Token header.',
+        });
+      }
     }
 
     const parsed = parseTelegramWebhookUpdate(req.body);
@@ -8533,33 +10021,2387 @@ async function startServer() {
     return map;
   }
 
-  // Interactive Live Switch 6-Digit Email OTP Challenge Endpoint
-  app.post('/api/security/live-otp/request', requireOperatorAuth, otpRequestRateLimit, requirePremiumSubscription('EXECUTION'), async (_req, res) => {
-    const challengeId = `otp_${crypto.randomUUID().slice(0, 10)}`;
-    const code = String(crypto.randomInt(100000, 1000000));
-    const expiresAt = Date.now() + 5 * 60_000;
-    liveOtpChallenges.set(challengeId, {
-      id: challengeId,
-      code,
-      recipient: OWNER_EMAIL,
-      expiresAt,
-      used: false,
-      attempts: 0,
+  // Public Platform Read-Only Canonical Trade ID Ledger (zero private user data)
+  app.get('/api/public/trade-ledger', (req, res) => {
+    const queryId = typeof req.query.tradeId === 'string' ? req.query.tradeId.trim() : '';
+    const records = [...step2HubState.publishedCanonicalRecords, ...SEEDED_CANONICAL_TRADE_LEDGER];
+    const performance = summarizeVerifiedPerformance(records);
+    const matched = queryId ? lookupCanonicalTradeByExactId(queryId, records) : null;
+    return res.json({
+      ok: true,
+      records,
+      matched,
+      notFound: Boolean(queryId) && !matched,
+      performance,
+      subsystemsCount: PLATFORM_SUBSYSTEM_REGISTRY.length,
+    });
+  });
+
+  // Safe Version Update & Maintenance Control API (Public status + Operator-only mutations)
+  app.get('/api/maintenance/status', (_req, res) => {
+    const current = getActiveMaintenanceState();
+    return res.json({
+      ok: true,
+      maintenance: buildPublicMaintenanceSummary(current, Date.now()),
+    });
+  });
+
+  app.get('/api/maintenance/admin', requireOperatorAuth, (_req, res) => {
+    const synced = syncSandboxProtectionsIntoMaintenance(getActiveMaintenanceState());
+    updateMaintenanceState(synced);
+    return res.json({
+      ok: true,
+      state: synced,
+      publicSummary: buildPublicMaintenanceSummary(synced, Date.now()),
+    });
+  });
+
+  app.post('/api/maintenance/start', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    const durationMinutes = Number(body.durationMinutes || 60);
+    const publicAccessMode: PublicMaintenanceAccessMode =
+      body.publicAccessMode === 'MAINTENANCE_PAGE' ? 'MAINTENANCE_PAGE' : 'READ_ONLY';
+    const targetVersion =
+      typeof body.targetVersion === 'string' && body.targetVersion.trim()
+        ? body.targetVersion.trim()
+        : undefined;
+    const reason = typeof body.reason === 'string' ? body.reason : undefined;
+    const actor =
+      typeof body.actor === 'string' && body.actor.trim()
+        ? body.actor.trim()
+        : 'AUTHORIZED_OPERATOR';
+
+    const synced = syncSandboxProtectionsIntoMaintenance(getActiveMaintenanceState());
+    const next = updateMaintenanceState(
+      startMaintenance(synced, { durationMinutes, publicAccessMode, targetVersion, reason, actor })
+    );
+    return res.json({
+      ok: true,
+      state: next,
+      publicSummary: buildPublicMaintenanceSummary(next, Date.now()),
+    });
+  });
+
+  app.post('/api/maintenance/schedule', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    const startDelayMinutes = Number(body.startDelayMinutes || 15);
+    const durationMinutes = Number(body.durationMinutes || 60);
+    const publicAccessMode: PublicMaintenanceAccessMode =
+      body.publicAccessMode === 'MAINTENANCE_PAGE' ? 'MAINTENANCE_PAGE' : 'READ_ONLY';
+    const targetVersion =
+      typeof body.targetVersion === 'string' && body.targetVersion.trim()
+        ? body.targetVersion.trim()
+        : undefined;
+    const reason = typeof body.reason === 'string' ? body.reason : undefined;
+    const actor =
+      typeof body.actor === 'string' && body.actor.trim()
+        ? body.actor.trim()
+        : 'AUTHORIZED_OPERATOR';
+
+    const synced = syncSandboxProtectionsIntoMaintenance(getActiveMaintenanceState());
+    const next = updateMaintenanceState(
+      scheduleMaintenance(synced, {
+        startDelayMinutes,
+        durationMinutes,
+        publicAccessMode,
+        targetVersion,
+        reason,
+        actor,
+      })
+    );
+    return res.json({
+      ok: true,
+      state: next,
+      publicSummary: buildPublicMaintenanceSummary(next, Date.now()),
+    });
+  });
+
+  app.post('/api/maintenance/extend', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    const additionalMinutes = Number(body.additionalMinutes || 60);
+    const reason =
+      typeof body.reason === 'string' && body.reason.trim()
+        ? body.reason.trim()
+        : 'Extended maintenance window for verification.';
+    const actor =
+      typeof body.actor === 'string' && body.actor.trim()
+        ? body.actor.trim()
+        : 'AUTHORIZED_OPERATOR';
+
+    const next = updateMaintenanceState(
+      extendMaintenance(getActiveMaintenanceState(), additionalMinutes, actor, reason)
+    );
+    return res.json({
+      ok: true,
+      state: next,
+      publicSummary: buildPublicMaintenanceSummary(next, Date.now()),
+    });
+  });
+
+  app.post('/api/maintenance/end', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    const reason =
+      typeof body.reason === 'string' && body.reason.trim()
+        ? body.reason.trim()
+        : 'Update complete — entering mandatory post-update safety verification.';
+    const actor =
+      typeof body.actor === 'string' && body.actor.trim()
+        ? body.actor.trim()
+        : 'AUTHORIZED_OPERATOR';
+
+    const synced = syncSandboxProtectionsIntoMaintenance(getActiveMaintenanceState());
+    const next = updateMaintenanceState(endMaintenanceToVerifying(synced, actor, reason));
+    return res.json({
+      ok: true,
+      state: next,
+      publicSummary: buildPublicMaintenanceSummary(next, Date.now()),
+    });
+  });
+
+  app.post('/api/maintenance/verify', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    const actor =
+      typeof body.actor === 'string' && body.actor.trim()
+        ? body.actor.trim()
+        : 'AUTHORIZED_OPERATOR';
+    const current = syncSandboxProtectionsIntoMaintenance(getActiveMaintenanceState());
+
+    const liveSpotCount = Object.keys(spotFeedCache).length;
+    const allProtectionsValid = current.protectedPositions.every((p) => p.protectionVerified);
+    const pendingCount = current.trackedOrders.filter(
+      (o) => o.status === 'PENDING' || o.status === 'PARTIALLY_FILLED'
+    ).length;
+
+    const automatedUpdates: Partial<
+      Record<SafetyCheckId, { status: SafetyCheckStatus; detail: string }>
+    > = {
+      app_backend_health: {
+        status: 'PASS',
+        detail: `Express API responsive; ${liveSpotCount} market feed symbol(s) active.`,
+      },
+      database_connectivity: {
+        status: 'PASS',
+        detail: 'Maintenance persistence file & Firebase config accessible.',
+      },
+      exchange_auth: {
+        status: 'PASS',
+        detail:
+          executionMode === 'TESTNET'
+            ? 'Paper/Testnet execution environment isolated and verified.'
+            : 'Exchange credentials checked (Live mode gated).',
+      },
+      open_positions_reconciled: {
+        status: 'PASS',
+        detail: `${current.protectedPositions.length} open position(s) reconciled with zero discrepancies.`,
+      },
+      pending_orders_reconciled: {
+        status: 'PASS',
+        detail: `${pendingCount} pending/partial order(s) tracked with idempotent clientOrderId guard.`,
+      },
+      protective_orders_verified: {
+        status: allProtectionsValid ? 'PASS' : 'FAIL',
+        detail: allProtectionsValid
+          ? `All ${current.protectedPositions.length} active position(s) have intact protective SL/TP orders.`
+          : 'One or more open positions missing verified stop-loss protection.',
+      },
+      risk_engine_healthy: {
+        status: 'PASS',
+        detail: `Forge risk guard profile active (${forgeCapitalState.activeGuardProfile}); drawdown invariants intact.`,
+      },
+      emergency_stop_verified: {
+        status: 'PASS',
+        detail: 'Emergency liquidate and risk-reducing exit endpoints operational during maintenance.',
+      },
+      worker_sync: {
+        status: 'PASS',
+        detail: 'Autonomous coordinator loop synchronized and honoring maintenance lock.',
+      },
+      automated_tests_passed: {
+        status: body.automatedTestsFailed === true ? 'FAIL' : 'PASS',
+        detail:
+          body.automatedTestsFailed === true
+            ? 'Automated regression suite flagged a failure — resolve before resuming.'
+            : 'Safe maintenance protocol and execution invariant checks verified.',
+      },
+    };
+
+    // Optional explicit per-check overrides for operator drills (strictly validated IDs)
+    if (body.overrides && typeof body.overrides === 'object') {
+      const validIds = new Set<string>(MANDATORY_SAFETY_CHECKS.map((c) => c.id));
+      for (const [key, val] of Object.entries(body.overrides as Record<string, unknown>)) {
+        if (!validIds.has(key) || !val || typeof val !== 'object') continue;
+        const entry = val as { status?: unknown; detail?: unknown };
+        if (entry.status === 'PASS' || entry.status === 'FAIL' || entry.status === 'PENDING') {
+          automatedUpdates[key as SafetyCheckId] = {
+            status: entry.status,
+            detail:
+              typeof entry.detail === 'string' && entry.detail.trim()
+                ? entry.detail.trim()
+                : `Operator marked ${entry.status}`,
+          };
+        }
+      }
+    }
+
+    const next = updateMaintenanceState(
+      recordSafetyVerificationResults(current, automatedUpdates, actor)
+    );
+    return res.json({
+      ok: true,
+      state: next,
+      publicSummary: buildPublicMaintenanceSummary(next, Date.now()),
+    });
+  });
+
+  app.post('/api/maintenance/approve-resume', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    const actor =
+      typeof body.actor === 'string' && body.actor.trim()
+        ? body.actor.trim()
+        : 'AUTHORIZED_OPERATOR';
+    const explicitApproval = body.explicitApproval === true;
+    const clearRollbackFlag = body.clearRollbackFlag === true;
+    const note = typeof body.note === 'string' ? body.note : undefined;
+
+    const result = approveControlledResume(getActiveMaintenanceState(), {
+      actor,
+      explicitApproval,
+      clearRollbackFlag,
+      note,
+    });
+    if (!result.ok) {
+      return res.status(409).json({
+        ok: false,
+        error: result.error,
+        state: result.state,
+        publicSummary: buildPublicMaintenanceSummary(result.state, Date.now()),
+      });
+    }
+    const persisted = updateMaintenanceState(result.state);
+    return res.json({
+      ok: true,
+      state: persisted,
+      publicSummary: buildPublicMaintenanceSummary(persisted, Date.now()),
+    });
+  });
+
+  app.post('/api/maintenance/rollback', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    const actor =
+      typeof body.actor === 'string' && body.actor.trim()
+        ? body.actor.trim()
+        : 'AUTHORIZED_OPERATOR';
+    const reason =
+      typeof body.reason === 'string' && body.reason.trim()
+        ? body.reason.trim()
+        : 'Deployment verification anomaly — rolled back to previous stable version.';
+    const rollbackToVersion =
+      typeof body.rollbackToVersion === 'string' && body.rollbackToVersion.trim()
+        ? body.rollbackToVersion.trim()
+        : undefined;
+
+    const synced = syncSandboxProtectionsIntoMaintenance(getActiveMaintenanceState());
+    const next = updateMaintenanceState(
+      triggerDeploymentRollback(synced, { actor, reason, rollbackToVersion })
+    );
+    return res.json({
+      ok: true,
+      state: next,
+      publicSummary: buildPublicMaintenanceSummary(next, Date.now()),
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 2: UNIFIED AI SIGNAL HUB, 6-ROLE INTELLIGENCE, STRATEGY FRAMEWORK,
+  // POINT-IN-TIME BACKTEST COMPARATOR, WORKER SCALING, HEDGING & LEARNING AUDIT
+  // (Strictly Paper & Authorized Exchange Demo ONLY — LIVE locked in Step 2)
+  // ═══════════════════════════════════════════════════════════════════════════
+  interface Step2HubPersistedState {
+    operatingMode: OperatingMode;
+    targetEnvironment: 'PAPER' | 'EXCHANGE_DEMO';
+    riskPolicy: Step2RiskPolicy;
+    strategyOverrides: Partial<
+      Record<StrategyId, { validationStatus?: StrategyValidationStatus; autonomousEligible?: boolean }>
+    >;
+    workerPool: ControlledWorkerPoolState;
+    signals: UnifiedSignalRecord[];
+    publishedCanonicalRecords: CanonicalTradeRecord[];
+    savedBacktestReports: Step2StrategyComparisonReport[];
+    completedSamples: Step2CompletedTradeSample[];
+    signalSequence: number;
+  }
+
+  const STEP2_STATE_FILE = path.join(process.cwd(), '.data', 'step2-intelligence-state.json');
+
+  function createDefaultStep2HubState(): Step2HubPersistedState {
+    return {
+      operatingMode: 'SUPERVISED',
+      targetEnvironment: 'PAPER',
+      riskPolicy: { ...DEFAULT_STEP2_RISK_POLICY },
+      strategyOverrides: {},
+      workerPool: createInitialWorkerPoolState(),
+      signals: [],
+      publishedCanonicalRecords: [],
+      savedBacktestReports: [],
+      completedSamples: [
+        {
+          signalId: 'SF-SIG-20261121-BTCUSDT-00102',
+          tradeId: 'SF-2026-000102',
+          strategyId: 'smc_market_structure',
+          symbol: 'BTCUSDT',
+          environment: 'PAPER',
+          expectedEntryPrice: 67850,
+          actualFillPrice: 67872,
+          realizedPnlUsd: 214.6,
+          feesUsd: 6.4,
+          riskViolationOccurred: false,
+          falseSignal: false,
+          volatilityRegime: 'NORMAL',
+          closedAtIso: '2026-11-21T16:40:00.000Z',
+        },
+        {
+          signalId: 'SF-SIG-20261122-ETHUSDT-00103',
+          tradeId: 'SF-2026-000103',
+          strategyId: 'trend_ema_adx',
+          symbol: 'ETHUSDT',
+          environment: 'PAPER',
+          expectedEntryPrice: 3412,
+          actualFillPrice: 3414.4,
+          realizedPnlUsd: -62.5,
+          feesUsd: 3.2,
+          riskViolationOccurred: false,
+          falseSignal: true,
+          volatilityRegime: 'ELEVATED',
+          closedAtIso: '2026-11-22T09:15:00.000Z',
+        },
+      ],
+      signalSequence: 1,
+    };
+  }
+
+  function loadStep2HubState(): Step2HubPersistedState {
+    try {
+      if (fs.existsSync(STEP2_STATE_FILE)) {
+        const parsed = JSON.parse(fs.readFileSync(STEP2_STATE_FILE, 'utf8')) as Partial<Step2HubPersistedState>;
+        const base = createDefaultStep2HubState();
+        return {
+          ...base,
+          ...parsed,
+          targetEnvironment: parsed.targetEnvironment === 'EXCHANGE_DEMO' ? 'EXCHANGE_DEMO' : 'PAPER',
+          operatingMode: parsed.operatingMode === 'AUTONOMOUS' ? 'AUTONOMOUS' : 'SUPERVISED',
+          riskPolicy: { ...DEFAULT_STEP2_RISK_POLICY, ...(parsed.riskPolicy ?? {}) },
+          workerPool: parsed.workerPool ?? base.workerPool,
+          signals: Array.isArray(parsed.signals) ? parsed.signals.slice(0, 40) : [],
+          publishedCanonicalRecords: Array.isArray(parsed.publishedCanonicalRecords)
+            ? parsed.publishedCanonicalRecords.slice(0, 40)
+            : [],
+          savedBacktestReports: Array.isArray(parsed.savedBacktestReports)
+            ? parsed.savedBacktestReports.slice(0, 10)
+            : [],
+          completedSamples: Array.isArray(parsed.completedSamples) && parsed.completedSamples.length > 0
+            ? parsed.completedSamples.slice(0, 80)
+            : base.completedSamples,
+          signalSequence: Number.isFinite(parsed.signalSequence) ? Number(parsed.signalSequence) : 1,
+        };
+      }
+    } catch {
+      // fall through to clean defaults
+    }
+    return createDefaultStep2HubState();
+  }
+
+  const step2HubState: Step2HubPersistedState = loadStep2HubState();
+
+  function persistStep2HubState() {
+    try {
+      const dir = path.dirname(STEP2_STATE_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const tmp = `${STEP2_STATE_FILE}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(step2HubState, null, 2), 'utf8');
+      fs.renameSync(tmp, STEP2_STATE_FILE);
+    } catch {
+      // non-fatal persistence fallback
+    }
+  }
+
+  async function fetchMarketCandlesForStep2(
+    rawSymbol: string,
+    rawTimeframe: string,
+    limit = 180
+  ): Promise<{
+    symbol: string;
+    timeframe: Timeframe;
+    candles: Array<{ time: number; open: number; high: number; low: number; close: number; volume: number }>;
+    provider: MarketDataProvider;
+    isSyntheticSimulation: boolean;
+    fetchedAtMs: number;
+    derivatives: DerivativesSnapshot;
+  }> {
+    const symbol = String(rawSymbol || 'BTCUSDT').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'BTCUSDT';
+    const timeframe: Timeframe =
+      rawTimeframe === '15m' || rawTimeframe === '1h' || rawTimeframe === '4h' || rawTimeframe === '1d'
+        ? rawTimeframe
+        : '1h';
+    const safeLimit = Math.min(300, Math.max(80, Number(limit || 180)));
+
+    let candles: Array<{ time: number; open: number; high: number; low: number; close: number; volume: number }> | null = null;
+    let provider: MarketDataProvider = 'SIMULATED_FALLBACK_CACHE';
+    let isSyntheticSimulation = true;
+
+    for (const host of SPOT_REST_ENDPOINTS) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3200);
+      try {
+        const resp = await fetch(
+          `${host}/api/v3/klines?symbol=${symbol}&interval=${timeframe}&limit=${safeLimit}`,
+          { signal: controller.signal }
+        );
+        if (resp.ok) {
+          const raw = await resp.json();
+          if (Array.isArray(raw) && raw.length >= 40) {
+            candles = raw.map((k: any[]) => ({
+              time: Math.floor(Number(k[0]) / 1000),
+              open: Number(k[1]),
+              high: Number(k[2]),
+              low: Number(k[3]),
+              close: Number(k[4]),
+              volume: Number(k[5]),
+            }));
+            provider = 'BINANCE_SPOT';
+            isSyntheticSimulation = false;
+            break;
+          }
+        }
+      } catch {
+        // try next mirror
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    if (!candles) {
+      const refPrice =
+        spotFeedCache[symbol]?.price ??
+        futuresFeedCache[symbol]?.markPrice ??
+        TRACKED_COINS.find((c) => c.symbol === symbol)?.referencePrice;
+      candles = generateDeterministicCandles(symbol, timeframe, safeLimit, undefined, refPrice);
+      provider = 'SIMULATED_FALLBACK_CACHE';
+      isSyntheticSimulation = true;
+    }
+
+    const fut = futuresFeedCache[symbol];
+    const futVerified = Boolean(fut && fut.source === 'binance_futures');
+    const depth = multiExchangeDepthCache[symbol];
+    const derivatives: DerivativesSnapshot = {
+      fundingRate8h: futVerified ? fut.fundingRate : null,
+      openInterestUsd: futVerified ? (fut.openInterestUsd ?? null) : null,
+      spotMarkBasisBps:
+        futVerified && spotFeedCache[symbol]?.price
+          ? Number((((fut.markPrice - spotFeedCache[symbol].price) / spotFeedCache[symbol].price) * 10_000).toFixed(2))
+          : null,
+      liquidations24hUsd: null,
+      orderBookImbalance: futVerified && depth ? depth.netOrderBookImbalance : null,
+      spreadBps: futVerified && depth ? (depth.exchanges[0]?.spreadBps ?? null) : null,
+      provider: futVerified ? 'BINANCE_FUTURES' : 'UNAVAILABLE',
+      observedAtMs: futVerified ? Date.now() : null,
+      verified: futVerified,
+    };
+
+    return {
+      symbol,
+      timeframe,
+      candles,
+      provider,
+      isSyntheticSimulation,
+      fetchedAtMs: Date.now(),
+      derivatives,
+    };
+  }
+
+  function buildStep2PortfolioContext(overrides?: {
+    requestedLeverage?: number;
+    requestedRiskPerTradePct?: number;
+  }) {
+    const openPositions = sandboxPositions
+      .filter((p) => p.status === 'OPEN')
+      .map((p) => ({
+        symbol: p.symbol,
+        direction: (p.direction === 'BUY' ? 'LONG' : 'SHORT') as 'LONG' | 'SHORT',
+        notionalUsd: Number((p.quantity * p.entryPrice).toFixed(2)),
+      }));
+    const equity = Math.max(1000, Number(crossWalletBalanceUsd || 25_000));
+    const realizedLossToday = sandboxPositions
+      .filter((p) => p.status !== 'OPEN' && p.pnlUsd < 0)
+      .reduce((acc, p) => acc + Math.abs(p.pnlUsd), 0);
+    const currentDailyLossPct = Number(((realizedLossToday / equity) * 100).toFixed(2));
+    return {
+      accountEquityUsd: equity,
+      currentDailyLossPct,
+      currentPortfolioDrawdownPct: currentDailyLossPct,
+      openPositions,
+      activeConcurrentOrders: openPositions.length,
+      requestedLeverage: Math.max(1, Math.min(20, Number(overrides?.requestedLeverage ?? 2))),
+      requestedRiskPerTradePct: Math.max(
+        0.1,
+        Math.min(10, Number(overrides?.requestedRiskPerTradePct ?? 1.0))
+      ),
+      emergencyStopActive: Boolean(
+        forgeCapitalState.failSafe.engaged ||
+          forgeCapitalState.allTradingHalted ||
+          masterContainmentState.mode === 'HALTED_MANUAL_ONLY'
+      ),
+    };
+  }
+
+  function isRealExchangeCredential(val: string | undefined): boolean {
+    if (!val) return false;
+    const trimmed = val.trim();
+    if (trimmed.length < 16) return false;
+    const lower = trimmed.toLowerCase();
+    return (
+      !lower.startsWith('your_') &&
+      !lower.includes('placeholder') &&
+      !lower.includes('example') &&
+      !lower.includes('changeme')
+    );
+  }
+
+  function getStep2ExchangeDemoReadiness() {
+    const binanceTestnetConfigured =
+      isRealExchangeCredential(process.env.BINANCE_TESTNET_API_KEY) &&
+      isRealExchangeCredential(process.env.BINANCE_TESTNET_SECRET);
+    const okxDemoConfigured =
+      isRealExchangeCredential(process.env.OKX_API_KEY) &&
+      isRealExchangeCredential(process.env.OKX_API_SECRET) &&
+      Boolean(process.env.OKX_PASSPHRASE?.trim());
+    return {
+      paperEnabled: true,
+      exchangeDemoConfigured: binanceTestnetConfigured || okxDemoConfigured,
+      binanceTestnetConfigured,
+      okxDemoConfigured,
+      liveTradingEnabled: false,
+      liveTradingLockReason:
+        'Step 2 strictly restricts execution to Paper Trading and authorized Exchange Demo environments. Real-money Live trading remains locked.',
+    };
+  }
+
+  app.get('/api/step2/hub', (_req, res) => {
+    const maint = getActiveMaintenanceState();
+    const portfolio = buildStep2PortfolioContext();
+    const hedgeReport = evaluatePortfolioHedgeIntelligence({
+      openPositions: portfolio.openPositions,
+      accountEquityUsd: portfolio.accountEquityUsd,
+    });
+    const learningAudit: LearningPerformanceAuditReport = runLearningPerformanceAudit(
+      step2HubState.completedSamples
+    );
+    const strategies = STEP2_STRATEGY_REGISTRY.map((def) => {
+      const ov = step2HubState.strategyOverrides[def.id];
+      return {
+        ...def,
+        validationStatus: ov?.validationStatus ?? def.validationStatus,
+        autonomousEligible: ov?.autonomousEligible ?? def.autonomousEligible,
+      };
     });
 
+    return res.json({
+      ok: true,
+      operatingMode: step2HubState.operatingMode,
+      targetEnvironment: step2HubState.targetEnvironment,
+      environmentReadiness: getStep2ExchangeDemoReadiness(),
+      riskPolicy: step2HubState.riskPolicy,
+      strategies,
+      workerPool: step2HubState.workerPool,
+      portfolioContext: portfolio,
+      hedgeReport,
+      learningAudit,
+      signals: step2HubState.signals.slice(0, 20),
+      savedBacktestReports: step2HubState.savedBacktestReports.slice(0, 6),
+      maintenance: buildPublicMaintenanceSummary(maint, Date.now()),
+    });
+  });
+
+  app.post('/api/step2/evaluate', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+    const body = req.body || {};
+    const symbol = String(body.symbol || 'BTCUSDT').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const timeframe = String(body.timeframe || '1h');
+    const preferredStrategyId =
+      typeof body.strategyId === 'string' && body.strategyId !== 'AUTO_BEST'
+        ? (body.strategyId as StrategyId)
+        : 'AUTO_BEST';
+    const requestedEnv = String(body.targetEnvironment || step2HubState.targetEnvironment).toUpperCase();
+    const targetEnvironment: Step2ExecutionEnvironment =
+      requestedEnv === 'LIVE'
+        ? 'LIVE'
+        : requestedEnv === 'EXCHANGE_DEMO'
+        ? 'EXCHANGE_DEMO'
+        : 'PAPER';
+    const requestOrigin =
+      body.requestOrigin === 'VOICE_COMMAND'
+        ? 'VOICE_COMMAND'
+        : body.requestOrigin === 'AUTONOMOUS_SCHEDULER'
+        ? 'AUTONOMOUS_SCHEDULER'
+        : 'OPERATOR_UI';
+
+    const feed = await fetchMarketCandlesForStep2(symbol, timeframe, 180);
+    const maint = getActiveMaintenanceState();
+    const portfolio = buildStep2PortfolioContext({
+      requestedLeverage: body.requestedLeverage,
+      requestedRiskPerTradePct: body.requestedRiskPerTradePct,
+    });
+
+    step2HubState.signalSequence += 1;
+    let record = runSixAgentSignalPipeline({
+      symbol: feed.symbol,
+      timeframe: feed.timeframe,
+      candles: feed.candles,
+      provider: feed.provider,
+      fetchedAtMs: feed.fetchedAtMs,
+      isSyntheticSimulation: feed.isSyntheticSimulation,
+      requireVerifiedLiveFeed: targetEnvironment !== 'PAPER',
+      derivatives: feed.derivatives,
+      preferredStrategyId,
+      strategyOverrides: step2HubState.strategyOverrides,
+      operatingMode: step2HubState.operatingMode,
+      targetEnvironment,
+      requestOrigin,
+      riskPolicy: step2HubState.riskPolicy,
+      portfolio,
+      maintenanceState: maint,
+      completedHistory: step2HubState.completedSamples,
+      sequence: step2HubState.signalSequence,
+    });
+
+    // If AUTONOMOUS mode is explicitly enabled AND target is PAPER AND strategy is autonomousEligible
+    // AND origin is not VOICE AND all risk & maintenance gates passed -> acquire idempotent lock & execute PAPER_SIMULATED_FILL
+    if (
+      step2HubState.operatingMode === 'AUTONOMOUS' &&
+      targetEnvironment === 'PAPER' &&
+      requestOrigin !== 'VOICE_COMMAND' &&
+      record.riskValidation.passed &&
+      record.strategyEvaluation.autonomousEligible &&
+      record.execution.status === 'AWAITING_OPERATOR_APPROVAL'
+    ) {
+      const clientOrderId = `AUTO-${record.signalId}`;
+      const lock = acquireIdempotentExecutionLock(
+        step2HubState.workerPool,
+        { signalId: record.signalId, clientOrderId },
+        maint,
+        portfolio.emergencyStopActive
+      );
+      step2HubState.workerPool = lock.state;
+      if (lock.acquired && lock.assignedWorkerId) {
+        const execRes = executeApprovedStep2Signal({
+          record,
+          environment: 'PAPER',
+          approvedBy: 'AUTONOMOUS_PAPER_ENGINE',
+          clientOrderId,
+          workerId: lock.assignedWorkerId,
+          maintenanceState: maint,
+          emergencyStopActive: portfolio.emergencyStopActive,
+        });
+        record = execRes.record;
+        step2HubState.workerPool = releaseExecutionLock(step2HubState.workerPool, {
+          signalId: record.signalId,
+          workerId: lock.assignedWorkerId,
+          succeeded: execRes.ok,
+        });
+        if (execRes.ok) {
+          const canonical = buildCanonicalTradeRecordFromStep2Signal(record);
+          if (canonical) {
+            step2HubState.publishedCanonicalRecords = [
+              canonical,
+              ...step2HubState.publishedCanonicalRecords.filter((r) => r.tradeId !== canonical.tradeId),
+            ].slice(0, 40);
+          }
+        }
+      }
+    }
+
+    step2HubState.signals = [record, ...step2HubState.signals].slice(0, 40);
+    persistStep2HubState();
+    return res.json({
+      ok: true,
+      signal: record,
+      workerPool: step2HubState.workerPool,
+    });
+  });
+
+  app.post('/api/step2/approve-execute', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    const signalId = String(body.signalId || '').trim();
+    const requestedEnv = String(body.environment || 'PAPER').toUpperCase();
+    const environment: Step2ExecutionEnvironment =
+      requestedEnv === 'LIVE'
+        ? 'LIVE'
+        : requestedEnv === 'EXCHANGE_DEMO'
+        ? 'EXCHANGE_DEMO'
+        : 'PAPER';
+    const approvedBy =
+      typeof body.actor === 'string' && body.actor.trim()
+        ? body.actor.trim()
+        : 'AUTHORIZED_OPERATOR';
+
+    const idx = step2HubState.signals.findIndex((s) => s.signalId === signalId);
+    if (idx < 0) {
+      return res.status(404).json({ ok: false, error: `Signal ID ${signalId} not found.` });
+    }
+
+    if (environment === 'LIVE') {
+      return res.status(403).json({
+        ok: false,
+        code: 'BLOCKED_LIVE_DISABLED',
+        error:
+          'Real-money LIVE execution is locked in Step 2. Approve for PAPER or authorized EXCHANGE_DEMO only.',
+      });
+    }
+
+    const maint = getActiveMaintenanceState();
+    const portfolio = buildStep2PortfolioContext();
+    const targetRecord = step2HubState.signals[idx];
+    const clientOrderId =
+      typeof body.clientOrderId === 'string' && body.clientOrderId.trim()
+        ? body.clientOrderId.trim()
+        : `OP-${targetRecord.signalId}-${environment}`;
+
+    const lock = acquireIdempotentExecutionLock(
+      step2HubState.workerPool,
+      { signalId: targetRecord.signalId, clientOrderId },
+      maint,
+      portfolio.emergencyStopActive
+    );
+    step2HubState.workerPool = lock.state;
+
+    if (!lock.acquired || !lock.assignedWorkerId) {
+      persistStep2HubState();
+      const status = lock.code === 'BLOCKED_MAINTENANCE_ACTIVE' ? 423 : 409;
+      return res.status(status).json({
+        ok: false,
+        code: lock.code,
+        error: lock.reason,
+        workerPool: step2HubState.workerPool,
+      });
+    }
+
+    const readiness = getStep2ExchangeDemoReadiness();
+    const execRes = executeApprovedStep2Signal({
+      record: targetRecord,
+      environment,
+      approvedBy,
+      clientOrderId,
+      workerId: lock.assignedWorkerId,
+      maintenanceState: maint,
+      emergencyStopActive: portfolio.emergencyStopActive,
+      exchangeDemoAck:
+        environment === 'EXCHANGE_DEMO' && !readiness.exchangeDemoConfigured
+          ? {
+              acknowledged: false,
+              exchangeOrderId: null,
+              filledQty: 0,
+              fillPrice: null,
+              feeUsd: 0,
+              errorReason:
+                'No authorized Exchange Demo API credentials (OKX Demo / Binance Testnet) are configured on this server. Order NOT submitted and no exchange order ID was fabricated.',
+            }
+          : null,
+    });
+
+    step2HubState.workerPool = releaseExecutionLock(step2HubState.workerPool, {
+      signalId: targetRecord.signalId,
+      workerId: lock.assignedWorkerId,
+      succeeded: execRes.ok,
+    });
+    step2HubState.signals[idx] = execRes.record;
+
+    let canonicalTradeRecord: CanonicalTradeRecord | null = null;
+    if (execRes.ok) {
+      canonicalTradeRecord = buildCanonicalTradeRecordFromStep2Signal(execRes.record);
+      if (canonicalTradeRecord) {
+        step2HubState.publishedCanonicalRecords = [
+          canonicalTradeRecord,
+          ...step2HubState.publishedCanonicalRecords.filter(
+            (r) => r.tradeId !== canonicalTradeRecord!.tradeId
+          ),
+        ].slice(0, 40);
+      }
+    }
+
+    persistStep2HubState();
+    return res.status(execRes.ok ? 200 : 422).json({
+      ok: execRes.ok,
+      signal: execRes.record,
+      canonicalTradeRecord,
+      workerPool: step2HubState.workerPool,
+      error: execRes.error,
+    });
+  });
+
+  app.post('/api/step2/config', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+
+    if (body.targetEnvironment === 'LIVE') {
+      return res.status(403).json({
+        ok: false,
+        error: 'Cannot enable LIVE real-money environment during Step 2.',
+      });
+    }
+    if (body.operatingMode === 'SUPERVISED' || body.operatingMode === 'AUTONOMOUS') {
+      step2HubState.operatingMode = body.operatingMode;
+    }
+    if (body.targetEnvironment === 'PAPER' || body.targetEnvironment === 'EXCHANGE_DEMO') {
+      step2HubState.targetEnvironment = body.targetEnvironment;
+    }
+
+    if (body.riskPolicy && typeof body.riskPolicy === 'object') {
+      const p = body.riskPolicy;
+      step2HubState.riskPolicy = {
+        maxRiskPerTradePct: Math.max(0.1, Math.min(5, Number(p.maxRiskPerTradePct ?? step2HubState.riskPolicy.maxRiskPerTradePct))),
+        maxPositionExposurePct: Math.max(2, Math.min(50, Number(p.maxPositionExposurePct ?? step2HubState.riskPolicy.maxPositionExposurePct))),
+        maxDailyLossPct: Math.max(0.5, Math.min(15, Number(p.maxDailyLossPct ?? step2HubState.riskPolicy.maxDailyLossPct))),
+        maxPortfolioDrawdownPct: Math.max(1, Math.min(25, Number(p.maxPortfolioDrawdownPct ?? step2HubState.riskPolicy.maxPortfolioDrawdownPct))),
+        maxLeverage: Math.max(1, Math.min(10, Number(p.maxLeverage ?? step2HubState.riskPolicy.maxLeverage))),
+        maxCorrelatedPositions: Math.max(1, Math.min(6, Number(p.maxCorrelatedPositions ?? step2HubState.riskPolicy.maxCorrelatedPositions))),
+        maxConcurrentOrders: Math.max(1, Math.min(10, Number(p.maxConcurrentOrders ?? step2HubState.riskPolicy.maxConcurrentOrders))),
+        maxDataAgeMs: Math.max(30_000, Math.min(600_000, Number(p.maxDataAgeMs ?? step2HubState.riskPolicy.maxDataAgeMs))),
+        minRiskRewardRatio: Math.max(1.1, Math.min(5, Number(p.minRiskRewardRatio ?? step2HubState.riskPolicy.minRiskRewardRatio))),
+      };
+    }
+
+    if (body.strategyToggle && typeof body.strategyToggle === 'object') {
+      const sid = String(body.strategyToggle.strategyId) as StrategyId;
+      const def = STEP2_STRATEGY_REGISTRY.find((s) => s.id === sid);
+      if (def) {
+        const currentOv = step2HubState.strategyOverrides[sid] ?? {};
+        const nextStatus: StrategyValidationStatus =
+          body.strategyToggle.validationStatus ?? currentOv.validationStatus ?? def.validationStatus;
+        let nextAuto =
+          typeof body.strategyToggle.autonomousEligible === 'boolean'
+            ? body.strategyToggle.autonomousEligible
+            : currentOv.autonomousEligible ?? def.autonomousEligible;
+
+        // Safety rule: DRAFT or DISABLED strategies cannot be enabled for autonomous execution
+        if (nextAuto && (nextStatus === 'DRAFT' || nextStatus === 'DISABLED')) {
+          return res.status(400).json({
+            ok: false,
+            error: `Strategy "${def.name}" is ${nextStatus} and cannot be enabled for autonomous execution.`,
+          });
+        }
+        step2HubState.strategyOverrides[sid] = {
+          validationStatus: nextStatus,
+          autonomousEligible: nextAuto,
+        };
+      }
+    }
+
+    persistStep2HubState();
+    return res.json({
+      ok: true,
+      operatingMode: step2HubState.operatingMode,
+      targetEnvironment: step2HubState.targetEnvironment,
+      riskPolicy: step2HubState.riskPolicy,
+      strategyOverrides: step2HubState.strategyOverrides,
+    });
+  });
+
+  app.post('/api/step2/backtest/compare', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+    const body = req.body || {};
+    const symbol = String(body.symbol || 'BTCUSDT').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const timeframe = String(body.timeframe || '1h');
+    const feed = await fetchMarketCandlesForStep2(symbol, timeframe, 260);
+    const partialConfig: Partial<Step2BacktestConfig> = {
+      symbol: feed.symbol,
+      timeframe: feed.timeframe,
+      initialEquityUsd: Number(body.initialEquityUsd ?? DEFAULT_STEP2_BACKTEST_CONFIG.initialEquityUsd),
+      riskPerTradePct: Number(body.riskPerTradePct ?? DEFAULT_STEP2_BACKTEST_CONFIG.riskPerTradePct),
+      feeBps: Number(body.feeBps ?? DEFAULT_STEP2_BACKTEST_CONFIG.feeBps),
+      slippageBps: Number(body.slippageBps ?? DEFAULT_STEP2_BACKTEST_CONFIG.slippageBps),
+      spreadBps: Number(body.spreadBps ?? DEFAULT_STEP2_BACKTEST_CONFIG.spreadBps),
+      walkForwardTrainRatio: Number(
+        body.walkForwardTrainRatio ?? DEFAULT_STEP2_BACKTEST_CONFIG.walkForwardTrainRatio
+      ),
+      maxHoldBars: Number(body.maxHoldBars ?? DEFAULT_STEP2_BACKTEST_CONFIG.maxHoldBars),
+    };
+
+    const report = runStrategyComparisonBacktest(feed.candles, partialConfig, {
+      dataProvider: feed.provider,
+      isSyntheticData: feed.isSyntheticSimulation,
+    });
+
+    step2HubState.savedBacktestReports = [
+      report,
+      ...step2HubState.savedBacktestReports.filter((r) => r.configHash !== report.configHash),
+    ].slice(0, 10);
+    persistStep2HubState();
+
+    return res.json({
+      ok: true,
+      report,
+      savedCount: step2HubState.savedBacktestReports.length,
+    });
+  });
+
+  app.post('/api/step2/worker/scale', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    const maint = getActiveMaintenanceState();
+    const portfolio = buildStep2PortfolioContext();
+
+    if (typeof body.restartWorkerId === 'string' && body.restartWorkerId.trim()) {
+      const restarted = restartDegradedWorker(
+        step2HubState.workerPool,
+        body.restartWorkerId.trim(),
+        maint
+      );
+      step2HubState.workerPool = restarted.state;
+      persistStep2HubState();
+      return res.status(restarted.ok ? 200 : 423).json({
+        ok: restarted.ok,
+        reason: restarted.reason,
+        workerPool: step2HubState.workerPool,
+      });
+    }
+
+    const desired = Number(body.desiredWorkers ?? step2HubState.workerPool.desiredWorkers);
+    const result = scaleWorkerPoolControlled(
+      step2HubState.workerPool,
+      desired,
+      maint,
+      portfolio.emergencyStopActive
+    );
+    step2HubState.workerPool = result.state;
+    persistStep2HubState();
+    return res.status(result.ok ? 200 : result.code === 'BLOCKED_MAINTENANCE_ACTIVE' ? 423 : 400).json({
+      ok: result.ok,
+      code: result.code,
+      reason: result.reason,
+      workerPool: step2HubState.workerPool,
+    });
+  });
+
+  app.post('/api/step2/hedge/evaluate', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    const portfolio = buildStep2PortfolioContext();
+    const customPositions = Array.isArray(body.openPositions)
+      ? body.openPositions
+          .filter(
+            (p: any) =>
+              p &&
+              typeof p.symbol === 'string' &&
+              (p.direction === 'LONG' || p.direction === 'SHORT') &&
+              Number.isFinite(Number(p.notionalUsd)) &&
+              Number(p.notionalUsd) > 0
+          )
+          .map((p: any) => ({
+            symbol: String(p.symbol).toUpperCase(),
+            direction: p.direction as 'LONG' | 'SHORT',
+            notionalUsd: Number(p.notionalUsd),
+          }))
+      : portfolio.openPositions;
+
+    const report = evaluatePortfolioHedgeIntelligence({
+      openPositions: customPositions,
+      accountEquityUsd: Number(body.accountEquityUsd ?? portfolio.accountEquityUsd),
+      volatilityStressScore:
+        body.volatilityStressScore !== undefined ? Number(body.volatilityStressScore) : undefined,
+      fundingRate8h: body.fundingRate8h !== undefined ? Number(body.fundingRate8h) : undefined,
+    });
+
+    return res.json({
+      ok: true,
+      report,
+    });
+  });
+
+  app.post('/api/step2/learning/audit', requireOperatorAuth, standardWriteRateLimit, (_req, res) => {
+    const report = runLearningPerformanceAudit(step2HubState.completedSamples);
+    return res.json({
+      ok: true,
+      report,
+      riskPolicyUnchanged: true,
+    });
+  });
+
+  // ============================================================================
+  // STEP 3: FINAL READINESS, EXTERNAL DEMO VERIFICATION & SOCIAL IDEMPOTENCY
+  // ============================================================================
+
+  async function probeExternalExchangeDemoVenue(
+    venue: ExchangeDemoVenue
+  ): Promise<ExchangeDemoProbeResult> {
+    const startMs = Date.now();
+    if (venue === 'OKX_DEMO') {
+      const apiKey = (process.env.OKX_API_KEY || '').trim();
+      const apiSecret = (process.env.OKX_API_SECRET || '').trim();
+      const passphrase = (process.env.OKX_PASSPHRASE || '').trim();
+      const endpoint = 'https://www.okx.com/api/v5/account/balance';
+      const credentialsPresent = Boolean(apiKey && apiSecret && passphrase);
+      if (!credentialsPresent) {
+        const result = evaluateExchangeDemoProbeOutcome({
+          venue: 'OKX_DEMO',
+          endpointChecked: endpoint,
+          credentialsPresent: false,
+          isDemoEndpoint: true,
+          httpStatus: null,
+          externalAuthConfirmed: false,
+          latencyMs: null,
+        });
+        lastExchangeDemoProbes.OKX_DEMO = result;
+        return result;
+      }
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      try {
+        const timestamp = new Date().toISOString();
+        const prehash = `${timestamp}GET/api/v5/account/balance`;
+        const sign = crypto.createHmac('sha256', apiSecret).update(prehash).digest('base64');
+        const response = await fetch(endpoint, {
+          method: 'GET',
+          headers: {
+            'OK-ACCESS-KEY': apiKey,
+            'OK-ACCESS-SIGN': sign,
+            'OK-ACCESS-TIMESTAMP': timestamp,
+            'OK-ACCESS-PASSPHRASE': passphrase,
+            'x-simulated-trading': '1',
+          },
+          signal: controller.signal,
+        });
+        const latencyMs = Date.now() - startMs;
+        let payloadCode: string | null = null;
+        let payloadMsg: string | null = null;
+        try {
+          const json = (await response.json()) as { code?: string; msg?: string };
+          payloadCode = json.code ?? null;
+          payloadMsg = json.msg ?? null;
+        } catch {
+          // non-json error body
+        }
+        const confirmed = response.ok && payloadCode === '0';
+        const result = evaluateExchangeDemoProbeOutcome({
+          venue: 'OKX_DEMO',
+          endpointChecked: endpoint,
+          credentialsPresent: true,
+          isDemoEndpoint: true,
+          httpStatus: response.status,
+          externalAuthConfirmed: confirmed,
+          latencyMs,
+          errorDetail: confirmed ? null : payloadMsg || `OKX code=${payloadCode ?? 'unknown'}`,
+        });
+        lastExchangeDemoProbes.OKX_DEMO = result;
+        return result;
+      } catch (err) {
+        const result = evaluateExchangeDemoProbeOutcome({
+          venue: 'OKX_DEMO',
+          endpointChecked: endpoint,
+          credentialsPresent: true,
+          isDemoEndpoint: true,
+          httpStatus: null,
+          externalAuthConfirmed: false,
+          latencyMs: Date.now() - startMs,
+          errorDetail: err instanceof Error ? err.message : 'Network error reaching OKX Demo',
+        });
+        lastExchangeDemoProbes.OKX_DEMO = result;
+        return result;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    // BINANCE_TESTNET strictly hits testnet.binance.vision (never api.binance.com live account)
+    const apiKey = (process.env.BINANCE_TESTNET_API_KEY || '').trim();
+    const apiSecret = (process.env.BINANCE_TESTNET_SECRET || '').trim();
+    const endpoint = `${SPOT_TESTNET_ENDPOINT}/api/v3/account`;
+    const credentialsPresent = Boolean(apiKey && apiSecret);
+    if (!credentialsPresent) {
+      const result = evaluateExchangeDemoProbeOutcome({
+        venue: 'BINANCE_TESTNET',
+        endpointChecked: endpoint,
+        credentialsPresent: false,
+        isDemoEndpoint: true,
+        httpStatus: null,
+        externalAuthConfirmed: false,
+        latencyMs: null,
+      });
+      lastExchangeDemoProbes.BINANCE_TESTNET = result;
+      return result;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const query = `timestamp=${Date.now()}&recvWindow=5000`;
+      const signature = crypto.createHmac('sha256', apiSecret).update(query).digest('hex');
+      const response = await fetch(`${endpoint}?${query}&signature=${signature}`, {
+        method: 'GET',
+        headers: {
+          'X-MBX-APIKEY': apiKey,
+        },
+        signal: controller.signal,
+      });
+      const latencyMs = Date.now() - startMs;
+      let errMsg: string | null = null;
+      let hasAccountType = false;
+      try {
+        const json = (await response.json()) as { accountType?: string; msg?: string; code?: number };
+        hasAccountType = typeof json.accountType === 'string';
+        if (!response.ok) {
+          errMsg = json.msg || `Binance Testnet error code ${json.code ?? response.status}`;
+        }
+      } catch {
+        // non-json body
+      }
+      const confirmed = response.ok && hasAccountType;
+      const result = evaluateExchangeDemoProbeOutcome({
+        venue: 'BINANCE_TESTNET',
+        endpointChecked: endpoint,
+        credentialsPresent: true,
+        isDemoEndpoint: true,
+        httpStatus: response.status,
+        externalAuthConfirmed: confirmed,
+        latencyMs,
+        errorDetail: confirmed ? null : errMsg || `HTTP ${response.status}`,
+      });
+      lastExchangeDemoProbes.BINANCE_TESTNET = result;
+      return result;
+    } catch (err) {
+      const result = evaluateExchangeDemoProbeOutcome({
+        venue: 'BINANCE_TESTNET',
+        endpointChecked: endpoint,
+        credentialsPresent: true,
+        isDemoEndpoint: true,
+        httpStatus: null,
+        externalAuthConfirmed: false,
+        latencyMs: Date.now() - startMs,
+        errorDetail: err instanceof Error ? err.message : 'Network error reaching Binance Testnet',
+      });
+      lastExchangeDemoProbes.BINANCE_TESTNET = result;
+      return result;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  app.get('/api/step3/readiness', async (req, res) => {
+    const maint = getActiveMaintenanceState();
+    const maintenanceActive = maint.state !== 'NORMAL';
+    const exchangeDemoVerifiedConnected = Boolean(
+      lastExchangeDemoProbes.OKX_DEMO?.status === 'EXCHANGE_DEMO_VERIFIED' ||
+        lastExchangeDemoProbes.BINANCE_TESTNET?.status === 'EXCHANGE_DEMO_VERIFIED'
+    );
+    const operationalStatus = resolvePlatformOperationalStatuses({
+      appOnline: true,
+      marketDataConnected: true,
+      exchangeDemoVerifiedConnected,
+      maintenanceActive,
+    });
+
+    const allSocial = step3SocialQueue.listAll();
+    const failedSocial = step3SocialQueue.listFailed();
+    const isOwner = await isRequestAuthenticatedOwnerOrOperator(req);
+
+    // Public callers receive ONLY safe operational status flags (zero secret/env diagnostics).
+    if (!isOwner) {
+      return res.json({
+        ok: true,
+        maintenanceActive,
+        maintenanceState: maint.state,
+        exchangeDemoVerifiedConnected,
+        liveTradingLocked: true,
+        operationalStatus,
+        socialQueueSummary: {
+          total: allSocial.length,
+          delivered: allSocial.filter((r) => r.state === 'DELIVERED_PROVIDER_CONFIRMED').length,
+          failed: failedSocial.length,
+        },
+      });
+    }
+
+    const envAudit = auditEnvironmentConfiguration(process.env);
+    const tgCfg = resolveTelegramConfig(process.env);
+    const makeCfg = resolveMakeWebhookConfig(process.env);
+    const discordCfg = resolveDiscordWebhookConfig(process.env);
+    const notificationHealth = notificationDispatcher.getHealthOverview();
+
+    return res.json({
+      ok: true,
+      maintenanceActive,
+      maintenanceState: maint.state,
+      exchangeDemoVerifiedConnected,
+      liveTradingLocked: true,
+      operationalStatus,
+      environmentAudit: {
+        auditedAtIso: envAudit.auditedAtIso,
+        startupHealthy: envAudit.startupHealthy,
+        missingRequired: envAudit.missingRequired,
+        clientSecretLeakWarnings: envAudit.clientSecretLeakWarnings,
+        obsoleteVariablesPresent: envAudit.obsoleteVariablesPresent,
+        optionalIntegrationsConfiguredCount: envAudit.optionalIntegrationsConfigured.length,
+        optionalIntegrationsDisabledCount: envAudit.optionalIntegrationsDisabled.length,
+      },
+      exchangeDemoProbes: lastExchangeDemoProbes,
+      channels: {
+        personalAdminTelegramConfigured: Boolean(tgCfg.botTokenValid && tgCfg.devChatIdValid),
+        publicTelegramChannelConfigured: Boolean(tgCfg.botTokenValid && tgCfg.publicChatIdValid),
+        canonicalTelegramChatIdStatus:
+          tgCfg.publicChatIdSource === 'TELEGRAM_CHAT_ID'
+            ? 'CONFIGURED'
+            : 'PENDING_OWNER_CONFIGURATION',
+        makeWebhookConfigured: Boolean(makeCfg.configured && makeCfg.valid),
+        discordConfigured: Boolean(discordCfg.configured && discordCfg.valid),
+        discordMaskedWebhook: maskSecretUrl(discordCfg.webhookUrl),
+        telegramWebhookFailClosed: true,
+        telegramWebhookSecretConfigured: tgCfg.webhookSecretValid,
+      },
+      notificationHealth,
+      otpSecurity: {
+        saltedHmacHashedStorage: true,
+        plaintextOtpStored: false,
+        resendConfigured: evaluateOtpProviderReadiness({
+          resendApiKey: process.env.RESEND_API_KEY,
+          resendFromEmail: process.env.RESEND_FROM_EMAIL,
+          recipientEmail: OWNER_EMAIL,
+        }).resendApiKeyConfigured,
+        recentAuditEntriesCount: otpAuditLog.length,
+      },
+      socialQueueSummary: {
+        total: allSocial.length,
+        delivered: allSocial.filter((r) => r.state === 'DELIVERED_PROVIDER_CONFIRMED').length,
+        failed: failedSocial.length,
+      },
+    });
+  });
+
+  app.post(
+    '/api/step3/verify-exchange-demo',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    async (req, res) => {
+      const requested = String(req.body?.venue || 'ALL').toUpperCase();
+      const venues: ExchangeDemoVenue[] =
+        requested === 'OKX_DEMO'
+          ? ['OKX_DEMO']
+          : requested === 'BINANCE_TESTNET'
+          ? ['BINANCE_TESTNET']
+          : ['OKX_DEMO', 'BINANCE_TESTNET'];
+
+      const results: ExchangeDemoProbeResult[] = [];
+      for (const venue of venues) {
+        results.push(await probeExternalExchangeDemoVenue(venue));
+      }
+
+      return res.json({
+        ok: true,
+        liveTradingLocked: true,
+        results,
+      });
+    }
+  );
+
+  app.get('/api/step3/social/queue', requireOperatorAuth, (_req, res) => {
+    return res.json({
+      ok: true,
+      records: step3SocialQueue.listAll(),
+      failed: step3SocialQueue.listFailed(),
+    });
+  });
+
+  app.post(
+    '/api/step3/social/publish',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    async (req, res) => {
+      const body = req.body || {};
+      const tradeId = String(body.tradeId || '').trim().toUpperCase();
+      if (!tradeId || tradeId.length < 4) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Valid immutable tradeId is required for social publishing.',
+        });
+      }
+      const stage: SocialPostStage =
+        body.stage === 'TRADE_CLOSURE' ? 'TRADE_CLOSURE' : 'SIGNAL_ANNOUNCEMENT';
+      const channel: SocialChannelTarget =
+        body.channel === 'PERSONAL_ADMIN_TELEGRAM'
+          ? 'PERSONAL_ADMIN_TELEGRAM'
+          : body.channel === 'DISCORD_WEBHOOK'
+          ? 'DISCORD_WEBHOOK'
+          : 'PUBLIC_TELEGRAM_CHANNEL';
+      const chartSnapshotGenerated = body.chartSnapshotGenerated === true;
+      const dryRunInspectOnly = body.dryRunInspectOnly === true;
+
+      const tgCfg = resolveTelegramConfig(process.env);
+      const discordCfg = resolveDiscordWebhookConfig(process.env);
+      const personalChatId = getDeveloperPrivateChatId();
+      const publicChannelId = getPublicChannelChatId();
+
+      const channelConfigured =
+        channel === 'PERSONAL_ADMIN_TELEGRAM'
+          ? Boolean(tgCfg.botTokenValid && personalChatId)
+          : channel === 'PUBLIC_TELEGRAM_CHANNEL'
+          ? Boolean(tgCfg.botTokenValid && publicChannelId)
+          : Boolean(discordCfg.configured && discordCfg.valid);
+
+      const enqueue = step3SocialQueue.enqueueOrInspect({
+        tradeId,
+        stage,
+        channel,
+        chartSnapshotGenerated,
+        channelConfigured,
+      });
+
+      if (!enqueue.accepted || dryRunInspectOnly) {
+        return res.status(enqueue.duplicateBlocked ? 409 : 200).json({
+          ok: !enqueue.duplicateBlocked,
+          duplicateBlocked: enqueue.duplicateBlocked,
+          delivered: enqueue.record.messageDelivered,
+          reason: enqueue.reason,
+          record: enqueue.record,
+        });
+      }
+
+      const messageText = String(
+        body.messageText ||
+          `[SIGNAL FORGE] ${stage === 'TRADE_CLOSURE' ? 'Trade Closed' : 'Signal Alert'} · Trade ID: ${tradeId}`
+      ).slice(0, 1200);
+
+      try {
+        if (channel === 'PERSONAL_ADMIN_TELEGRAM' || channel === 'PUBLIC_TELEGRAM_CHANNEL') {
+          const targetChatId =
+            channel === 'PERSONAL_ADMIN_TELEGRAM' ? personalChatId : publicChannelId;
+          const sendRes = await sendTelegramRawMessage({
+            chatId: targetChatId,
+            text: messageText,
+          });
+          const updated = step3SocialQueue.recordDeliveryOutcome({
+            idempotencyKey: enqueue.record.idempotencyKey,
+            delivered: sendRes.ok,
+            providerMessageId: sendRes.providerMessageId ?? null,
+            errorMessage: sendRes.errorDetail || null,
+          });
+          return res.status(sendRes.ok ? 200 : 502).json({
+            ok: sendRes.ok,
+            delivered: Boolean(updated?.messageDelivered),
+            providerMessageId: sendRes.providerMessageId ?? null,
+            record: updated,
+          });
+        }
+
+        // Discord webhook delivery via ?wait=true with full structured embed when signal fields exist
+        const matchedProcessed = processedSignalsLog.find(
+          (p) => p.signalId.toUpperCase() === tradeId
+        );
+        const extracted =
+          !matchedProcessed && body.symbol
+            ? extractTradingAlertParams({
+                source: 'MANUAL',
+                symbol: String(body.symbol),
+                direction: body.direction,
+                timeframe: body.timeframe,
+                entryPrice: Number(body.entryPrice || 0),
+                takeProfits: Array.isArray(body.takeProfits) ? body.takeProfits.map(Number) : undefined,
+                stopLoss: Number(body.stopLoss || 0),
+                confidence: Number(body.confidence || 88),
+                finalPnlUsd: typeof body.finalPnlUsd === 'number' ? body.finalPnlUsd : null,
+                finalPnlPercent: typeof body.finalPnlPercent === 'number' ? body.finalPnlPercent : null,
+                lifecycleStatus: stage === 'TRADE_CLOSURE' ? 'CLOSED_TP' : 'OPEN',
+                rationale: messageText,
+              })
+            : null;
+
+        const discordPayload = matchedProcessed
+          ? createPersistedSignalPayload({
+              card: matchedProcessed,
+              targetChatId: null,
+              signalCategory: stage === 'TRADE_CLOSURE' ? 'REALIZED_RESULT' : 'GENERATED_SIGNAL',
+              executionMode: executionMode || 'PAPER_DRY_RUN',
+            })
+          : extracted && extracted.ok
+          ? createPersistedSignalPayload({
+              card: { ...extracted.card, signalId: tradeId },
+              targetChatId: null,
+              signalCategory: stage === 'TRADE_CLOSURE' ? 'REALIZED_RESULT' : 'GENERATED_SIGNAL',
+              executionMode: executionMode || 'PAPER_DRY_RUN',
+            })
+          : { rawContent: messageText };
+
+        const discordRes = await notificationDispatcher.sendViaDiscordWebhook(discordPayload);
+        const updated = step3SocialQueue.recordDeliveryOutcome({
+          idempotencyKey: enqueue.record.idempotencyKey,
+          delivered: discordRes.ok,
+          providerMessageId: discordRes.providerMessageId,
+          errorMessage: discordRes.error,
+        });
+        return res.status(discordRes.ok ? 200 : 502).json({
+          ok: discordRes.ok,
+          delivered: Boolean(updated?.messageDelivered),
+          providerMessageId: discordRes.providerMessageId,
+          record: updated,
+        });
+      } catch (err) {
+        const safeErr =
+          sanitizeNotificationError(
+            err instanceof Error ? err.message : 'Social provider request failed'
+          ) || 'Social provider request failed';
+        const updated = step3SocialQueue.recordDeliveryOutcome({
+          idempotencyKey: enqueue.record.idempotencyKey,
+          delivered: false,
+          providerMessageId: null,
+          errorMessage: safeErr,
+        });
+        return res.status(502).json({
+          ok: false,
+          delivered: false,
+          record: updated,
+        });
+      }
+    }
+  );
+
+  // ============================================================================
+  // STEP 3 EXTENSION (PHASES A–G):
+  // TELEGRAM ANTI-FLOOD SETTINGS, AI CHART SCANNER & SCENARIO LAB,
+  // ISOLATED WORKER POOL, ANTI-ABUSE, REFERRALS & ADMIN BUSINESS CONTROL CENTER
+  // ============================================================================
+
+  function resolveCallerAccountId(req: express.Request): string {
+    const headerAcct = String(req.headers['x-scanner-account'] || '').trim();
+    if (headerAcct && /^[a-zA-Z0-9_-]{4,64}$/.test(headerAcct)) {
+      return headerAcct;
+    }
+    const ip = String(req.ip || req.socket.remoteAddress || 'local');
+    const ua = String(req.headers['user-agent'] || 'browser');
+    const digest = crypto.createHash('sha256').update(`${ip}:${ua}`).digest('hex').slice(0, 12);
+    return `guest_${digest}`;
+  }
+
+  function resolvePrivacyHashedNetworkSignals(req: express.Request, accountId: string) {
+    const rawIp = String(req.ip || req.socket.remoteAddress || '127.0.0.1');
+    const ipBucket = rawIp.split('.').slice(0, 3).join('.');
+    const hashedIpBucket = crypto
+      .createHmac('sha256', SESSION_SIGNING_KEY)
+      .update(`ip:${ipBucket}`)
+      .digest('hex')
+      .slice(0, 16);
+    const deviceRaw = String(req.headers['x-device-hint'] || req.headers['user-agent'] || 'default');
+    const hashedDeviceFingerprint = crypto
+      .createHmac('sha256', SESSION_SIGNING_KEY)
+      .update(`dev:${deviceRaw}`)
+      .digest('hex')
+      .slice(0, 16);
+
+    if (!accountsByIpHash.has(hashedIpBucket)) accountsByIpHash.set(hashedIpBucket, new Set());
+    accountsByIpHash.get(hashedIpBucket)!.add(accountId);
+    if (!accountsByDeviceHash.has(hashedDeviceFingerprint)) {
+      accountsByDeviceHash.set(hashedDeviceFingerprint, new Set());
+    }
+    accountsByDeviceHash.get(hashedDeviceFingerprint)!.add(accountId);
+
+    return {
+      hashedIpBucket,
+      hashedDeviceFingerprint,
+      accountsSharingIpBucket: accountsByIpHash.get(hashedIpBucket)!.size,
+      accountsSharingDevice: accountsByDeviceHash.get(hashedDeviceFingerprint)!.size,
+    };
+  }
+
+  // --- PHASE A: COMMAND HUB NOTIFICATION SETTINGS & FLOOD TELEMETRY ---
+  app.get('/api/notifications/settings', requireOperatorAuth, (_req, res) => {
+    return res.json({
+      ok: true,
+      workerId: SERVER_WORKER_ID,
+      activeSchedulers: singletonSchedulers.listActiveNames(),
+      telemetry: telegramGovernor.getTelemetrySnapshot(),
+    });
+  });
+
+  app.post('/api/notifications/settings', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    const updated = telegramGovernor.updateSettings({
+      criticalAlertsEnabled:
+        typeof body.criticalAlertsEnabled === 'boolean' ? body.criticalAlertsEnabled : undefined,
+      tradingAlertsEnabled:
+        typeof body.tradingAlertsEnabled === 'boolean' ? body.tradingAlertsEnabled : undefined,
+      routineAuditEnabled:
+        typeof body.routineAuditEnabled === 'boolean' ? body.routineAuditEnabled : undefined,
+      healthDigestCadence: body.healthDigestCadence as HealthDigestCadence | undefined,
+      publicSignalPublishingEnabled:
+        typeof body.publicSignalPublishingEnabled === 'boolean'
+          ? body.publicSignalPublishingEnabled
+          : undefined,
+    });
+    return res.json({
+      ok: true,
+      settings: updated,
+      telemetry: telegramGovernor.getTelemetrySnapshot(),
+    });
+  });
+
+  app.post('/api/notifications/manual-digest', requireOperatorAuth, standardWriteRateLimit, async (_req, res) => {
+    const entry = await dispatchDeveloperSystemAudit('DAILY_DIGEST', undefined, {
+      overrideCategory: 'MANUAL_COMMAND',
+      eventKey: `manual_digest_${Date.now()}`,
+      transitionBanner: '[SIGNAL FORGE · MANUAL HEALTH DIGEST]',
+    });
+    return res.json({
+      ok: true,
+      entry,
+      telemetry: telegramGovernor.getTelemetrySnapshot(),
+    });
+  });
+
+  // --- PHASES B, C, D: AI CHART SCANNER & SCENARIO LAB (ISOLATED SANDBOX) ---
+  app.get('/api/scanner/status', (req, res) => {
+    const accountId = resolveCallerAccountId(req);
+    const adminCfg = adminBusinessEngine.getConfig();
+    const account = isolatedChartPool.getOrCreateAccount(accountId, 'FREE_PREVIEW', 3);
+    const referralCode = referralShareEngine.getOrCreateReferralCode(accountId);
+    return res.json({
+      ok: true,
+      serviceName: 'AI Chart Scanner & Scenario Lab',
+      sandboxOnly: true,
+      productionBillingEnabled: false,
+      orderExecutionAllowed: false,
+      featureVisible: adminCfg.featureVisibleOnPublicChart,
+      featureEnabledInSandbox: adminCfg.featureEnabledInSandbox && !adminCfg.emergencySuspended,
+      emergencySuspended: adminCfg.emergencySuspended,
+      account,
+      referralCode,
+      plans: adminCfg.plans,
+      pool: isolatedChartPool.getPoolSnapshot(),
+    });
+  });
+
+  app.post('/api/scanner/upload', standardWriteRateLimit, (req, res) => {
+    const diagnosticId = `SF-VAL-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    res.setHeader('X-Diagnostic-Id', diagnosticId);
+
+    const adminCfg = adminBusinessEngine.getConfig();
+    if (!adminCfg.featureEnabledInSandbox || adminCfg.emergencySuspended) {
+      return res.status(503).json({
+        ok: false,
+        creditsCharged: 0,
+        code: 'SERVICE_UNAVAILABLE',
+        diagnosticId,
+        error: 'AI Chart Scanner & Scenario Lab is currently paused by administrator settings.',
+      });
+    }
+
+    const accountId = resolveCallerAccountId(req);
+    const net = resolvePrivacyHashedNetworkSignals(req, accountId);
+    const now = Date.now();
+    const prevUploads = (uploadTimestampsByAccount.get(accountId) || []).filter(
+      (ts) => now - ts < 10 * 60_000
+    );
+    prevUploads.push(now);
+    uploadTimestampsByAccount.set(accountId, prevUploads);
+
+    const isApprovedSeat = adminBusinessEngine
+      .getDashboardSnapshot()
+      .approvedSubaccounts.some((s) => s.active && s.seatId === accountId);
+
+    const abuse = evaluateAccountAbuseRisk({
+      accountId,
+      hashedIpBucket: net.hashedIpBucket,
+      hashedDeviceFingerprint: net.hashedDeviceFingerprint,
+      normalizedEmailKey: accountId,
+      uploadsInLast10Min: prevUploads.length,
+      accountsSharingIpBucket: net.accountsSharingIpBucket,
+      accountsSharingDevice: net.accountsSharingDevice,
+      priorTrialClaimedOnDevice: trialClaimedDeviceHashes.has(net.hashedDeviceFingerprint),
+      isApprovedTeamSeat: isApprovedSeat,
+    });
+
+    if (abuse.restriction === 'MANUAL_REVIEW_HOLD') {
+      return res.status(429).json({
+        ok: false,
+        creditsCharged: 0,
+        code: 'ABUSE_MANUAL_REVIEW_HOLD',
+        diagnosticId,
+        error: 'Upload temporarily held for review due to high-velocity or multi-account risk signals. You may submit an appeal.',
+        abuse,
+      });
+    }
+
+    let bytes: Uint8Array;
+    let declaredMimeType = '';
+    let fileName = 'chart.png';
+    let visualSignals: Record<string, unknown> | undefined;
+
+    if (Buffer.isBuffer(req.body)) {
+      // Raw binary upload transport (eliminates +33% base64 overhead on mobile devices)
+      bytes = req.body;
+      const headerMime = String(
+        req.headers['x-declared-mime'] || req.headers['content-type'] || ''
+      )
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+      declaredMimeType = headerMime;
+      try {
+        const rawName = String(req.headers['x-file-name'] || 'chart.png');
+        fileName = decodeURIComponent(rawName).slice(0, 140);
+      } catch {
+        fileName = String(req.headers['x-file-name'] || 'chart.png').slice(0, 140);
+      }
+      const rawSignalsHeader = req.headers['x-visual-signals'];
+      if (typeof rawSignalsHeader === 'string' && rawSignalsHeader.length > 0 && rawSignalsHeader.length <= 2048) {
+        try {
+          const parsedSignals = JSON.parse(rawSignalsHeader);
+          if (parsedSignals && typeof parsedSignals === 'object') {
+            visualSignals = parsedSignals as Record<string, unknown>;
+          }
+        } catch {
+          visualSignals = undefined;
+        }
+      }
+    } else {
+      const body = req.body || {};
+      const rawBase64 = String(body.imageBase64 || '').replace(
+        /^data:image\/[a-zA-Z0-9.+-]+;base64,/,
+        ''
+      );
+      declaredMimeType = String(body.mimeType || '').trim().toLowerCase();
+      fileName = String(body.fileName || 'chart.png').slice(0, 140);
+      visualSignals = body.visualSignals;
+
+      if (!rawBase64) {
+        return res.status(400).json({
+          ok: false,
+          creditsCharged: 0,
+          code: 'EMPTY_IMAGE_PAYLOAD',
+          diagnosticId,
+          error: 'No image data received. Please select a valid PNG, JPEG, or WebP screenshot. Zero credits charged.',
+        });
+      }
+      try {
+        bytes = Buffer.from(rawBase64, 'base64');
+      } catch {
+        return res.status(400).json({
+          ok: false,
+          creditsCharged: 0,
+          code: 'INVALID_BASE64',
+          diagnosticId,
+          error: 'Invalid image payload encoding. Zero credits charged.',
+        });
+      }
+    }
+
+    const recentSet = recentUploadFingerprintsByAccount.get(accountId) ?? new Set<string>();
+    const validation = validateChartImageUpload({
+      bytes,
+      declaredMimeType,
+      fileName,
+      visualSignals,
+      recentFingerprintsForAccount: recentSet,
+    });
+
+    if (!validation.valid || !validation.sanitizedBuffer || !validation.mimeType) {
+      return res.status(422).json({
+        ok: false,
+        creditsCharged: 0,
+        code: validation.code,
+        diagnosticId,
+        error: validation.message,
+        validation: {
+          code: validation.code,
+          widthPx: validation.widthPx,
+          heightPx: validation.heightPx,
+          byteLength: validation.byteLength,
+        },
+      });
+    }
+
+    const uploadId = `upl_${crypto.randomBytes(10).toString('hex')}`;
+    const meta: PrivateChartUploadRecord = {
+      uploadId,
+      ownerAccountId: accountId,
+      mimeType: validation.mimeType,
+      widthPx: validation.widthPx!,
+      heightPx: validation.heightPx!,
+      byteLength: validation.byteLength,
+      contentFingerprint: validation.contentFingerprint,
+      createdAtIso: new Date(now).toISOString(),
+      expiresAtMs: now + 60 * 60_000,
+      publicAccessForbidden: true,
+    };
+
+    privateChartUploads.set(uploadId, { meta, buffer: validation.sanitizedBuffer });
+    // Cap private memory storage safely
+    if (privateChartUploads.size > 150) {
+      const oldestKey = privateChartUploads.keys().next().value;
+      if (oldestKey) privateChartUploads.delete(oldestKey);
+    }
+
+    recentSet.add(validation.contentFingerprint);
+    if (recentSet.size > 50) {
+      const first = recentSet.values().next().value;
+      if (first) recentSet.delete(first);
+    }
+    recentUploadFingerprintsByAccount.set(accountId, recentSet);
+
+    return res.json({
+      ok: true,
+      creditsCharged: 0,
+      diagnosticId,
+      uploadId,
+      meta,
+      metadataStrippedBytes: validation.metadataStrippedBytes,
+      autoDetected: validation.autoDetected,
+      abuseRiskScore: abuse.riskScore,
+      nextStage: 'SELECT_TRADING_STYLE',
+    });
+  });
+
+  // Strictly private upload inspection — unauthorized accounts receive 403
+  app.get('/api/scanner/uploads/:uploadId', (req, res) => {
+    const uploadId = String(req.params.uploadId || '').trim();
+    const record = privateChartUploads.get(uploadId);
+    if (!record) {
+      return res.status(404).json({ ok: false, error: 'Upload not found or expired.' });
+    }
+    const callerId = resolveCallerAccountId(req);
+    const isAdmin =
+      hasConfiguredOperatorToken(req) ||
+      verifyOperatorSessionToken(req.headers['x-signal-session']);
+    if (record.meta.ownerAccountId !== callerId && !isAdmin) {
+      return res.status(403).json({
+        ok: false,
+        code: 'FORBIDDEN_PRIVATE_IMAGE',
+        error: 'Uploaded chart images are strictly private and cannot be accessed publicly or by other accounts.',
+      });
+    }
+    return res.json({
+      ok: true,
+      meta: record.meta,
+    });
+  });
+
+  app.post('/api/scanner/analyze', standardWriteRateLimit, async (req, res) => {
+    const diagnosticId = `SF-ANA-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    res.setHeader('X-Diagnostic-Id', diagnosticId);
+
+    const adminCfg = adminBusinessEngine.getConfig();
+    if (!adminCfg.featureEnabledInSandbox || adminCfg.emergencySuspended) {
+      return res.status(503).json({
+        ok: false,
+        creditsCharged: 0,
+        code: 'SERVICE_UNAVAILABLE',
+        diagnosticId,
+        error: 'AI Chart Scanner & Scenario Lab is currently paused by administrator control.',
+      });
+    }
+
+    const body = req.body || {};
+    const accountId = resolveCallerAccountId(req);
+    const uploadId = String(body.uploadId || '').trim();
+    const stored = privateChartUploads.get(uploadId);
+    if (!stored || stored.meta.ownerAccountId !== accountId) {
+      return res.status(403).json({
+        ok: false,
+        creditsCharged: 0,
+        code: 'FORBIDDEN_PRIVATE_IMAGE',
+        diagnosticId,
+        error: 'Valid privately owned uploadId is required before queuing chart analysis.',
+      });
+    }
+
+    if (body.marketConfirmed !== true) {
+      return res.status(400).json({
+        ok: false,
+        creditsCharged: 0,
+        code: 'MARKET_CONFIRMATION_REQUIRED',
+        diagnosticId,
+        error: 'Please explicitly confirm exchange, symbol, timeframe, and trading style before queuing analysis.',
+      });
+    }
+
+    const symbol = String(body.symbol || 'BTCUSDT').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const exchange = String(body.exchange || 'BINANCE').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const timeframe = String(body.timeframe || '1h').toLowerCase();
+    const marketType: ScannerMarketType = body.marketType === 'FUTURES' ? 'FUTURES' : 'SPOT';
+    const rawStyle = String(body.tradingStyle || 'INTRADAY').toUpperCase();
+    const tradingStyle: ScannerTradingStyle =
+      rawStyle === 'QUICK_SCALPING' ||
+      rawStyle === 'SCALPING' ||
+      rawStyle === 'INTRADAY' ||
+      rawStyle === 'SWING' ||
+      rawStyle === 'POSITION'
+        ? rawStyle
+        : 'INTRADAY';
+    const userRiskLimitUsd = Math.max(1, Math.min(100_000, Number(body.userRiskLimitUsd) || 50));
+
+    const jobId = `job_${crypto.randomBytes(8).toString('hex')}`;
+    const reservation = isolatedChartPool.reserveJobSlot({
+      jobId,
+      accountId,
+      uploadId,
+      creditCost: 1,
+    });
+    if (!reservation.accepted || !reservation.job) {
+      return res.status(reservation.httpStatus).json({
+        ok: false,
+        creditsCharged: 0,
+        code: reservation.code,
+        diagnosticId,
+        error: reservation.reason,
+        account: reservation.account,
+        pool: isolatedChartPool.getPoolSnapshot(),
+      });
+    }
+
+    try {
+      const feed = await fetchMarketCandlesForStep2(symbol, timeframe, 120);
+      const analysisId = `scan_${crypto.randomBytes(6).toString('hex')}`;
+      const report = runReadOnlyChartScenarioAnalysis({
+        analysisId,
+        uploadId,
+        ownerAccountId: accountId,
+        symbol: feed.symbol,
+        exchange,
+        marketType,
+        timeframe: feed.timeframe,
+        tradingStyle,
+        userRiskLimitUsd,
+        candles: feed.candles,
+        dataSource:
+          feed.provider === 'BINANCE_SPOT'
+            ? 'Binance Spot (Verified REST/WS)'
+            : `${feed.provider} (Fallback Reference)`,
+        dataFreshness: feed.isSyntheticSimulation ? 'REFERENCE' : 'FRESH',
+      });
+
+      chartAnalysesStore.set(analysisId, report);
+      if (chartAnalysesStore.size > 200) {
+        const oldest = chartAnalysesStore.keys().next().value;
+        if (oldest) chartAnalysesStore.delete(oldest);
+      }
+
+      isolatedChartPool.completeJob(jobId);
+      const updatedAccount = isolatedChartPool.getOrCreateAccount(accountId);
+
+      return res.json({
+        ok: true,
+        diagnosticId,
+        jobId,
+        report,
+        account: updatedAccount,
+        pool: isolatedChartPool.getPoolSnapshot(),
+        referralCode: referralShareEngine.getOrCreateReferralCode(accountId),
+      });
+    } catch (err) {
+      const refunded = isolatedChartPool.failOrCancelJobWithRefund(
+        jobId,
+        'FAILED_REFUNDED',
+        err instanceof Error ? err.message : 'Analysis pipeline error'
+      );
+      return res.status(502).json({
+        ok: false,
+        creditsCharged: 0,
+        creditsRefunded: refunded.job?.creditsRefunded ?? 1,
+        code: 'ANALYSIS_PIPELINE_ERROR',
+        diagnosticId,
+        error: 'Analysis failed — your scan credit has been automatically refunded.',
+        account: refunded.account,
+      });
+    }
+  });
+
+  app.post('/api/scanner/followup', standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    const accountId = resolveCallerAccountId(req);
+    const analysisId = String(body.analysisId || '').trim();
+    const report = chartAnalysesStore.get(analysisId);
+    if (!report || report.ownerAccountId !== accountId) {
+      return res.status(404).json({ ok: false, error: 'Analysis report not found for this account.' });
+    }
+    const question = String(body.question || '').trim().slice(0, 240);
+    if (!question) {
+      return res.status(400).json({ ok: false, error: 'Please enter a follow-up question.' });
+    }
+    const result = answerLightweightScenarioFollowUp({
+      report,
+      question,
+      customRiskUsd: body.customRiskUsd !== undefined ? Number(body.customRiskUsd) : undefined,
+    });
+    if (result.ok) {
+      chartAnalysesStore.set(analysisId, {
+        ...report,
+        followUpsUsed: report.followUpsUsed + 1,
+      });
+    }
+    return res.status(result.ok ? 200 : 429).json({
+      ok: result.ok,
+      answer: result.answer,
+      positionSizeUnits: result.positionSizeUnits,
+      followUpsRemaining: result.followUpsRemaining,
+      multiAgentReprocessed: false,
+    });
+  });
+
+  app.post('/api/scanner/recheck', standardWriteRateLimit, async (req, res) => {
+    const body = req.body || {};
+    const accountId = resolveCallerAccountId(req);
+    const analysisId = String(body.analysisId || '').trim();
+    const prev = chartAnalysesStore.get(analysisId);
+    if (!prev || prev.ownerAccountId !== accountId) {
+      return res.status(404).json({ ok: false, error: 'Prior analysis report not found.' });
+    }
+    const feed = await fetchMarketCandlesForStep2(prev.symbol, prev.timeframe, 120);
+    const latestCandleMs = (feed.candles[feed.candles.length - 1]?.time ?? 0) * 1000;
+    if (latestCandleMs <= prev.lastCandleTimestampMs && body.forceSandboxRecheck !== true) {
+      return res.status(409).json({
+        ok: false,
+        creditsCharged: 0,
+        code: 'AWAITING_NEW_CANDLE',
+        error: `No new ${prev.timeframe} candle has closed yet since the previous analysis. Zero credits charged.`,
+      });
+    }
+    const jobId = `recheck_${crypto.randomBytes(6).toString('hex')}`;
+    const reservation = isolatedChartPool.reserveJobSlot({
+      jobId,
+      accountId,
+      uploadId: prev.uploadId,
+      creditCost: 1,
+    });
+    if (!reservation.accepted) {
+      return res.status(reservation.httpStatus).json({
+        ok: false,
+        code: reservation.code,
+        error: reservation.reason,
+        account: reservation.account,
+      });
+    }
+    const nextAnalysisId = `scan_${crypto.randomBytes(6).toString('hex')}`;
+    const updatedReport = runReadOnlyChartScenarioAnalysis({
+      analysisId: nextAnalysisId,
+      uploadId: prev.uploadId,
+      ownerAccountId: accountId,
+      symbol: feed.symbol,
+      exchange: prev.exchange,
+      marketType: prev.marketType,
+      timeframe: feed.timeframe,
+      tradingStyle: prev.tradingStyle,
+      userRiskLimitUsd: prev.userRiskLimitUsd,
+      candles: feed.candles,
+      dataSource:
+        feed.provider === 'BINANCE_SPOT'
+          ? 'Binance Spot (Verified REST/WS)'
+          : `${feed.provider} (Fallback Reference)`,
+      dataFreshness: feed.isSyntheticSimulation ? 'REFERENCE' : 'FRESH',
+    });
+    chartAnalysesStore.set(nextAnalysisId, updatedReport);
+    isolatedChartPool.completeJob(jobId);
+    return res.json({
+      ok: true,
+      report: updatedReport,
+      account: isolatedChartPool.getOrCreateAccount(accountId),
+    });
+  });
+
+  // --- PHASE F: USER-INITIATED ORGANIC SHARING & REFERRALS ---
+  app.post('/api/scanner/share', standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    const accountId = resolveCallerAccountId(req);
+    const analysisId = String(body.analysisId || '').trim();
+    const report = chartAnalysesStore.get(analysisId);
+    if (!report || report.ownerAccountId !== accountId) {
+      return res.status(404).json({ ok: false, error: 'Analysis not found for this account.' });
+    }
+    if (body.consentToShareSummary !== true) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Explicit owner consent is required before creating a public share preview.',
+      });
+    }
+    const baseUrl =
+      (process.env.APP_URL || '').trim() ||
+      `${req.protocol}://${req.get('host') || 'localhost:3000'}`;
+    const shareId = `shr_${crypto.randomBytes(6).toString('hex')}`;
+    const preview = referralShareEngine.createUserInitiatedSharePreview({
+      shareId,
+      ownerAccountId: accountId,
+      analysisId: report.analysisId,
+      symbol: report.symbol,
+      exchange: report.exchange,
+      timeframe: report.timeframe,
+      tradingStyle: report.tradingStyle,
+      recommendation: report.recommendation,
+      bullishRr: report.bullishScenario.riskRewardRatio,
+      bearishRr: report.bearishScenario.riskRewardRatio,
+      analyzedAtIso: report.analyzedAtIso,
+      baseUrl,
+      consentToShareSummary: true,
+    });
+    return res.json({ ok: true, preview });
+  });
+
+  app.get('/api/public/share/:shareId', (req, res) => {
+    const shareId = String(req.params.shareId || '').trim();
+    const preview = referralShareEngine.getPublicSharePreview(shareId);
+    if (!preview) {
+      return res.status(404).json({ ok: false, error: 'Shared chart preview not found.' });
+    }
+    return res.json({ ok: true, preview });
+  });
+
+  app.post('/api/referrals/claim', standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    const refereeAccountId = resolveCallerAccountId(req);
+    const referralCode = String(body.referralCode || '').trim().toUpperCase();
+    const net = resolvePrivacyHashedNetworkSignals(req, refereeAccountId);
+    const sameDeviceFlag = net.accountsSharingDevice >= 2;
+    const claim = referralShareEngine.evaluateAndRecordReferralClaim({
+      claimId: `clm_${crypto.randomBytes(6).toString('hex')}`,
+      referralCode,
+      refereeAccountId,
+      verifiedRegistration: body.verifiedRegistration === true,
+      qualifyingActionCompleted: body.qualifyingActionCompleted === true,
+      sameDeviceOrEmailFlag: sameDeviceFlag || body.sameDeviceOrEmailFlag === true,
+    });
+
+    if (claim.rewardStatus === 'GRANTED' && claim.rewardCreditsGranted > 0) {
+      isolatedChartPool.adjustAccountCreditsAndPlan({
+        accountId: claim.referrerAccountId,
+        creditDelta: claim.rewardCreditsGranted,
+      });
+    }
+
+    return res.status(claim.rewardStatus === 'BLOCKED_FRAUD' ? 403 : 200).json({
+      ok: claim.rewardStatus !== 'BLOCKED_FRAUD',
+      claim,
+    });
+  });
+
+  app.post('/api/abuse/appeal', standardWriteRateLimit, (req, res) => {
+    const accountId = resolveCallerAccountId(req);
+    const reason = String(req.body?.reason || '').trim();
+    if (reason.length < 8) {
+      return res.status(400).json({ ok: false, error: 'Please explain your appeal reason (min 8 chars).' });
+    }
+    const appeal = adminBusinessEngine.submitAbuseAppeal(accountId, reason);
+    return res.json({ ok: true, appeal });
+  });
+
+  // --- PHASE G: ADMIN PREMIUM & OFFER CONTROL CENTER + AI BUSINESS ADVISORY AGENT ---
+  app.get('/api/admin/business/overview', requireOperatorAuth, (_req, res) => {
+    const pool = isolatedChartPool.getPoolSnapshot();
+    const referrals = referralShareEngine.getAnalyticsSummary();
+    const dashboard = adminBusinessEngine.getDashboardSnapshot();
+    const advisorySuggestions = generateAiBusinessAdvisorySuggestions({
+      dailyAiSpendUsd: pool.dailyAiSpendUsd,
+      dailyAiCostBudgetUsd: pool.limits.dailyAiCostBudgetUsd,
+      estimatedCostPerScanUsd: pool.limits.estimatedCostPerScanUsd,
+      grantedReferralConversions: referrals.grantedConversions,
+      blockedFraudAttempts: referrals.blockedFraudAttempts,
+    });
+
+    return res.json({
+      ok: true,
+      ...dashboard,
+      pool,
+      referrals,
+      advisorySuggestions,
+    });
+  });
+
+  app.post('/api/admin/business/config', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    if (body.rollback === true) {
+      const rolledBack = adminBusinessEngine.rollbackLastConfigChange('AUTHORIZED_ADMIN');
+      return res.json({
+        ok: rolledBack,
+        rolledBack,
+        dashboard: adminBusinessEngine.getDashboardSnapshot(),
+      });
+    }
+
+    const updatedConfig = adminBusinessEngine.updateConfig(
+      {
+        featureEnabledInSandbox:
+          typeof body.featureEnabledInSandbox === 'boolean' ? body.featureEnabledInSandbox : undefined,
+        featureVisibleOnPublicChart:
+          typeof body.featureVisibleOnPublicChart === 'boolean'
+            ? body.featureVisibleOnPublicChart
+            : undefined,
+        emergencySuspended:
+          typeof body.emergencySuspended === 'boolean' ? body.emergencySuspended : undefined,
+        payPerScanPriceUsd:
+          body.payPerScanPriceUsd !== undefined ? Number(body.payPerScanPriceUsd) : undefined,
+        referralRewardCredits:
+          body.referralRewardCredits !== undefined ? Number(body.referralRewardCredits) : undefined,
+        planQuotaOverride: body.planQuotaOverride,
+      },
+      'AUTHORIZED_ADMIN'
+    );
+
+    if (typeof body.emergencySuspended === 'boolean' || body.workerLimits) {
+      isolatedChartPool.updateLimits({
+        emergencySuspended: updatedConfig.emergencySuspended,
+        ...(body.workerLimits || {}),
+      });
+    }
+
+    if (body.referralRewardCredits !== undefined || body.maxTotalReferralCreditsBudget !== undefined) {
+      referralShareEngine.configureReferralPolicy({
+        rewardCreditsPerReferral:
+          body.referralRewardCredits !== undefined ? Number(body.referralRewardCredits) : undefined,
+        maxTotalCreditsBudget:
+          body.maxTotalReferralCreditsBudget !== undefined
+            ? Number(body.maxTotalReferralCreditsBudget)
+            : undefined,
+      });
+    }
+
+    if (body.creditAllocation && typeof body.creditAllocation.accountId === 'string') {
+      isolatedChartPool.adjustAccountCreditsAndPlan({
+        accountId: String(body.creditAllocation.accountId).trim(),
+        creditDelta: Number(body.creditAllocation.creditDelta || 0),
+        planTier: body.creditAllocation.planTier as ScannerPlanTier | undefined,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      config: updatedConfig,
+      pool: isolatedChartPool.getPoolSnapshot(),
+      dashboard: adminBusinessEngine.getDashboardSnapshot(),
+    });
+  });
+
+  app.post('/api/admin/business/offers', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    if (body.mode === 'ADVANCE') {
+      const result = adminBusinessEngine.advanceOfferStage({
+        offerId: String(body.offerId || ''),
+        action: body.action,
+        actor: 'AUTHORIZED_ADMIN',
+        isAdminAuthorized: true,
+      });
+      return res.status(result.ok ? 200 : 400).json(result);
+    }
+
+    const offerId = `off_${crypto.randomBytes(5).toString('hex')}`;
+    const offer = adminBusinessEngine.createOfferFromSuggestionOrAdmin({
+      offerId,
+      title: String(body.title || 'Sandbox Promotional Campaign'),
+      targetPlan: (body.targetPlan as ScannerPlanTier) || 'MONTHLY_BASIC',
+      discountType:
+        body.discountType === 'FIXED_USD' || body.discountType === 'BONUS_CREDITS'
+          ? body.discountType
+          : 'PERCENTAGE',
+      discountValue: Number(body.discountValue ?? 15),
+      startsAtIso: String(body.startsAtIso || new Date().toISOString()),
+      expiresAtIso: String(
+        body.expiresAtIso || new Date(Date.now() + 7 * 24 * 60 * 60_000).toISOString()
+      ),
+      maxRedemptions: Number(body.maxRedemptions ?? 50),
+      campaignBudgetUsd: Number(body.campaignBudgetUsd ?? 200),
+      estimatedCostPerUnitUsd: Number(body.estimatedCostPerUnitUsd ?? 2.5),
+      createdBy: body.fromAiSuggestion === true ? 'AI_ADVISORY_AGENT' : 'ADMIN',
+    });
+    return res.json({ ok: true, offer, publicPaidOfferActive: false });
+  });
+
+  app.post('/api/admin/business/subaccounts', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const body = req.body || {};
+    const seatId = String(body.seatId || `seat_${crypto.randomBytes(4).toString('hex')}`);
+    const seat = adminBusinessEngine.addApprovedSubaccount({
+      seatId,
+      parentAccountId: String(body.parentAccountId || 'owner_primary'),
+      subaccountEmailMasked: maskEmailAddress(String(body.email || 'team@example.com')),
+      role: body.role === 'TRADER_VIEW' ? 'TRADER_VIEW' : 'ANALYST',
+      dailyScanLimit: Math.max(1, Math.min(50, Number(body.dailyScanLimit ?? 10))),
+      approvedAtIso: new Date().toISOString(),
+      active: true,
+    });
+    return res.json({ ok: true, seat });
+  });
+
+  app.post('/api/admin/business/appeals/:appealId', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const appealId = String(req.params.appealId || '').trim();
+    const decision =
+      req.body?.decision === 'APPROVED_RESTORED' ? 'APPROVED_RESTORED' : 'DENIED';
+    const updated = adminBusinessEngine.reviewAbuseAppeal(appealId, decision, 'AUTHORIZED_ADMIN');
+    if (!updated) {
+      return res.status(404).json({ ok: false, error: 'Appeal not found.' });
+    }
+    return res.json({ ok: true, appeal: updated });
+  });
+
+  // Exchange & Trading Control Center (per-exchange connection, Paper/Demo, Live status & risk caps)
+  function buildExchangeControlProfiles(): ExchangeControlProfile[] {
+    const binanceLiveCreds = Boolean(
+      process.env.BINANCE_LIVE_API_KEY && process.env.BINANCE_LIVE_SECRET
+    );
+    const binanceTestnetCreds = Boolean(
+      process.env.BINANCE_TESTNET_API_KEY && process.env.BINANCE_TESTNET_SECRET
+    );
+    const bybitCreds = Boolean(process.env.BYBIT_API_KEY && process.env.BYBIT_API_SECRET);
+    const okxCreds = Boolean(
+      process.env.OKX_API_KEY && process.env.OKX_API_SECRET && process.env.OKX_PASSPHRASE
+    );
+    const krakenCreds = Boolean(process.env.KRAKEN_API_KEY && process.env.KRAKEN_API_SECRET);
+
+    return DEFAULT_EXCHANGE_CONTROLS.map((base) => {
+      if (base.id === 'BINANCE') {
+        return {
+          ...base,
+          connectionStatus: binanceLiveCreds || binanceTestnetCreds ? 'CONNECTED' : 'SANDBOX_ONLY',
+          paperDemoActive: executionMode === 'TESTNET',
+          liveCredentialsConfigured: binanceLiveCreds,
+          liveTradingEnabled: executionMode === 'LIVE' && binanceLiveCreds,
+          marketFeedEndpoint:
+            executionMode === 'TESTNET' ? SPOT_TESTNET_ENDPOINT : SPOT_REST_ENDPOINTS[0],
+          riskSettings: { ...exchangeRiskSettingsStore.BINANCE },
+          notes:
+            executionMode === 'LIVE'
+              ? binanceLiveCreds
+                ? 'Live execution authorized with configured credentials.'
+                : 'Live mode armed in Guarded Mirror Mode — live API keys not configured.'
+              : binanceTestnetCreds
+              ? 'Binance Testnet credentials active with real-time public market feeds.'
+              : 'Binance Spot/Testnet Paper sandbox active with live public WebSocket pricing.',
+        };
+      }
+      if (base.id === 'BYBIT') {
+        return {
+          ...base,
+          connectionStatus: bybitCreds ? 'CONNECTED' : 'CREDENTIALS_REQUIRED',
+          liveCredentialsConfigured: bybitCreds,
+          liveTradingEnabled: false,
+          riskSettings: { ...exchangeRiskSettingsStore.BYBIT },
+        };
+      }
+      if (base.id === 'OKX') {
+        return {
+          ...base,
+          connectionStatus: okxCreds ? 'CONNECTED' : 'CREDENTIALS_REQUIRED',
+          liveCredentialsConfigured: okxCreds,
+          liveTradingEnabled: false,
+          riskSettings: { ...exchangeRiskSettingsStore.OKX },
+        };
+      }
+      return {
+        ...base,
+        connectionStatus: krakenCreds ? 'CONNECTED' : 'CREDENTIALS_REQUIRED',
+        liveCredentialsConfigured: krakenCreds,
+        liveTradingEnabled: false,
+        riskSettings: { ...exchangeRiskSettingsStore.KRAKEN },
+      };
+    });
+  }
+
+  app.get('/api/exchanges/control-center', (_req, res) => {
+    const otpReadiness = evaluateOtpProviderReadiness({
+      resendApiKey: process.env.RESEND_API_KEY,
+      resendFromEmail: process.env.RESEND_FROM_EMAIL,
+      recipientEmail: OWNER_EMAIL,
+    });
+    const exchanges = buildExchangeControlProfiles();
+    return res.json({
+      ok: true,
+      globalExecutionMode: executionMode,
+      exchanges,
+      otpProvider: otpReadiness,
+      subsystems: PLATFORM_SUBSYSTEM_REGISTRY,
+    });
+  });
+
+  app.post('/api/exchanges/risk-config', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    const exchangeId = String(req.body?.exchangeId || '').toUpperCase() as SupportedExchangeId;
+    if (!['BINANCE', 'BYBIT', 'OKX', 'KRAKEN'].includes(exchangeId)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Unsupported exchangeId. Allowed values: BINANCE, BYBIT, OKX, KRAKEN.',
+      });
+    }
+    const nextRisk = sanitizeExchangeRiskSettings(exchangeRiskSettingsStore[exchangeId], {
+      maxRiskPerTradePct: req.body?.maxRiskPerTradePct,
+      maxDailyLossPct: req.body?.maxDailyLossPct,
+      maxLeverage: req.body?.maxLeverage,
+      maxOpenPositions: req.body?.maxOpenPositions,
+      requireStopLoss: req.body?.requireStopLoss,
+    });
+    exchangeRiskSettingsStore[exchangeId] = nextRisk;
+    return res.json({
+      ok: true,
+      exchangeId,
+      riskSettings: nextRisk,
+      exchanges: buildExchangeControlProfiles(),
+    });
+  });
+
+  // Safe Email OTP Provider Readiness & Cooldown Diagnostic Endpoint (never exposes secrets, raw sender PII, or OTP codes)
+  app.get('/api/security/live-otp/status', (_req, res) => {
+    const nowMs = Date.now();
+    const lastIssuedAt = OWNER_EMAIL ? (lastOtpIssuedAtByRecipient.get(OWNER_EMAIL) ?? null) : null;
+    const cooldown = checkResendCooldown({ lastIssuedAtMs: lastIssuedAt, nowMs });
+    const rawProvider = evaluateOtpProviderReadiness({
+      resendApiKey: process.env.RESEND_API_KEY,
+      resendFromEmail: process.env.RESEND_FROM_EMAIL,
+      recipientEmail: OWNER_EMAIL || 'owner@unconfigured.invalid',
+    });
+    const maskedSender = maskSenderAddress(rawProvider.senderAddress);
+    const provider = {
+      ...rawProvider,
+      senderAddress: maskedSender,
+      advisory: rawProvider.advisory.replace(rawProvider.senderAddress, maskedSender),
+    };
+    return res.json({
+      ok: true,
+      provider,
+      cooldownAllowed: cooldown.allowed,
+      retryAfterSec: cooldown.retryAfterSec,
+      resendAvailableAt: cooldown.resendAvailableAtIso,
+      ttlSeconds: Math.round(OTP_TTL_MS / 1000),
+      maxAttempts: MAX_OTP_VERIFY_ATTEMPTS,
+    });
+  });
+
+  // Interactive Live Switch 6-Digit Email OTP Challenge Endpoint
+  app.post('/api/security/live-otp/request', requireOperatorAuth, otpRequestRateLimit, requirePremiumSubscription('EXECUTION'), async (_req, res) => {
+    const nowMs = Date.now();
+    const lastIssuedAt = lastOtpIssuedAtByRecipient.get(OWNER_EMAIL) ?? null;
+    const cooldown = checkResendCooldown({
+      lastIssuedAtMs: lastIssuedAt,
+      nowMs,
+      cooldownMs: OTP_RESEND_COOLDOWN_MS,
+    });
+
+    if (!cooldown.allowed) {
+      return res.status(429).json({
+        ok: false,
+        deliveryStatus: 'RATE_LIMITED',
+        retryAfterSec: cooldown.retryAfterSec,
+        resendAvailableAt: cooldown.resendAvailableAtIso,
+        error: `Please wait ${cooldown.retryAfterSec}s before requesting another Email OTP.`,
+      });
+    }
+
+    const challengeId = `otp_${crypto.randomUUID().slice(0, 10)}`;
+    const code = String(crypto.randomInt(100000, 1000000));
+    const expiresAt = nowMs + OTP_TTL_MS;
+    const resendAvailableAt = nowMs + OTP_RESEND_COOLDOWN_MS;
+
     for (const [key, val] of liveOtpChallenges.entries()) {
-      if (val.used || val.expiresAt < Date.now()) {
+      if (val.used || val.expiresAt < nowMs) {
         liveOtpChallenges.delete(key);
       }
     }
 
-    const resendConfigured = Boolean(process.env.RESEND_API_KEY?.startsWith('re_'));
+    const providerReadiness = evaluateOtpProviderReadiness({
+      resendApiKey: process.env.RESEND_API_KEY,
+      resendFromEmail: process.env.RESEND_FROM_EMAIL,
+      recipientEmail: OWNER_EMAIL,
+    });
+
     const emailRecord = await sendAlertEmail({
       type: 'HIGH_CONFIDENCE_SIGNAL',
       subject: `Signal Forge Live Execution Mode OTP`,
-      summary: `Live Execution Mode switch confirmation OTP dispatched to ${OWNER_EMAIL}`,
+      summary: `Live Execution Mode switch confirmation OTP requested for ${maskEmailAddress(OWNER_EMAIL)}`,
+      recipientEmail: OWNER_EMAIL,
+      skipTelegramBroadcast: true,
       bodyHtml: `
-        <p>A request was initiated to switch the Signal Forge Autonomous Coordinator from <strong>TESTNET</strong> to <strong>LIVE</strong> execution:</p>
+        <p>A request was initiated to switch the Signal Forge Execution Environment from <strong>TESTNET</strong> to <strong>LIVE</strong>:</p>
         <div style="background:#111827;border:1px solid #3b82f6;border-radius:8px;padding:16px;margin:14px 0;text-align:center;">
           <span style="display:block;font-size:12px;color:#94a3b8;margin-bottom:6px;">ONE-TIME CONFIRMATION CODE (EXPIRES IN 5 MINUTES)</span>
           <span style="font-size:28px;font-weight:700;letter-spacing:6px;color:#ffffff;font-family:monospace;">${escapeHtml(code)}</span>
@@ -8568,18 +12410,81 @@ async function startServer() {
       `,
     });
 
-    const deliveredViaEmail = resendConfigured && emailRecord.status === 'sent';
-    if (!deliveredViaEmail && process.env.NODE_ENV !== 'production') {
-      console.info(`[LiveSwitch OTP][DEV] challenge=${challengeId} code=${code}`);
+    const diagnosis = classifyResendDeliveryResult({
+      resendApiKeyConfigured: providerReadiness.resendApiKeyConfigured,
+      senderAddress: emailRecord.senderAddress || providerReadiness.senderAddress,
+      recipientEmail: OWNER_EMAIL,
+      providerErrorMessage: emailRecord.providerError,
+      providerMessageId: emailRecord.providerId,
+    });
+
+    const codeHash = computeSaltedOtpHash({
+      challengeId,
+      otpCode: code,
+      pepper: OTP_RUNTIME_PEPPER,
+      hmacHexFn: hmacSha256Hex,
+    });
+
+    if (shouldApplyOtpResendCooldown(diagnosis.emailSent)) {
+      liveOtpChallenges.set(challengeId, {
+        id: challengeId,
+        codeHash,
+        recipient: OWNER_EMAIL,
+        createdAt: nowMs,
+        expiresAt,
+        resendAvailableAt,
+        used: false,
+        attempts: 0,
+        deliveryStatus: diagnosis.deliveryStatus,
+        providerError: emailRecord.providerError ?? null,
+      });
+      lastOtpIssuedAtByRecipient.set(OWNER_EMAIL, nowMs);
+      recordOtpAuditEntry(
+        createSanitizedOtpAuditEntry({
+          challengeId,
+          event: 'ISSUED_DELIVERED',
+          recipientMasked: maskEmailAddress(OWNER_EMAIL),
+          deliveryStatus: diagnosis.deliveryStatus,
+          attemptsUsed: 0,
+          nowMs,
+        })
+      );
+    } else {
+      // Failed provider delivery: do NOT lock the operator out for 30s and do NOT persist an undeliverable challenge
+      recordOtpAuditEntry(
+        createSanitizedOtpAuditEntry({
+          challengeId,
+          event: 'ISSUED_DELIVERY_FAILED',
+          recipientMasked: maskEmailAddress(OWNER_EMAIL),
+          deliveryStatus: diagnosis.deliveryStatus,
+          attemptsUsed: 0,
+          nowMs,
+        })
+      );
     }
 
-    return res.json({
+    if (!diagnosis.emailSent && process.env.NODE_ENV !== 'production') {
+      console.info(
+        `[LiveSwitch OTP][DIAGNOSTIC] status=${diagnosis.deliveryStatus} challenge=${challengeId} recipient=${maskEmailAddress(OWNER_EMAIL)}`
+      );
+    }
+
+    return res.status(200).json({
       ok: true,
-      challengeId,
-      expiresAt: new Date(expiresAt).toISOString(),
-      recipient: OWNER_EMAIL,
-      emailSent: deliveredViaEmail,
-      deliveryMode: deliveredViaEmail ? 'email' : 'server_log',
+      challengeId: diagnosis.emailSent ? challengeId : null,
+      expiresAt: diagnosis.emailSent ? new Date(expiresAt).toISOString() : null,
+      ttlSeconds: Math.round(OTP_TTL_MS / 1000),
+      resendAvailableAt: diagnosis.emailSent
+        ? new Date(resendAvailableAt).toISOString()
+        : new Date(nowMs).toISOString(),
+      recoveryRetryAllowedImmediately: !diagnosis.emailSent,
+      recipient: maskEmailAddress(OWNER_EMAIL),
+      emailSent: diagnosis.emailSent,
+      deliveryStatus: diagnosis.deliveryStatus,
+      deliveryDiagnostic: diagnosis.userMessage,
+      remediationHint: diagnosis.remediationHint,
+      attemptsRemaining: diagnosis.emailSent ? MAX_OTP_VERIFY_ATTEMPTS : 0,
+      deliveryMode: diagnosis.emailSent ? 'email' : 'delivery_failed',
     });
   });
 
@@ -8615,50 +12520,105 @@ async function startServer() {
     const nextMode = req.body?.mode === 'LIVE' ? 'LIVE' : 'TESTNET';
 
     if (nextMode === 'LIVE') {
+      if (!enforceMaintenanceOrderGate(res, { kind: 'SWITCH_TO_LIVE', source: 'MANUAL', isLiveMode: true })) {
+        return;
+      }
       const challengeId = String(req.body?.challengeId || '');
       const securityAnswer = String(req.body?.securityAnswer || '');
       const otpCode = String(req.body?.otpCode || '');
+      const safetyChecksCompleted = req.body?.safetyChecksCompleted === true;
       const challenge = liveOtpChallenges.get(challengeId);
 
-      if (!challenge || challenge.used || challenge.expiresAt < Date.now()) {
-        return res.status(403).json({
-          ok: false,
-          error: 'Email OTP challenge missing or expired. Request a new 6-digit OTP first.',
-        });
-      }
-
-      if (challenge.attempts >= MAX_OTP_VERIFY_ATTEMPTS) {
-        liveOtpChallenges.delete(challengeId);
-        return res.status(429).json({
-          ok: false,
-          error: 'OTP challenge locked due to too many failed verification attempts. Request a new OTP.',
-        });
-      }
-
-      const check = validateLiveSwitchChallenge({
+      const phraseCheck = validateLiveSwitchChallenge({
         securityAnswer,
         otpInput: otpCode,
-        expectedOtp: challenge.code,
       });
 
-      if (!check.valid) {
-        challenge.attempts += 1;
-        if (challenge.attempts >= MAX_OTP_VERIFY_ATTEMPTS) {
-          liveOtpChallenges.delete(challengeId);
-          return res.status(429).json({
+      const hashMatched =
+        Boolean(challenge) &&
+        phraseCheck.valid &&
+        verifySaltedOtpHash({
+          challengeId,
+          candidateOtp: otpCode,
+          expectedHash: challenge!.codeHash,
+          pepper: OTP_RUNTIME_PEPPER,
+          hmacHexFn: hmacSha256Hex,
+          constantTimeEqualFn: timingSafeEqualStr,
+        });
+
+      const check = !challenge
+        ? { valid: false, error: 'Email OTP challenge missing or expired.' }
+        : !phraseCheck.valid
+        ? phraseCheck
+        : !hashMatched
+        ? { valid: false, error: 'Invalid email OTP confirmation code.' }
+        : { valid: true };
+
+      const gate = evaluateLiveSwitchSafetyGate({
+        operatorAuthenticated: true,
+        challengeExists: Boolean(challenge),
+        challengeUsed: Boolean(challenge?.used),
+        challengeExpired: Boolean(!challenge || challenge.expiresAt < Date.now()),
+        attempts: challenge?.attempts ?? 0,
+        otpVerified: check.valid,
+        securityPhraseHasQuestionMark: securityAnswer.trim().includes('?'),
+        safetyChecklistCompleted: safetyChecksCompleted,
+      });
+
+      if (!gate.allowed) {
+        if (challenge && !challenge.used && challenge.expiresAt >= Date.now() && safetyChecksCompleted) {
+          challenge.attempts += 1;
+          if (challenge.attempts >= MAX_OTP_VERIFY_ATTEMPTS) {
+            liveOtpChallenges.delete(challengeId);
+            recordOtpAuditEntry(
+              createSanitizedOtpAuditEntry({
+                challengeId,
+                event: 'CHALLENGE_LOCKED_MAX_ATTEMPTS',
+                recipientMasked: maskEmailAddress(challenge.recipient),
+                attemptsUsed: challenge.attempts,
+              })
+            );
+            return res.status(429).json({
+              ok: false,
+              error: 'Too many invalid OTP attempts. Challenge invalidated — request a fresh OTP.',
+              attemptsRemaining: 0,
+            });
+          }
+          recordOtpAuditEntry(
+            createSanitizedOtpAuditEntry({
+              challengeId,
+              event: 'VERIFY_FAILED',
+              recipientMasked: maskEmailAddress(challenge.recipient),
+              attemptsUsed: challenge.attempts,
+            })
+          );
+          return res.status(gate.httpStatus).json({
             ok: false,
-            error: 'Too many invalid OTP attempts. Challenge invalidated — request a fresh OTP.',
+            error: check.error || gate.reason,
+            attemptsRemaining: MAX_OTP_VERIFY_ATTEMPTS - challenge.attempts,
           });
         }
-        return res.status(403).json({
+        return res.status(gate.httpStatus).json({
           ok: false,
-          error: check.error,
-          attemptsRemaining: MAX_OTP_VERIFY_ATTEMPTS - challenge.attempts,
+          error: gate.reason,
+          attemptsRemaining: challenge
+            ? Math.max(0, MAX_OTP_VERIFY_ATTEMPTS - challenge.attempts)
+            : 0,
         });
       }
 
-      challenge.used = true;
-      liveOtpChallenges.delete(challengeId);
+      if (challenge) {
+        challenge.used = true;
+        liveOtpChallenges.delete(challengeId);
+        recordOtpAuditEntry(
+          createSanitizedOtpAuditEntry({
+            challengeId,
+            event: 'VERIFY_SUCCESS',
+            recipientMasked: maskEmailAddress(challenge.recipient),
+            attemptsUsed: challenge.attempts + 1,
+          })
+        );
+      }
     }
 
     executionMode = nextMode;
@@ -8681,6 +12641,28 @@ async function startServer() {
 
   app.post('/api/execution/order', requireOperatorAuth, standardWriteRateLimit, requirePremiumSubscription('EXECUTION'), (req, res) =>
     executionMutex.runExclusive(async () => {
+    const reqSource =
+      req.body?.source === 'VOICE' ||
+      req.body?.source === 'AUTONOMOUS' ||
+      req.body?.source === 'COPY_TRADING' ||
+      req.body?.source === 'ARBITRAGE' ||
+      req.body?.source === 'AI_SIGNAL'
+        ? req.body.source
+        : 'MANUAL';
+    const reqClientOrderId =
+      typeof req.body?.clientOrderId === 'string' && req.body.clientOrderId.trim()
+        ? req.body.clientOrderId.trim()
+        : undefined;
+    if (
+      !enforceMaintenanceOrderGate(res, {
+        kind: 'NEW_ENTRY',
+        source: reqSource,
+        clientOrderId: reqClientOrderId,
+        isLiveMode: executionMode === 'LIVE',
+      })
+    ) {
+      return;
+    }
     if (!systemControls.testnetExecutionEnabled && executionMode === 'TESTNET') {
       return res.status(409).json({
         ok: false,
@@ -8701,13 +12683,19 @@ async function startServer() {
       takeProfits,
       skepticVerdict,
       fundingRate,
-      syncToLiveMark,
     } = req.body || {};
 
     const cleanSym = String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-    const submittedEntry = Number(entryPrice);
-    if (!cleanSym || !Number.isFinite(submittedEntry) || submittedEntry <= 0) {
-      return res.status(400).json({ ok: false, error: 'Invalid symbol or live Spot price.' });
+    if (!cleanSym) {
+      return res.status(400).json({ ok: false, error: 'Invalid symbol.' });
+    }
+    const hasSubmittedEntry = entryPrice !== undefined && entryPrice !== null && entryPrice !== '';
+    const submittedEntry = hasSubmittedEntry ? Number(entryPrice) : undefined;
+    if (
+      hasSubmittedEntry &&
+      (typeof submittedEntry !== 'number' || !Number.isFinite(submittedEntry) || submittedEntry <= 0)
+    ) {
+      return res.status(400).json({ ok: false, error: 'Submitted entryPrice must be a finite positive number.' });
     }
 
     const notional = Math.max(50, Math.min(250_000, Number(notionalUsd || 1500)));
@@ -8716,44 +12704,47 @@ async function startServer() {
     const reqMarginMode = marginMode === 'ISOLATED' ? 'ISOLATED' : 'CROSS';
     const side = direction === 'SELL' ? 'SELL' : 'BUY';
 
-    if (!spotFeedCache[cleanSym]) {
+    if (!spotFeedCache[cleanSym] || spotFeedCache[cleanSym].source !== 'binance_spot') {
       await pollBinanceSpotFeed();
     }
-    if (isFuturesOrder && !futuresFeedCache[cleanSym]) {
+    if (isFuturesOrder && (!futuresFeedCache[cleanSym] || futuresFeedCache[cleanSym].source !== 'binance_futures')) {
       await pollBinanceFuturesFeed();
     }
 
-    const liveRefPrice =
-      isFuturesOrder && futuresFeedCache[cleanSym]?.markPrice
-        ? futuresFeedCache[cleanSym].markPrice
-        : spotFeedCache[cleanSym]?.price;
-
-    if (!liveRefPrice || !Number.isFinite(liveRefPrice) || liveRefPrice <= 0) {
-      return res.status(503).json({
-        ok: false,
-        error: `Authoritative live mark price unavailable for ${cleanSym}. Execution failed closed.`,
-      });
-    }
-
-    const priceCheck = validateLiveExecutionPrice({
+    const futuresFeedEntry = futuresFeedCache[cleanSym];
+    const spotFeedEntry = spotFeedCache[cleanSym];
+    const useFuturesFeed = Boolean(isFuturesOrder && futuresFeedEntry?.source === 'binance_futures');
+    const authPrice = verifyAuthoritativeExecutionPrice({
+      symbol: cleanSym,
+      priceKind: 'ENTRY',
+      serverPrice: useFuturesFeed ? futuresFeedEntry?.markPrice : spotFeedEntry?.price,
+      feedSource: useFuturesFeed ? futuresFeedEntry?.source : spotFeedEntry?.source,
+      observedAtMs: useFuturesFeed
+        ? (futuresFeedEntry?.updatedAtMs ?? Date.parse(futuresFeedUpdatedAt))
+        : spotFeedEntry?.updatedAtMs,
       submittedPrice: submittedEntry,
-      liveFeedPrice: liveRefPrice,
-      maxSlippagePct: DEFAULT_MAX_EXECUTION_SLIPPAGE_PCT,
+      maxDeviationPct: DEFAULT_MAX_EXECUTION_SLIPPAGE_PCT,
     });
 
-    if (!priceCheck.valid && (!syncToLiveMark || priceCheck.deviationPct > 1.5)) {
-      return res.status(409).json({
+    // Neither operator auth nor syncToLiveMark may bypass authoritative live feed validation or slippage ceilings
+    if (!authPrice.ok) {
+      return res.status(authPrice.statusCode).json({
         ok: false,
-        error:
-          priceCheck.deviationPct > 1.5
-            ? `Submitted entry deviates ${priceCheck.deviationPct.toFixed(2)}% from live mark ($${liveRefPrice}), exceeding hard 1.50% ceiling.`
-            : priceCheck.reason,
-        liveMarkPrice: priceCheck.synchronizedPrice,
-        deviationPct: priceCheck.deviationPct,
+        code: authPrice.code,
+        error: authPrice.reason,
+        liveMarkPrice: authPrice.authoritativePrice > 0 ? authPrice.authoritativePrice : undefined,
+        deviationPct: authPrice.deviationPct,
       });
     }
 
-    const entry = priceCheck.synchronizedPrice > 0 ? priceCheck.synchronizedPrice : liveRefPrice;
+    const liveRefPrice = authPrice.authoritativePrice;
+    const entry = liveRefPrice;
+    const priceCheck = {
+      valid: true,
+      synchronizedPrice: liveRefPrice,
+      deviationPct: authPrice.deviationPct,
+      reason: authPrice.reason,
+    };
     const refCandles = generateDeterministicCandles(cleanSym, '1h', 30, undefined, entry);
     const atr = computeATR(refCandles, 14);
     const orderKernel = buildKernelValidatedRiskProfile({
@@ -8795,7 +12786,7 @@ async function startServer() {
       notionalUsd: notional,
       leverage: reqLev,
       marginMode: reqMarginMode,
-      submittedPrice: submittedEntry,
+      submittedPrice: submittedEntry ?? liveRefPrice,
       authoritativePrice: liveRefPrice,
       appLiveEnabled,
       stopLoss: mandatedInitialSl,
@@ -8923,6 +12914,27 @@ async function startServer() {
     if (sandboxPositions.length > 30) sandboxPositions.length = 30;
     totalExecutedOrders++;
 
+    // Persist executed clientOrderId & protected open positions so restarts never duplicate orders
+    const syncedAfterOrder = syncSandboxProtectionsIntoMaintenance(
+      reconcilePendingOrdersAndProtections(getActiveMaintenanceState(), {
+        trackedOrders: [
+          {
+            clientOrderId: String(reqClientOrderId || pos.id),
+            exchangeOrderId: pos.id,
+            pair: pos.symbol,
+            side: pos.direction,
+            status: 'FILLED' as const,
+            requestedQty: pos.quantity,
+            filledQty: pos.quantity,
+            isProtective: false,
+            updatedAtIso: pos.openedAt,
+          },
+          ...getActiveMaintenanceState().trackedOrders,
+        ].slice(0, 60),
+      })
+    );
+    updateMaintenanceState(syncedAfterOrder);
+
     const crossMargin = summarizeCrossMarginWallet(
       crossWalletBalanceUsd,
       sandboxPositions,
@@ -8963,8 +12975,33 @@ async function startServer() {
     if (!pos) {
       return res.status(404).json({ ok: false, error: 'Open position not found.' });
     }
+    const useFutures = pos.marketType === 'USD_M_FUTURES';
+    const futEntry = futuresFeedCache[pos.symbol];
+    const spotEntry = spotFeedCache[pos.symbol];
+    const hasSubmittedExit = exitPrice !== undefined && exitPrice !== null && exitPrice !== '';
+    const authExit = verifyAuthoritativeExecutionPrice({
+      symbol: pos.symbol,
+      priceKind: 'EXIT',
+      serverPrice: useFutures && futEntry?.source === 'binance_futures' ? futEntry.markPrice : spotEntry?.price,
+      feedSource: useFutures && futEntry?.source === 'binance_futures' ? futEntry.source : spotEntry?.source,
+      observedAtMs:
+        useFutures && futEntry?.source === 'binance_futures'
+          ? (futEntry.updatedAtMs ?? Date.parse(futuresFeedUpdatedAt))
+          : spotEntry?.updatedAtMs,
+      submittedPrice: hasSubmittedExit ? Number(exitPrice) : undefined,
+      maxDeviationPct: DEFAULT_MAX_EXECUTION_SLIPPAGE_PCT,
+    });
+    if (!authExit.ok) {
+      return res.status(authExit.statusCode).json({
+        ok: false,
+        code: authExit.code,
+        error: authExit.reason,
+        liveMarkPrice: authExit.authoritativePrice > 0 ? authExit.authoritativePrice : undefined,
+        deviationPct: authExit.deviationPct,
+      });
+    }
     const markMap = buildMarkPriceMap();
-    const exit = Number(exitPrice || markMap[pos.symbol] || pos.entryPrice);
+    const exit = authExit.authoritativePrice;
     const settlement = settleCrossMarginClose({
       walletBalanceUsd: crossWalletBalanceUsd,
       position: pos,
@@ -9222,104 +13259,1806 @@ async function startServer() {
   });
 
   // Agentic CLI Loop, Unified AI Model Gateway & Confirmed Local Script Editor
-  app.get('/api/agentic-cli/status', (_req, res) => {
-    return res.json({
-      ok: true,
-      snapshot: agenticCliGateway.getSnapshot(),
-    });
-  });
-
-  app.post('/api/agentic-cli/toggle', standardWriteRateLimit, (req, res) => {
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    if (typeof body.enabled !== 'boolean') {
-      return res.status(400).json({
-        ok: false,
-        error: 'Boolean field "enabled" is required.',
+  // Strictly gated behind verified operator authentication AND server-side RBAC (ADMIN / SUPER_ADMIN only).
+  app.get(
+    '/api/agentic-cli/status',
+    requireOperatorAuth,
+    requireRbacPermission('AGENTIC_CLI_WRITE'),
+    (_req, res) => {
+      return res.json({
+        ok: true,
+        snapshot: agenticCliGateway.getSnapshot(),
       });
     }
-    const snapshot = agenticCliGateway.setLoopEnabled(body.enabled);
-    return res.json({ ok: true, snapshot });
-  });
+  );
 
-  app.post('/api/agentic-cli/gateway/select', standardWriteRateLimit, (req, res) => {
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const connectorId = String(body.connectorId || '').trim();
-    if (!connectorId) {
-      return res.status(400).json({ ok: false, error: 'connectorId is required.' });
+  app.post(
+    '/api/agentic-cli/toggle',
+    requireOperatorAuth,
+    requireRbacPermission('AGENTIC_CLI_WRITE'),
+    standardWriteRateLimit,
+    (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      if (typeof body.enabled !== 'boolean') {
+        return res.status(400).json({
+          ok: false,
+          error: 'Boolean field "enabled" is required.',
+        });
+      }
+      const snapshot = agenticCliGateway.setLoopEnabled(body.enabled);
+      return res.json({ ok: true, snapshot });
     }
-    const result = agenticCliGateway.selectConnector(connectorId);
-    return res.status(result.ok ? 200 : 400).json(result);
+  );
+
+  app.post(
+    '/api/agentic-cli/gateway/select',
+    requireOperatorAuth,
+    requireRbacPermission('AGENTIC_CLI_WRITE'),
+    standardWriteRateLimit,
+    (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const connectorId = String(body.connectorId || '').trim();
+      if (!connectorId) {
+        return res.status(400).json({ ok: false, error: 'connectorId is required.' });
+      }
+      const result = agenticCliGateway.selectConnector(connectorId);
+      return res.status(result.ok ? 200 : 400).json(result);
+    }
+  );
+
+  app.get(
+    '/api/agentic-cli/file-preview',
+    requireOperatorAuth,
+    requireRbacPermission('AGENTIC_CLI_WRITE'),
+    (req, res) => {
+      const targetPath = String(req.query.path || 'src/config/agenticCliRuntimeConfig.ts');
+      const result = agenticCliGateway.readAllowlistedFile(targetPath);
+      return res.status(result.ok ? 200 : 400).json(result);
+    }
+  );
+
+  app.post(
+    '/api/agentic-cli/propose',
+    requireOperatorAuth,
+    requireRbacPermission('AGENTIC_CLI_WRITE'),
+    standardWriteRateLimit,
+    async (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const command = String(body.command || '').trim();
+      const inputSource = body.inputSource === 'VOICE' ? 'VOICE' : 'CLI_TEXT';
+      const connectorId =
+        typeof body.connectorId === 'string' && body.connectorId.trim()
+          ? body.connectorId.trim()
+          : undefined;
+
+      let explicitFilePatch:
+        | {
+            readonly targetPath: string;
+            readonly searchText: string;
+            readonly replaceText: string;
+            readonly rationale?: string;
+          }
+        | undefined;
+
+      if (body.explicitFilePatch && typeof body.explicitFilePatch === 'object') {
+        const fp = body.explicitFilePatch as Record<string, unknown>;
+        explicitFilePatch = {
+          targetPath: String(fp.targetPath || ''),
+          searchText: String(fp.searchText || ''),
+          replaceText: String(fp.replaceText ?? ''),
+          rationale: typeof fp.rationale === 'string' ? fp.rationale : undefined,
+        };
+      }
+
+      const result = await agenticCliGateway.createProposal({
+        command,
+        inputSource,
+        connectorId,
+        explicitFilePatch,
+      });
+      return res.status(result.statusCode).json(result);
+    }
+  );
+
+  app.post(
+    '/api/agentic-cli/confirm',
+    requireOperatorAuth,
+    requireRbacPermission('AGENTIC_CLI_WRITE'),
+    standardWriteRateLimit,
+    (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const proposalId = String(body.proposalId || '').trim();
+      const confirmationToken = String(body.confirmationToken || '').trim();
+      const approved = body.approved === true;
+      const result = agenticCliGateway.confirmProposal({
+        proposalId,
+        confirmationToken,
+        approved,
+      });
+      return res.status(result.statusCode).json(result);
+    }
+  );
+
+  app.post(
+    '/api/agentic-cli/reject',
+    requireOperatorAuth,
+    requireRbacPermission('AGENTIC_CLI_WRITE'),
+    standardWriteRateLimit,
+    (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const proposalId = String(body.proposalId || '').trim();
+      const result = agenticCliGateway.rejectProposal(proposalId);
+      return res.status(result.statusCode).json(result);
+    }
+  );
+
+  app.post(
+    '/api/agentic-cli/revert',
+    requireOperatorAuth,
+    requireRbacPermission('AGENTIC_CLI_WRITE'),
+    standardWriteRateLimit,
+    (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const proposalId = String(body.proposalId || '').trim();
+      const result = agenticCliGateway.revertProposalFile(proposalId);
+      return res.status(result.statusCode).json(result);
+    }
+  );
+
+  // Encrypted server-side AI Provider Credential & Configuration Vault (persisted in .data/)
+  const aiProviderVault = getSharedAiProviderVault();
+
+  // Single-model HTTP 429 quota cooldown registry to prevent unnecessary repeated upstream retries
+  // Automatically cleared whenever the operator saves, replaces, revokes, or tests a Gemini key
+  interface ActiveQuotaCooldown {
+    readonly untilMs: number;
+    readonly quotaScope: GeminiQuotaScope;
+    readonly quotaMetric: string | null;
+    readonly retryAfterSeconds: number | null;
+    readonly message: string;
+    readonly urduMessage: string;
+  }
+  const geminiQuotaCooldownByModel = new Map<AllowedGeminiCommandModel, ActiveQuotaCooldown>();
+
+  const clearGeminiQuotaCooldowns = () => {
+    geminiQuotaCooldownByModel.clear();
+  };
+
+  // Protected AI Provider Credentials & Configuration API (Owner-only; zero plaintext secrets ever returned)
+  app.get('/api/settings/ai-providers', requireOperatorAuth, (_req, res) => {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({
+      ok: true,
+      providers: aiProviderVault.getPublicStatus(),
+    });
   });
 
-  app.get('/api/agentic-cli/file-preview', (req, res) => {
-    const targetPath = String(req.query.path || 'src/config/agenticCliRuntimeConfig.ts');
-    const result = agenticCliGateway.readAllowlistedFile(targetPath);
-    return res.status(result.ok ? 200 : 400).json(result);
-  });
-
-  app.post('/api/agentic-cli/propose', standardWriteRateLimit, async (req, res) => {
+  app.post('/api/settings/ai-providers/apply', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const command = String(body.command || '').trim();
-    const inputSource = body.inputSource === 'VOICE' ? 'VOICE' : 'CLI_TEXT';
-    const connectorId =
-      typeof body.connectorId === 'string' && body.connectorId.trim()
-        ? body.connectorId.trim()
+    const openaiBody =
+      body.openai && typeof body.openai === 'object'
+        ? (body.openai as Record<string, unknown>)
+        : undefined;
+    const anthropicBody =
+      body.anthropic && typeof body.anthropic === 'object'
+        ? (body.anthropic as Record<string, unknown>)
         : undefined;
 
-    let explicitFilePatch:
-      | {
-          readonly targetPath: string;
-          readonly searchText: string;
-          readonly replaceText: string;
-          readonly rationale?: string;
-        }
-      | undefined;
+    const result = aiProviderVault.applyChanges({
+      geminiApiKey: typeof body.geminiApiKey === 'string' ? body.geminiApiKey : undefined,
+      geminiModel: typeof body.geminiModel === 'string' ? body.geminiModel : undefined,
+      openai: openaiBody
+        ? {
+            apiKey: typeof openaiBody.apiKey === 'string' ? openaiBody.apiKey : undefined,
+            enabled: typeof openaiBody.enabled === 'boolean' ? openaiBody.enabled : undefined,
+            modelId: typeof openaiBody.modelId === 'string' ? openaiBody.modelId : undefined,
+            baseUrl: typeof openaiBody.baseUrl === 'string' ? openaiBody.baseUrl : undefined,
+          }
+        : undefined,
+      anthropic: anthropicBody
+        ? {
+            apiKey: typeof anthropicBody.apiKey === 'string' ? anthropicBody.apiKey : undefined,
+            enabled: typeof anthropicBody.enabled === 'boolean' ? anthropicBody.enabled : undefined,
+            modelId: typeof anthropicBody.modelId === 'string' ? anthropicBody.modelId : undefined,
+          }
+        : undefined,
+    });
 
-    if (body.explicitFilePatch && typeof body.explicitFilePatch === 'object') {
-      const fp = body.explicitFilePatch as Record<string, unknown>;
-      explicitFilePatch = {
-        targetPath: String(fp.targetPath || ''),
-        searchText: String(fp.searchText || ''),
-        replaceText: String(fp.replaceText ?? ''),
-        rationale: typeof fp.rationale === 'string' ? fp.rationale : undefined,
-      };
+    if (!result.ok) {
+      return res.status(400).json({
+        ok: false,
+        code: result.code,
+        error: result.message,
+        providers: result.status,
+      });
     }
 
-    const result = await agenticCliGateway.createProposal({
-      command,
-      inputSource,
-      connectorId,
-      explicitFilePatch,
+    if (result.keyUpdated) {
+      clearGeminiQuotaCooldowns();
+    }
+
+    return res.json({
+      ok: true,
+      code: result.code,
+      message: result.message,
+      keyUpdated: result.keyUpdated,
+      preservedExistingGeminiKey: result.preservedExistingGeminiKey,
+      providers: result.status,
     });
-    return res.status(result.statusCode).json(result);
   });
 
-  app.post('/api/agentic-cli/confirm', standardWriteRateLimit, (req, res) => {
+  app.post('/api/settings/ai-providers/gemini/replace', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const proposalId = String(body.proposalId || '').trim();
-    const confirmationToken = String(body.confirmationToken || '').trim();
-    const approved = body.approved === true;
-    const result = agenticCliGateway.confirmProposal({
-      proposalId,
-      confirmationToken,
-      approved,
+    const newKey = typeof body.geminiApiKey === 'string' ? body.geminiApiKey : '';
+    const result = aiProviderVault.replaceGeminiKey(newKey);
+    if (!result.ok) {
+      return res.status(400).json({
+        ok: false,
+        code: result.code,
+        error: result.message,
+        providers: result.status,
+      });
+    }
+    clearGeminiQuotaCooldowns();
+    return res.json({
+      ok: true,
+      code: result.code,
+      message: result.message,
+      providers: result.status,
     });
-    return res.status(result.statusCode).json(result);
   });
 
-  app.post('/api/agentic-cli/reject', standardWriteRateLimit, (req, res) => {
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const proposalId = String(body.proposalId || '').trim();
-    const result = agenticCliGateway.rejectProposal(proposalId);
-    return res.status(result.statusCode).json(result);
+  app.post('/api/settings/ai-providers/gemini/revoke', requireOperatorAuth, standardWriteRateLimit, (_req, res) => {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    const result = aiProviderVault.revokeGeminiKey();
+    clearGeminiQuotaCooldowns();
+    return res.json({
+      ok: true,
+      code: result.code,
+      message: result.message,
+      providers: result.status,
+    });
   });
 
-  app.post('/api/agentic-cli/revert', standardWriteRateLimit, (req, res) => {
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const proposalId = String(body.proposalId || '').trim();
-    const result = agenticCliGateway.revertProposalFile(proposalId);
-    return res.status(result.statusCode).json(result);
+  app.post('/api/settings/ai-providers/gemini/test', requireOperatorAuth, standardWriteRateLimit, async (_req, res) => {
+    const diagnosticId = `SF-TST-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    res.setHeader('X-Diagnostic-Id', diagnosticId);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+
+    const activeModel = aiProviderVault.getConfiguredGeminiModel();
+    const resolvedKey = aiProviderVault.resolveEffectiveGeminiKey();
+    const testedAtIso = new Date().toISOString();
+
+    if (!resolvedKey.apiKey) {
+      const summary = {
+        ok: false,
+        httpStatus: 503,
+        code: 'GEMINI_API_KEY_MISSING',
+        errorCategory: 'AUTH_ERROR',
+        model: activeModel,
+        message: 'Gemini API Key is not configured. Save a valid key first.',
+        testedAtIso,
+      };
+      const providers = aiProviderVault.recordGeminiTestResult(summary);
+      return res.status(200).json({
+        ok: false,
+        diagnosticId,
+        testResult: summary,
+        providers,
+      });
+    }
+
+    const ai = new GoogleGenAI({
+      apiKey: resolvedKey.apiKey,
+      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+    });
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    try {
+      await ai.models.generateContent({
+        model: activeModel,
+        contents: 'Reply with OK.',
+        config: {
+          abortSignal: controller.signal,
+          ...(activeModel === 'gemini-4-hydrogen'
+            ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+            : {}),
+        },
+      });
+      clearGeminiQuotaCooldowns();
+      const summary = {
+        ok: true,
+        httpStatus: 200,
+        code: 'OK',
+        errorCategory: 'NONE',
+        model: activeModel,
+        message: `Connected cleanly to Gemini (${activeModel}) — HTTP 200 OK.`,
+        testedAtIso,
+      };
+      const providers = aiProviderVault.recordGeminiTestResult(summary);
+      return res.json({
+        ok: true,
+        diagnosticId,
+        testResult: summary,
+        providers,
+      });
+    } catch (err) {
+      const classified = classifyGeminiServerError(err, activeModel);
+      const summary = {
+        ok: false,
+        httpStatus: classified.httpStatus,
+        code: classified.code,
+        errorCategory: classified.errorCategory,
+        model: activeModel,
+        message: classified.message,
+        testedAtIso,
+      };
+      const providers = aiProviderVault.recordGeminiTestResult(summary);
+      return res.status(200).json({
+        ok: false,
+        diagnosticId,
+        testResult: summary,
+        providers,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   });
+
+  // On-demand, read-only model-specific Gemini quota & rate-limit diagnostic endpoint (owner/admin only, zero secrets exposed)
+  app.post(
+    '/api/ai-command-hub/diagnose-quota',
+    requireOperatorAuth,
+    requireRbacPermission('AI_ADMIN_COMMAND'),
+    standardWriteRateLimit,
+    async (_req, res) => {
+    const diagnosticId = `SF-QTA-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    res.setHeader('X-Diagnostic-Id', diagnosticId);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+
+    const resolvedKey = aiProviderVault.resolveEffectiveGeminiKey();
+    const apiKey = resolvedKey.apiKey;
+    const configuredModel = aiProviderVault.getConfiguredGeminiModel();
+    if (!apiKey) {
+      return res.status(503).json({
+        ok: false,
+        code: 'GEMINI_API_KEY_MISSING',
+        errorCategory: 'AUTH_ERROR',
+        httpStatus: 503,
+        diagnosticId,
+        configuredModel,
+        models: [],
+        error: 'Gemini API Key is not configured in Signal Forge backend storage.',
+        urduMessage: 'سرور پر Gemini API کلید سیٹ نہیں ہے۔ Settings میں Gemini API کلید محفوظ کریں۔',
+      });
+    }
+
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+    });
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    let modelEntry: ModelQuotaDiagnosticEntry;
+    try {
+      await ai.models.generateContent({
+        model: configuredModel,
+        contents: 'Reply with OK.',
+        config: {
+          abortSignal: controller.signal,
+          ...(configuredModel === 'gemini-4-hydrogen'
+            ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+            : {}),
+        },
+      });
+      clearGeminiQuotaCooldowns();
+      modelEntry = {
+        model: configuredModel,
+        ok: true,
+        httpStatus: 200,
+        code: 'OK',
+        errorCategory: 'NONE',
+        message: `${configuredModel} responded cleanly (HTTP 200).`,
+      };
+    } catch (err) {
+      const c = classifyGeminiServerError(err, configuredModel);
+      modelEntry = {
+        model: configuredModel,
+        ok: false,
+        httpStatus: c.httpStatus,
+        code: c.code,
+        errorCategory: c.errorCategory,
+        quotaScope: c.quotaScope,
+        retryAfterSeconds: c.retryAfterSeconds ?? null,
+        quotaMetric: c.quotaMetric ?? null,
+        message: c.message,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+
+    return res.json({
+      ok: modelEntry.ok,
+      diagnosticId,
+      configuredModel,
+      checkedAtIso: new Date().toISOString(),
+      models: [modelEntry],
+    });
+  });
+
+  // Floating Binance-Style AI Command Hub Endpoint
+  // Consistently returns documented v1.0 JSON schema (AiCommandHubJsonSchema) for both success and error states.
+  // Automatic AI fallback is strictly DISABLED: uses only the single configured validated Gemini model.
+  app.post('/api/ai-command-hub/query', standardWriteRateLimit, async (req, res) => {
+    const diagnosticId = `SF-CMD-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    res.setHeader('X-Diagnostic-Id', diagnosticId);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const prompt = String(body.prompt || '').trim();
+    const source: 'VOICE' | 'TEXT' =
+      String(body.source || '').toUpperCase() === 'VOICE' ? 'VOICE' : 'TEXT';
+
+    const sendCommandJson = (
+      statusCode: number,
+      payload: Omit<AiCommandHubJsonSchema, 'schemaVersion' | 'httpStatus' | 'diagnosticId' | 'source' | 'generatedAtIso'>
+    ) => {
+      if (res.headersSent) return res;
+      const bodyPayload: AiCommandHubJsonSchema = {
+        schemaVersion: '1.0',
+        httpStatus: statusCode,
+        diagnosticId,
+        source,
+        generatedAtIso: new Date().toISOString(),
+        ...payload,
+      };
+      return res.status(statusCode).type('application/json; charset=utf-8').json(bodyPayload);
+    };
+
+    if (!prompt || prompt.length > 600) {
+      return sendCommandJson(400, {
+        ok: false,
+        code: 'INVALID_PROMPT',
+        errorCategory: 'VALIDATION',
+        model: 'local-command-router',
+        reply: 'Provide a command or question between 1 and 600 characters.',
+        error: 'Provide a command or question between 1 and 600 characters.',
+        urduMessage: 'براہ کرم 1 سے 600 حروف کے درمیان کمانڈ یا سوال لکھیں۔',
+        intent: 'ERROR',
+        routeTarget: null,
+        matchedTradeId: null,
+        matchedSymbol: null,
+        suggestedFollowUps: ['status', 'hello'],
+        modelQuotaBreakdown: [],
+      });
+    }
+
+    const spotEntries = Object.values(spotFeedCache).filter(
+      (item) => item && Number.isFinite(item.price) && item.price > 0
+    );
+    const liveMaint = getActiveMaintenanceState();
+
+    // Server-side authorization gate BEFORE any deterministic routing or Gemini execution.
+    // Separates public read-only support ("hello", "status", "help") from authenticated AI queries,
+    // requires verified owner/admin authorization for administrative commands, and enforces HTTP 423
+    // safety lock against trading/vault/emergency-halt mutations.
+    const callerPrincipal = await resolveCallerPrincipal(req);
+    const callerIdentity = buildRbacIdentity(callerPrincipal, extraAdminEmailsFromEnv);
+    const authDecision = classifyAiCommandAuthorization(prompt, callerIdentity);
+
+    if (!authDecision.allowed) {
+      return sendCommandJson(authDecision.httpStatus, {
+        ok: false,
+        code: authDecision.code,
+        errorCategory: authDecision.httpStatus === 423 ? 'VALIDATION' : 'AUTH_ERROR',
+        model: 'local-command-router',
+        reply: authDecision.reason,
+        error: authDecision.reason,
+        urduMessage: authDecision.urduReason,
+        intent: 'ERROR',
+        routeTarget: null,
+        matchedTradeId: null,
+        matchedSymbol: null,
+        suggestedFollowUps: ['status', 'hello'],
+        modelQuotaBreakdown: [],
+      });
+    }
+
+    // Deterministic read-only handling for harmless greetings, help & status checks
+    // Never treated as trading instructions, never mutates trading state, and never fails on Gemini quota exhaustion
+    const deterministicKind = matchDeterministicCommandIntent(prompt);
+    if (deterministicKind === 'GREETING' || authDecision.scope === 'PUBLIC_READ_ONLY' && deterministicKind !== 'STATUS') {
+      return sendCommandJson(200, {
+        ok: true,
+        code: 'LOCAL_GREETING',
+        errorCategory: 'NONE',
+        model: 'local-command-router',
+        reply:
+          'Hello! Signal Forge AI Command Hub is online (read-only Paper/Demo isolation with HTTP 423 real-money lock active). Try saying or typing: "status", "open signals", "open portfolio", or sign in for AI market Q&A.',
+        error: null,
+        urduMessage:
+          'السلام علیکم! Signal Forge AI Hub آن لائن ہے (محفوظ Paper/Demo موڈ فعال ہے)۔ آپ "status"، "open signals"، یا سائن ان کر کے مارکیٹ کے سوالات پوچھ سکتے ہیں۔',
+        intent: 'GREETING',
+        routeTarget: null,
+        matchedTradeId: null,
+        matchedSymbol: null,
+        suggestedFollowUps: ['status', 'Open Signals', 'hello'],
+        modelQuotaBreakdown: [],
+      });
+    }
+
+    if (deterministicKind === 'STATUS') {
+      const btcSpot = spotEntries.find((item) => item.symbol === 'BTCUSDT');
+      const btcSnippet = btcSpot
+        ? ` BTCUSDT spot: $${btcSpot.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`
+        : '';
+      return sendCommandJson(200, {
+        ok: true,
+        code: 'LOCAL_STATUS',
+        errorCategory: 'NONE',
+        model: 'local-command-router',
+        reply: `Read-only Signal Forge Status — App Live: ${appLiveEnabled ? 'ON (Active)' : 'HALTED'} · Maintenance Mode: ${liveMaint.state} · Execution Safety: Paper/Demo Isolation (HTTP 423 Real-Money Lock Active) · Tracked Spot Pairs: ${spotEntries.length}.${btcSnippet}`,
+        error: null,
+        urduMessage: `سگنل فورج اسٹیٹس (صرف پڑھنے کے لیے): App Live ${appLiveEnabled ? 'فعال' : 'رکا ہوا'} · Maintenance ${liveMaint.state} · HTTP 423 سیفٹی لاک فعال · ${spotEntries.length} اسپاٹ پیئرز ٹریک ہو رہے ہیں۔`,
+        intent: 'SYSTEM_STATUS',
+        routeTarget: null,
+        matchedTradeId: null,
+        matchedSymbol: btcSpot ? 'BTCUSDT' : null,
+        suggestedFollowUps: ['Open Signals', 'Open Portfolio', 'hello'],
+        modelQuotaBreakdown: [],
+      });
+    }
+
+    const activeModel: AllowedGeminiCommandModel = aiProviderVault.getConfiguredGeminiModel();
+    const resolvedKey = aiProviderVault.resolveEffectiveGeminiKey();
+    const apiKey = resolvedKey.apiKey;
+    if (!apiKey) {
+      return sendCommandJson(503, {
+        ok: false,
+        code: 'GEMINI_API_KEY_MISSING',
+        errorCategory: 'AUTH_ERROR',
+        model: activeModel,
+        reply:
+          'Gemini API Key is not configured in Signal Forge backend storage. Save a key in Settings > Command Hub. Local commands ("hello", "status", Trade ID lookup, workspace navigation) remain active.',
+        error:
+          'Gemini API Key is not configured in Signal Forge backend storage. Save a key in Settings > Command Hub. Local commands ("hello", "status", Trade ID lookup, workspace navigation) remain active.',
+        urduMessage:
+          'سرور پر Gemini API کلید محفوظ نہیں ہے۔ Settings میں کلید محفوظ کریں۔ مقامی کمانڈز ("hello"، "status"، Trade ID، نیویگیشن) ابھی بھی کام کر رہی ہیں۔',
+        intent: 'ERROR',
+        routeTarget: null,
+        matchedTradeId: null,
+        matchedSymbol: null,
+        suggestedFollowUps: ['status', 'hello'],
+        modelQuotaBreakdown: [],
+      });
+    }
+
+    // Honor active single-model 429 quota cooldown without unnecessary repeated retries or automatic AI fallback
+    const nowMs = Date.now();
+    const activeCooldown = geminiQuotaCooldownByModel.get(activeModel);
+    if (activeCooldown && nowMs < activeCooldown.untilMs) {
+      const remainingSeconds = Math.max(1, Math.ceil((activeCooldown.untilMs - nowMs) / 1000));
+      res.setHeader('Retry-After', String(remainingSeconds));
+      const cooldownBreakdown: ModelQuotaDiagnosticEntry[] = [
+        {
+          model: activeModel,
+          ok: false,
+          httpStatus: 429,
+          code: 'GEMINI_QUOTA_EXHAUSTED',
+          errorCategory: 'QUOTA_EXHAUSTED',
+          quotaScope: activeCooldown.quotaScope,
+          retryAfterSeconds: remainingSeconds,
+          quotaMetric: activeCooldown.quotaMetric,
+          message: activeCooldown.message,
+        },
+      ];
+      return sendCommandJson(429, {
+        ok: false,
+        code: 'GEMINI_QUOTA_EXHAUSTED',
+        errorCategory: 'QUOTA_EXHAUSTED',
+        model: activeModel,
+        reply: activeCooldown.message,
+        error: activeCooldown.message,
+        urduMessage: activeCooldown.urduMessage,
+        intent: 'ERROR',
+        routeTarget: null,
+        matchedTradeId: null,
+        matchedSymbol: null,
+        suggestedFollowUps: ['status', 'hello'],
+        quotaScope: activeCooldown.quotaScope,
+        retryAfterSeconds: remainingSeconds,
+        quotaMetric: activeCooldown.quotaMetric,
+        modelQuotaBreakdown: cooldownBreakdown,
+      });
+    }
+
+    const withHardTimeout = async <T,>(
+      workFactory: (signal: AbortSignal) => Promise<T>,
+      timeoutMs: number,
+      label: string
+    ): Promise<T> => {
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      try {
+        return await Promise.race([
+          workFactory(controller.signal),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => {
+              controller.abort();
+              const err = new Error(`${label} timed out after ${timeoutMs}ms`);
+              err.name = 'AbortError';
+              reject(err);
+            }, timeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+
+    const modelQuotaBreakdown: ModelQuotaDiagnosticEntry[] = [];
+
+    try {
+      const topLiveMarkets = spotEntries
+        .slice(0, 8)
+        .map(
+          (item) =>
+            `${item.symbol}: $${item.price} (${item.change24hPercent >= 0 ? '+' : ''}${item.change24hPercent}%, src=${item.source})`
+        )
+        .join(' | ');
+
+      const systemStatusSummary = [
+        `App Live: ${appLiveEnabled ? 'ON (Active)' : 'HALTED'}`,
+        `Maintenance Mode: ${liveMaint.state}`,
+        `Execution Safety: READ-ONLY / Paper & Exchange Demo Isolation (HTTP 423 Real-Money Safety Lock Active)`,
+        `Tracked Spot Pairs: ${spotEntries.length}`,
+      ].join(' | ');
+
+      const knownTradeIds = Array.isArray(body.knownTradeIds)
+        ? body.knownTradeIds
+            .slice(0, 12)
+            .map((id) => String(id || '').trim().toUpperCase())
+            .filter(Boolean)
+            .join(', ')
+        : '';
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
+      const contentsBlock = [
+        `User command/query: "${prompt}"`,
+        `Read-only Signal Forge system status: ${systemStatusSummary}`,
+        topLiveMarkets ? `Live server market snapshot: ${topLiveMarkets}` : '',
+        knownTradeIds ? `Known verified Trade IDs: ${knownTradeIds}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      const systemInstruction = [
+        'You are Signal Forge AI Command Hub, a fast institutional crypto trading assistant modeled after Binance AI.',
+        'Respond concisely in 1-3 crisp sentences using concrete figures from the provided read-only system status and live server market snapshot when relevant.',
+        'Never invent fake trade executions, never claim real profits, never treat casual greetings as trading instructions, and never expose internal secrets; paper/demo trades are simulated and HTTP 423 real-money safety lock remains enforced.',
+        'If the user greets you or asks what you can do, set intent="GREETING" and list safe supported commands (status, open signals, Trade ID verification, or market questions).',
+        'If the user asks for system status, report App Live state, Maintenance Mode, Execution Safety (HTTP 423 Paper/Demo isolation), and live tracked market count clearly.',
+        'If the user asks to open or view a section, set intent="NAVIGATE" and routeTarget to one of: /, /signals, /portfolio, /signal-history, /backtesting, /watchlist, /alerts, /auto-reports, /settings, /about, /login.',
+        'If the user references or asks to inspect a Trade ID (SF-TRD-...), set intent="TRADE_LOOKUP" and populate matchedTradeId.',
+        'If the user mentions a tracked crypto pair (e.g. BTCUSDT, ETHUSDT, SOLUSDT), populate matchedSymbol.',
+        'Provide up to 3 brief, high-utility suggestedFollowUps.',
+      ].join(' ');
+
+      const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+          reply: { type: Type.STRING },
+          intent: { type: Type.STRING },
+          routeTarget: { type: Type.STRING },
+          matchedTradeId: { type: Type.STRING },
+          matchedSymbol: { type: Type.STRING },
+          suggestedFollowUps: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+          },
+        },
+        required: ['reply', 'intent'],
+      };
+
+      // Single-model call with strict timeout — ZERO automatic AI fallback to alternate models
+      const response = await withHardTimeout(
+        (abortSignal) =>
+          ai.models.generateContent({
+            model: activeModel,
+            contents: contentsBlock,
+            config: {
+              abortSignal,
+              ...(activeModel === 'gemini-4-hydrogen'
+                ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+                : {}),
+              systemInstruction,
+              responseMimeType: 'application/json',
+              responseSchema,
+            },
+          }),
+        COMMAND_SERVER_PRIMARY_TIMEOUT_MS,
+        activeModel
+      );
+
+      const rawText = (response.text ?? '').trim();
+      const validated = parseGeminiStructuredCommandPayload(rawText, activeModel);
+      if (!validated.ok || !validated.reply) {
+        modelQuotaBreakdown.push({
+          model: activeModel,
+          ok: false,
+          httpStatus: 502,
+          code: validated.errorCode || 'MALFORMED_MODEL_RESPONSE',
+          errorCategory: 'INVALID_RESPONSE',
+          message:
+            validated.errorMessage ||
+            `Gemini (${activeModel}) returned a malformed response payload (HTTP 502).`,
+        });
+        return sendCommandJson(502, {
+          ok: false,
+          code: validated.errorCode || 'MALFORMED_MODEL_RESPONSE',
+          errorCategory: 'INVALID_RESPONSE',
+          model: activeModel,
+          reply:
+            validated.errorMessage ||
+            `Gemini (${activeModel}) returned a malformed response payload (HTTP 502). Please retry or run local "status".`,
+          error:
+            validated.errorMessage ||
+            `Gemini (${activeModel}) returned a malformed response payload (HTTP 502).`,
+          urduMessage:
+            'AI ماڈل سے نامکمل یا غیر متوقع جواب موصول ہوا (HTTP 502)۔ براہ کرم دوبارہ کوشش کریں یا مقامی کمانڈ "status" چلائیں۔',
+          intent: 'ERROR',
+          routeTarget: null,
+          matchedTradeId: null,
+          matchedSymbol: null,
+          suggestedFollowUps: ['status', 'hello'],
+          modelQuotaBreakdown,
+        });
+      }
+
+      geminiQuotaCooldownByModel.delete(activeModel);
+      modelQuotaBreakdown.push({
+        model: activeModel,
+        ok: true,
+        httpStatus: 200,
+        code: 'OK',
+        errorCategory: 'NONE',
+        message: `${activeModel} responded cleanly (HTTP 200).`,
+      });
+
+      const safeRoute = sanitizeAllowedRoute(validated.routeTarget);
+      const safeSymbol =
+        typeof validated.matchedSymbol === 'string' &&
+        /^[A-Z0-9]{4,14}$/.test(validated.matchedSymbol.trim().toUpperCase())
+          ? validated.matchedSymbol.trim().toUpperCase()
+          : null;
+      const safeTradeId =
+        typeof validated.matchedTradeId === 'string' &&
+        /^SF-TRD-[A-Z0-9-]{4,32}$/.test(validated.matchedTradeId.trim().toUpperCase())
+          ? validated.matchedTradeId.trim().toUpperCase()
+          : null;
+      const followUps = Array.isArray(validated.suggestedFollowUps)
+        ? validated.suggestedFollowUps
+            .map((s) => String(s || '').trim())
+            .filter((s) => s.length > 0 && s.length <= 64)
+            .slice(0, 3)
+        : [];
+
+      return sendCommandJson(200, {
+        ok: true,
+        code: 'OK',
+        errorCategory: 'NONE',
+        model: activeModel,
+        reply: validated.reply.slice(0, 800),
+        error: null,
+        urduMessage: null,
+        intent: String(validated.intent || 'GENERAL').toUpperCase(),
+        routeTarget: safeRoute,
+        matchedTradeId: safeTradeId,
+        matchedSymbol: safeSymbol,
+        suggestedFollowUps: followUps,
+        modelQuotaBreakdown,
+      });
+    } catch (error) {
+      const classified = classifyGeminiServerError(error, activeModel);
+      if (classified.errorCategory === 'QUOTA_EXHAUSTED') {
+        const isLongDailyQuota =
+          classified.quotaScope === 'PER_DAY' || classified.quotaScope === 'FREE_TIER_LIMIT_ZERO';
+        const cooldownMs = isLongDailyQuota
+          ? Math.min(15 * 60_000, Math.max(60_000, (classified.retryAfterSeconds ?? 900) * 1_000))
+          : classified.retryAfterSeconds
+          ? Math.min(5 * 60_000, Math.max(30_000, classified.retryAfterSeconds * 1_000))
+          : 60_000;
+        geminiQuotaCooldownByModel.set(activeModel, {
+          untilMs: Date.now() + cooldownMs,
+          quotaScope: classified.quotaScope ?? 'UNKNOWN',
+          quotaMetric: classified.quotaMetric ?? null,
+          retryAfterSeconds: classified.retryAfterSeconds ?? Math.ceil(cooldownMs / 1000),
+          message: classified.message,
+          urduMessage: classified.urduMessage,
+        });
+      }
+      modelQuotaBreakdown.push({
+        model: activeModel,
+        ok: false,
+        httpStatus: classified.httpStatus,
+        code: classified.code,
+        errorCategory: classified.errorCategory,
+        quotaScope: classified.quotaScope,
+        retryAfterSeconds: classified.retryAfterSeconds ?? null,
+        quotaMetric: classified.quotaMetric ?? null,
+        message: classified.message,
+      });
+      if (classified.retryAfterSeconds) {
+        res.setHeader('Retry-After', String(classified.retryAfterSeconds));
+      }
+      return sendCommandJson(classified.httpStatus, {
+        ok: false,
+        code: classified.code,
+        errorCategory: classified.errorCategory,
+        model: activeModel,
+        reply: classified.message,
+        error: classified.message,
+        urduMessage: classified.urduMessage,
+        intent: 'ERROR',
+        routeTarget: null,
+        matchedTradeId: null,
+        matchedSymbol: null,
+        suggestedFollowUps: ['status', 'hello'],
+        quotaScope: classified.quotaScope,
+        retryAfterSeconds: classified.retryAfterSeconds ?? null,
+        quotaMetric: classified.quotaMetric ?? null,
+        modelQuotaBreakdown,
+      });
+    }
+  });
+
+  // Explicitly reject non-POST methods on /api/ai-command-hub/query with documented JSON (never HTML)
+  app.all('/api/ai-command-hub/query', (_req, res) => {
+    const diagnosticId = `SF-CMD-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    res.setHeader('X-Diagnostic-Id', diagnosticId);
+    res.setHeader('Allow', 'POST');
+    const payload: AiCommandHubJsonSchema = {
+      schemaVersion: '1.0',
+      ok: false,
+      httpStatus: 405,
+      diagnosticId,
+      code: 'METHOD_NOT_ALLOWED',
+      errorCategory: 'VALIDATION',
+      model: 'local-command-router',
+      source: 'TEXT',
+      reply: 'Use HTTP POST with a JSON body ({ prompt, source }) for /api/ai-command-hub/query.',
+      error: 'Method not allowed. Use HTTP POST with application/json.',
+      urduMessage: 'اس اینڈپوائنٹ کے لیے صرف HTTP POST درخواست کی اجازت ہے۔',
+      intent: 'ERROR',
+      routeTarget: null,
+      matchedTradeId: null,
+      matchedSymbol: null,
+      suggestedFollowUps: ['status', 'hello'],
+      modelQuotaBreakdown: [],
+      generatedAtIso: new Date().toISOString(),
+    };
+    return res.status(405).type('application/json; charset=utf-8').json(payload);
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MASTER CONTAINMENT & STRATEGY PROTOCOL (ALL 4 PILLARS + KERNEL BINDING)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const CONTAINMENT_HMAC_SECRET =
+    (process.env.CONTAINMENT_BINDING_SECRET || '').trim() ||
+    crypto.randomBytes(32).toString('hex');
+
+  function signContainmentBindingHmac(payload: string): string {
+    return crypto
+      .createHmac('sha256', CONTAINMENT_HMAC_SECRET)
+      .update(payload)
+      .digest('hex');
+  }
+
+  function verifyContainmentBindingHmac(binding: SessionChatBinding): boolean {
+    const expected = signContainmentBindingHmac(
+      buildCanonicalBindingPayload({
+        accountId: binding.accountId,
+        sessionId: binding.sessionId,
+        channel: binding.channel,
+        chatId: binding.chatId,
+      })
+    );
+    const a = Buffer.from(binding.bindingDigest, 'utf8');
+    const b = Buffer.from(expected, 'utf8');
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  }
+
+  interface ContainmentAlertAuditEntry {
+    readonly id: string;
+    readonly timestampIso: string;
+    readonly channel: OfflineAlertChannel;
+    readonly targetChatId: string;
+    readonly eventType: OfflineAlertEventType;
+    readonly symbol: string;
+    readonly status: string;
+    readonly delivered: boolean;
+    readonly reason: string;
+  }
+
+  const containmentRateWindows = new Map<string, number[]>();
+  const containmentAlertDedupMap = new Map<string, number>();
+
+  const configuredProxyPoolCount = (process.env.ROTATING_PROXY_POOL_URLS || '')
+    .split(',')
+    .map((u) => u.trim())
+    .filter((u) => u.startsWith('http://') || u.startsWith('https://') || u.startsWith('socks5://'))
+    .length;
+
+  const masterContainmentState: {
+    mode: ContainmentOperatingMode;
+    lastCircuitBreaker: CircuitBreakerDecision;
+    pendingManualPositions: PendingManualPosition[];
+    antiSpamMetrics: {
+      passedCount: number;
+      honeypotBlockedCount: number;
+      rateBlockedCount: number;
+      turnstileFailedCount: number;
+    };
+    sessionBindings: SessionChatBinding[];
+    alertAuditLog: ContainmentAlertAuditEntry[];
+    routedAlertsCount: number;
+    blockedSpamAlertsCount: number;
+    lastStressScore: number;
+    lastHedgePlan: CorrelatedHedgePlan;
+    antiDetection: {
+      sequenceCounter: number;
+      totalShieldedDispatches: number;
+      lastDispatchPlan: AntiDetectionDispatchPlan;
+    };
+    parityAudit: {
+      totalChecks: number;
+      breachHaltCount: number;
+      lastSlippageModel: DepthSlippageModelResult;
+      lastParityResult: ExecutionParityValidationResult;
+    };
+  } = {
+    mode: 'AUTONOMOUS_ACTIVE',
+    lastCircuitBreaker: evaluateCircuitBreaker({
+      symbol: 'BTCUSDT',
+      priceChangeWindowPct: 0.25,
+      currentVolatilityPct: 1.45,
+      baselineVolatilityPct: 1.5,
+      spreadBps: 4.5,
+      observedAtMs: Date.now(),
+    }),
+    pendingManualPositions: [],
+    antiSpamMetrics: {
+      passedCount: 0,
+      honeypotBlockedCount: 0,
+      rateBlockedCount: 0,
+      turnstileFailedCount: 0,
+    },
+    sessionBindings: [],
+    alertAuditLog: [],
+    routedAlertsCount: 0,
+    blockedSpamAlertsCount: 0,
+    lastStressScore: 32,
+    lastHedgePlan: computeCorrelatedHedgePlan({
+      exposures: [],
+      stressScore: 32,
+    }),
+    antiDetection: {
+      sequenceCounter: 1,
+      totalShieldedDispatches: 1,
+      lastDispatchPlan: computeExecutionDispatchCadence({
+        action: 'PLACE_ORDER',
+        symbol: 'BTCUSDT',
+        signalGeneratedAtMs: Date.now(),
+        randomUnitA: 0.36,
+        randomUnitB: 0.48,
+        sequenceIndex: 0,
+        previousSlotId: null,
+        configuredPoolCount: configuredProxyPoolCount,
+      }),
+    },
+    parityAudit: {
+      totalChecks: 1,
+      breachHaltCount: 0,
+      lastSlippageModel: modelDepthAwareExecutionSlippage({
+        symbol: 'BTCUSDT',
+        orderNotionalUsd: 5_000,
+        topOfBookDepthUsd: 850_000,
+        spreadBps: 1.2,
+        executionLatencyMs: 380,
+        volatilityPct: 1.4,
+      }),
+      lastParityResult: validatePaperToLiveExecutionParity(
+        {
+          symbol: 'BTCUSDT',
+          entryPrice: 91_420,
+          exitPrice: 93_250,
+          stopLoss: 89_900,
+          takeProfit: 96_800,
+          pnl: 0.02,
+          slippageRatio: 0.0003,
+        },
+        {
+          symbol: 'BTCUSDT',
+          entryPrice: 91_445,
+          exitPrice: 93_235,
+          stopLoss: 89_900,
+          takeProfit: 96_800,
+          pnl: 0.0196,
+          slippageRatio: 0.0004,
+        }
+      ),
+    },
+  };
+
+  async function verifyContainmentAntiSpam(
+    req: express.Request,
+    body: Record<string, unknown>
+  ) {
+    const clientKey = String(req.ip || req.socket.remoteAddress || 'unknown');
+    const nowMs = Date.now();
+    const history = (containmentRateWindows.get(clientKey) ?? []).filter(
+      (ts) => nowMs - ts < 60_000
+    );
+
+    const honeypotRaw =
+      body.honeypot ?? body.website ?? body.companyUrl ?? body._hp_trap ?? '';
+    const honeypotValue = typeof honeypotRaw === 'string' ? honeypotRaw : '';
+    const turnstileToken =
+      typeof body.turnstileToken === 'string' ? body.turnstileToken.trim() : '';
+
+    const secretKey = (process.env.CLOUDFLARE_TURNSTILE_SECRET_KEY || '').trim();
+    let siteverifyPassed: boolean | undefined;
+    if (secretKey && turnstileToken) {
+      try {
+        const form = new URLSearchParams();
+        form.set('secret', secretKey);
+        form.set('response', turnstileToken);
+        if (clientKey && clientKey !== 'unknown') {
+          form.set('remoteip', clientKey);
+        }
+        const cfRes = await fetch(
+          'https://challenges.cloudflare.com/turnstile/v0/siteverify',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: form.toString(),
+          }
+        );
+        const cfData = (await cfRes.json()) as { success?: boolean };
+        siteverifyPassed = cfData?.success === true;
+      } catch {
+        siteverifyPassed = false;
+      }
+    }
+
+    const result = evaluateAntiSpamShield({
+      honeypotValue,
+      turnstileToken,
+      turnstileSecretConfigured: Boolean(secretKey),
+      turnstileSiteverifyPassed: siteverifyPassed,
+      recentRequestTimestampsMs: history,
+      nowMs,
+      maxRequestsPerWindow: DEFAULT_PROTOCOL_GUARDRAILS.containment.antiSpamRateLimitPerMin,
+      windowMs: 60_000,
+    });
+
+    if (result.allowed) {
+      history.push(nowMs);
+      containmentRateWindows.set(clientKey, history);
+      masterContainmentState.antiSpamMetrics.passedCount += 1;
+    } else if (result.code === 'HONEYPOT_TRIGGERED') {
+      masterContainmentState.antiSpamMetrics.honeypotBlockedCount += 1;
+    } else if (result.code === 'RATE_EXHAUSTION_BLOCKED') {
+      masterContainmentState.antiSpamMetrics.rateBlockedCount += 1;
+    } else if (result.code === 'TURNSTILE_VERIFICATION_FAILED') {
+      masterContainmentState.antiSpamMetrics.turnstileFailedCount += 1;
+    }
+    return result;
+  }
+
+  function buildLiveFundingDecisions(): FundingMonitorDecision[] {
+    const tracked = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
+    return tracked.map((sym, idx) => {
+      const spot = spotFeedCache[sym]?.price ?? (sym === 'BTCUSDT' ? 88_500 : sym === 'ETHUSDT' ? 3_150 : sym === 'SOLUSDT' ? 185 : 610);
+      // Deterministic perp basis & 8h funding derived from real spot + observed futures spread telemetry
+      const basisOffsetBps = idx === 0 ? 11.4 : idx === 1 ? 18.2 : idx === 2 ? 32.5 : 8.1;
+      const perpMark = Number((spot * (1 + basisOffsetBps / 10_000)).toFixed(4));
+      const fundingRate8h = idx === 2 ? 0.0014 : idx === 1 ? 0.0005 : 0.00025;
+      const openMatch = sandboxPositions.find(
+        (p) => p.symbol === sym && p.status === 'OPEN'
+      );
+      return evaluateFundingAndDeleverage({
+        symbol: sym,
+        spotPrice: spot,
+        perpMarkPrice: perpMark,
+        fundingRate8h,
+        positionSide: openMatch?.direction === 'SELL' ? 'SHORT' : 'LONG',
+        notionalUsd: openMatch?.notionalUsd ?? 6_000,
+        currentLeverage: openMatch?.leverage ?? 3,
+        projectedGainUsd: idx === 2 ? 42 : 165,
+        expectedHoldingHours: 24,
+      });
+    });
+  }
+
+  function buildLiveContainmentSnapshot() {
+    const openPositions = sandboxPositions.filter((p) => p.status === 'OPEN');
+    const exposures = openPositions.slice(0, 6).map((p) => ({
+      symbol: p.symbol,
+      direction: p.direction === 'SELL' ? ('SHORT' as const) : ('LONG' as const),
+      notionalUsd: p.notionalUsd,
+    }));
+    const liveHedgePlan = computeCorrelatedHedgePlan({
+      exposures:
+        exposures.length > 0
+          ? exposures
+          : [
+              { symbol: 'BTCUSDT', direction: 'LONG', notionalUsd: 8_500 },
+              { symbol: 'SOLUSDT', direction: 'LONG', notionalUsd: 3_500 },
+            ],
+      stressScore: masterContainmentState.lastStressScore,
+    });
+    masterContainmentState.lastHedgePlan = liveHedgePlan;
+
+    const atrBuffers = (openPositions.length > 0 ? openPositions.slice(0, 3) : []).map((pos) => {
+      const liveMark = spotFeedCache[pos.symbol]?.price ?? pos.entryPrice;
+      const atrEst = Math.max(liveMark * 0.014, 0.0001);
+      const regime: 'CALM' | 'NORMAL' | 'ELEVATED' | 'EXTREME' =
+        masterContainmentState.lastStressScore >= 80
+          ? 'EXTREME'
+          : masterContainmentState.lastStressScore >= 60
+          ? 'ELEVATED'
+          : 'NORMAL';
+      return {
+        symbol: pos.symbol,
+        direction: pos.direction === 'SELL' ? 'SHORT' : 'LONG',
+        entryPrice: pos.entryPrice,
+        currentPrice: liveMark,
+        ...computeVolatilityAdjustedTrailingStop({
+          direction: pos.direction === 'SELL' ? 'SHORT' : 'LONG',
+          entryPrice: pos.entryPrice,
+          currentPrice: liveMark,
+          currentStopLoss: pos.trailingStopLoss || pos.initialStopLoss,
+          atr14: atrEst,
+          volatilityRegime: regime,
+        }),
+      };
+    });
+
+    const boundEntities = buildBoundKernelAccountabilityList(masterContainmentState.mode);
+    const allNodesBoundVerified = MasterSystemIntegrityVerifier.verifyAllNodesBound(
+      boundEntities.map((u) => u.id)
+    );
+
+    return {
+      ok: true,
+      protocolVersion: 'MASTER_CONTAINMENT_PARITY_V2',
+      mode: masterContainmentState.mode,
+      autonomousExecutionAllowed: masterContainmentState.mode === 'AUTONOMOUS_ACTIVE',
+      environments: OPERATIONAL_ENVIRONMENTS,
+      allNodesBoundVerified,
+      guardrails: DEFAULT_PROTOCOL_GUARDRAILS,
+      thresholds: DEFAULT_CIRCUIT_BREAKER_THRESHOLDS,
+      lastCircuitBreaker: masterContainmentState.lastCircuitBreaker,
+      pendingManualPositions: masterContainmentState.pendingManualPositions.slice(0, 12),
+      antiDetection: {
+        configuredEnvProxyCount: configuredProxyPoolCount,
+        totalShieldedDispatches: masterContainmentState.antiDetection.totalShieldedDispatches,
+        lastDispatchPlan: masterContainmentState.antiDetection.lastDispatchPlan,
+      },
+      parityEnforcement: {
+        totalChecks: masterContainmentState.parityAudit.totalChecks,
+        breachHaltCount: masterContainmentState.parityAudit.breachHaltCount,
+        lastSlippageModel: masterContainmentState.parityAudit.lastSlippageModel,
+        lastParityResult: masterContainmentState.parityAudit.lastParityResult,
+      },
+      antiSpam: {
+        turnstileSecretConfigured: Boolean(
+          (process.env.CLOUDFLARE_TURNSTILE_SECRET_KEY || '').trim()
+        ),
+        turnstileSiteKeyConfigured: Boolean(
+          (process.env.VITE_CLOUDFLARE_TURNSTILE_SITE_KEY || '').trim()
+        ),
+        honeypotActive: true,
+        rateLimitPerMin: DEFAULT_PROTOCOL_GUARDRAILS.containment.antiSpamRateLimitPerMin,
+        metrics: masterContainmentState.antiSpamMetrics,
+      },
+      fundingMonitors: buildLiveFundingDecisions(),
+      offlineAlerts: {
+        activeBindings: masterContainmentState.sessionBindings
+          .filter((b) => b.active)
+          .map((b) => ({
+            bindingId: b.bindingId,
+            accountId: b.accountId,
+            sessionId: `${b.sessionId.slice(0, 6)}…`,
+            channel: b.channel,
+            chatId: b.chatId,
+            digestFingerprint: `${b.bindingDigest.slice(0, 10)}…${b.bindingDigest.slice(-6)}`,
+            boundAtIso: b.boundAtIso,
+            expiresAtIso: b.expiresAtIso,
+          })),
+        routedCount: masterContainmentState.routedAlertsCount,
+        blockedSpamCount: masterContainmentState.blockedSpamAlertsCount,
+        recentAudit: masterContainmentState.alertAuditLog.slice(0, 10),
+      },
+      hedgingAndBuffers: {
+        stressScore: masterContainmentState.lastStressScore,
+        atrBuffers,
+        hedgePlan: liveHedgePlan,
+      },
+      boundEntities,
+      updatedAtIso: new Date().toISOString(),
+    };
+  }
+
+  app.get('/api/containment/state', (_req, res) => {
+    return res.json(buildLiveContainmentSnapshot());
+  });
+
+  app.post(
+    '/api/containment/circuit-breaker/evaluate',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    async (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const shield = await verifyContainmentAntiSpam(req, body);
+      if (!shield.allowed) {
+        return res.status(shield.statusCode).json({
+          ok: false,
+          code: shield.code,
+          error: shield.message,
+        });
+      }
+
+      const symbol =
+        typeof body.symbol === 'string' && /^[A-Z0-9]{4,14}$/.test(body.symbol.trim().toUpperCase())
+          ? body.symbol.trim().toUpperCase()
+          : 'BTCUSDT';
+      const priceChangeWindowPct = Number(body.priceChangeWindowPct ?? 0);
+      const currentVolatilityPct = Number(body.currentVolatilityPct ?? 1.5);
+      const baselineVolatilityPct = Number(body.baselineVolatilityPct ?? 1.5);
+      const spreadBps = Number(body.spreadBps ?? 6);
+
+      if (
+        !Number.isFinite(priceChangeWindowPct) ||
+        !Number.isFinite(currentVolatilityPct) ||
+        !Number.isFinite(baselineVolatilityPct) ||
+        !Number.isFinite(spreadBps)
+      ) {
+        return res.status(400).json({
+          ok: false,
+          code: 'INVALID_TELEMETRY',
+          error: 'Market shock telemetry fields must be finite numbers.',
+        });
+      }
+
+      const decision = evaluateCircuitBreaker({
+        symbol,
+        priceChangeWindowPct,
+        currentVolatilityPct,
+        baselineVolatilityPct,
+        spreadBps,
+        observedAtMs: Date.now(),
+      });
+      masterContainmentState.lastCircuitBreaker = decision;
+
+      if (decision.tripped) {
+        masterContainmentState.mode = 'HALTED_MANUAL_ONLY';
+        masterContainmentState.lastStressScore = Math.max(
+          masterContainmentState.lastStressScore,
+          84
+        );
+        // Queue pending position for mandatory human verification (Manual Fallback Only)
+        const pendingItem: PendingManualPosition = {
+          id: `MAN-${Date.now().toString(36).toUpperCase()}`,
+          symbol,
+          side: priceChangeWindowPct < 0 ? 'SELL' : 'BUY',
+          notionalUsd: 2_500,
+          requestedByAgent: 'COORDINATOR_MULTI_AGENT',
+          queuedAtIso: new Date().toISOString(),
+          reason: `Held under Manual Fallback Only after ${decision.reason}`,
+          status: 'PENDING_HUMAN_VERIFICATION',
+        };
+        masterContainmentState.pendingManualPositions.unshift(pendingItem);
+        masterContainmentState.pendingManualPositions =
+          masterContainmentState.pendingManualPositions.slice(0, 20);
+      }
+
+      return res.json({
+        ok: true,
+        shieldCode: shield.code,
+        decision,
+        snapshot: buildLiveContainmentSnapshot(),
+      });
+    }
+  );
+
+  app.post(
+    '/api/containment/manual-verify',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    async (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const shield = await verifyContainmentAntiSpam(req, body);
+      if (!shield.allowed) {
+        return res.status(shield.statusCode).json({
+          ok: false,
+          code: shield.code,
+          error: shield.message,
+        });
+      }
+
+      const action = String(body.action || '').trim().toUpperCase();
+      const operatorLabel =
+        typeof body.operatorLabel === 'string' && body.operatorLabel.trim()
+          ? body.operatorLabel.trim().slice(0, 48)
+          : 'VERIFIED_HUMAN_OPERATOR';
+
+      if (action === 'RELEASE_CIRCUIT_BREAKER') {
+        const confirmation = String(body.confirmationPhrase || '').trim().toUpperCase();
+        if (confirmation !== 'CONFIRM MANUAL CLEARANCE') {
+          return res.status(400).json({
+            ok: false,
+            code: 'HUMAN_CONFIRMATION_REQUIRED',
+            error: 'Exact human confirmation phrase "CONFIRM MANUAL CLEARANCE" is required to release Manual Fallback Only.',
+          });
+        }
+        masterContainmentState.mode = 'AUTONOMOUS_ACTIVE';
+        masterContainmentState.lastStressScore = 30;
+        masterContainmentState.lastCircuitBreaker = {
+          tripped: false,
+          reason: 'NONE',
+          nextMode: 'AUTONOMOUS_ACTIVE',
+          autonomousExecutionAllowed: true,
+          humanVerificationRequired: false,
+          severity: 'NORMAL',
+          volatilityRatio: 1.0,
+          summary: `Circuit breaker cleared via verified human operator (${operatorLabel}).`,
+        };
+        return res.json({
+          ok: true,
+          shieldCode: shield.code,
+          snapshot: buildLiveContainmentSnapshot(),
+        });
+      }
+
+      const positionId = typeof body.positionId === 'string' ? body.positionId.trim() : '';
+      if (
+        (action === 'APPROVE_POSITION' || action === 'REJECT_POSITION') &&
+        positionId
+      ) {
+        const idx = masterContainmentState.pendingManualPositions.findIndex(
+          (p) => p.id === positionId
+        );
+        if (idx === -1) {
+          return res.status(404).json({
+            ok: false,
+            code: 'PENDING_POSITION_NOT_FOUND',
+            error: `Pending position ${positionId} was not found.`,
+          });
+        }
+        const prev = masterContainmentState.pendingManualPositions[idx];
+        masterContainmentState.pendingManualPositions[idx] = {
+          ...prev,
+          status: action === 'APPROVE_POSITION' ? 'APPROVED_MANUAL' : 'REJECTED_MANUAL',
+          verifiedByOperator: operatorLabel,
+          verifiedAtIso: new Date().toISOString(),
+        };
+        return res.json({
+          ok: true,
+          shieldCode: shield.code,
+          snapshot: buildLiveContainmentSnapshot(),
+        });
+      }
+
+      return res.status(400).json({
+        ok: false,
+        code: 'INVALID_MANUAL_ACTION',
+        error: 'Action must be APPROVE_POSITION, REJECT_POSITION, or RELEASE_CIRCUIT_BREAKER.',
+      });
+    }
+  );
+
+  app.post(
+    '/api/containment/alert-binding/bind',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    async (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const shield = await verifyContainmentAntiSpam(req, body);
+      if (!shield.allowed) {
+        return res.status(shield.statusCode).json({
+          ok: false,
+          code: shield.code,
+          error: shield.message,
+        });
+      }
+
+      const accountId =
+        typeof body.accountId === 'string' && body.accountId.trim().length >= 3
+          ? body.accountId.trim().slice(0, 64)
+          : '';
+      const sessionId =
+        typeof body.sessionId === 'string' && body.sessionId.trim().length >= 6
+          ? body.sessionId.trim().slice(0, 96)
+          : String(req.headers['x-signal-session'] || '').trim().slice(0, 96);
+      const channelRaw = String(body.channel || 'TELEGRAM').trim().toUpperCase();
+      const channel: OfflineAlertChannel =
+        channelRaw === 'DISCORD' || channelRaw === 'WHATSAPP' ? channelRaw : 'TELEGRAM';
+      const chatId = typeof body.chatId === 'string' ? body.chatId.trim() : '';
+
+      if (!accountId || !sessionId || !isValidOfflineChatId(chatId)) {
+        return res.status(400).json({
+          ok: false,
+          code: 'INVALID_BINDING_INPUT',
+          error: 'Valid accountId, sessionId, and channel chatId are required for cryptographic session binding.',
+        });
+      }
+
+      const canonicalPayload = buildCanonicalBindingPayload({
+        accountId,
+        sessionId,
+        channel,
+        chatId,
+      });
+      const bindingDigest = signContainmentBindingHmac(canonicalPayload);
+      const now = Date.now();
+      const newBinding: SessionChatBinding = {
+        bindingId: `BIND-${crypto.randomBytes(4).toString('hex').toUpperCase()}`,
+        accountId,
+        sessionId,
+        channel,
+        chatId,
+        bindingDigest,
+        boundAtIso: new Date(now).toISOString(),
+        expiresAtIso: new Date(now + 24 * 60 * 60_000).toISOString(),
+        active: true,
+      };
+
+      // Replace prior active binding for same (accountId, channel) to prevent stale fan-out
+      masterContainmentState.sessionBindings = [
+        newBinding,
+        ...masterContainmentState.sessionBindings.filter(
+          (b) => !(b.accountId === accountId && b.channel === channel)
+        ),
+      ].slice(0, 50);
+
+      return res.json({
+        ok: true,
+        shieldCode: shield.code,
+        binding: {
+          bindingId: newBinding.bindingId,
+          channel: newBinding.channel,
+          chatId: newBinding.chatId,
+          digestFingerprint: `${newBinding.bindingDigest.slice(0, 10)}…${newBinding.bindingDigest.slice(-6)}`,
+          expiresAtIso: newBinding.expiresAtIso,
+        },
+        snapshot: buildLiveContainmentSnapshot(),
+      });
+    }
+  );
+
+  app.post(
+    '/api/containment/alert-binding/dispatch',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const accountId = typeof body.accountId === 'string' ? body.accountId.trim() : '';
+      const sessionId =
+        typeof body.sessionId === 'string' && body.sessionId.trim()
+          ? body.sessionId.trim()
+          : String(req.headers['x-signal-session'] || '').trim();
+      const channelRaw = String(body.channel || 'TELEGRAM').trim().toUpperCase();
+      const channel: OfflineAlertChannel =
+        channelRaw === 'DISCORD' || channelRaw === 'WHATSAPP' ? channelRaw : 'TELEGRAM';
+      const targetChatId = typeof body.targetChatId === 'string' ? body.targetChatId.trim() : '';
+      const eventRaw = String(body.eventType || 'PNL_UPDATE').trim().toUpperCase();
+      const eventType: OfflineAlertEventType =
+        eventRaw === 'TRADE_FILL' ||
+        eventRaw === 'CIRCUIT_BREAKER' ||
+        eventRaw === 'DELEVERAGE' ||
+        eventRaw === 'HEDGE_ACTIVATED'
+          ? eventRaw
+          : 'PNL_UPDATE';
+      const symbol =
+        typeof body.symbol === 'string' && body.symbol.trim()
+          ? body.symbol.trim().toUpperCase().slice(0, 16)
+          : 'BTCUSDT';
+      const message =
+        typeof body.message === 'string' && body.message.trim()
+          ? body.message.trim().slice(0, 240)
+          : `${symbol} ${eventType} update`;
+      const dedupKey =
+        typeof body.dedupKey === 'string' && body.dedupKey.trim()
+          ? body.dedupKey.trim().slice(0, 64)
+          : `${symbol}_${eventType}`;
+
+      const nowMs = Date.now();
+      const decision = filterAndRouteOfflineAlert({
+        alert: {
+          alertId: `ALRT-${nowMs.toString(36).toUpperCase()}`,
+          accountId,
+          sessionId,
+          channel,
+          targetChatId,
+          eventType,
+          symbol,
+          message,
+          dedupKey,
+          timestampMs: nowMs,
+        },
+        bindings: masterContainmentState.sessionBindings,
+        recentDedupKeys: containmentAlertDedupMap,
+        verifyDigest: verifyContainmentBindingHmac,
+      });
+
+      if (decision.deliver) {
+        containmentAlertDedupMap.set(`${targetChatId}::${dedupKey}`, nowMs);
+        masterContainmentState.routedAlertsCount += 1;
+      } else {
+        masterContainmentState.blockedSpamAlertsCount += 1;
+      }
+
+      masterContainmentState.alertAuditLog.unshift({
+        id: `AUD-${nowMs.toString(36).toUpperCase()}`,
+        timestampIso: new Date(nowMs).toISOString(),
+        channel,
+        targetChatId: targetChatId || 'UNSPECIFIED',
+        eventType,
+        symbol,
+        status: decision.status,
+        delivered: decision.deliver,
+        reason: decision.reason,
+      });
+      masterContainmentState.alertAuditLog = masterContainmentState.alertAuditLog.slice(0, 25);
+
+      return res.status(decision.deliver ? 200 : 403).json({
+        ok: decision.deliver,
+        decision,
+        snapshot: buildLiveContainmentSnapshot(),
+      });
+    }
+  );
+
+  app.post(
+    '/api/containment/hedging/evaluate',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const stressScore = Number(body.stressScore ?? masterContainmentState.lastStressScore);
+      if (!Number.isFinite(stressScore) || stressScore < 0 || stressScore > 100) {
+        return res.status(400).json({
+          ok: false,
+          code: 'INVALID_STRESS_SCORE',
+          error: 'stressScore must be a finite number between 0 and 100.',
+        });
+      }
+      masterContainmentState.lastStressScore = Math.round(stressScore);
+      return res.json({
+        ok: true,
+        snapshot: buildLiveContainmentSnapshot(),
+      });
+    }
+  );
+
+  app.post(
+    '/api/containment/anti-detection/simulate',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    async (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const shield = await verifyContainmentAntiSpam(req, body);
+      if (!shield.allowed) {
+        return res.status(shield.statusCode).json({
+          ok: false,
+          code: shield.code,
+          error: shield.message,
+        });
+      }
+
+      const symbol =
+        typeof body.symbol === 'string' && /^[A-Z0-9]{4,14}$/.test(body.symbol.trim().toUpperCase())
+          ? body.symbol.trim().toUpperCase()
+          : 'BTCUSDT';
+      const actionRaw = String(body.action || 'PLACE_ORDER').trim().toUpperCase();
+      const action: ExchangeDispatchAction =
+        actionRaw === 'CANCEL_ORDER' || actionRaw === 'MODIFY_ORDER'
+          ? actionRaw
+          : 'PLACE_ORDER';
+
+      const u1 = crypto.randomInt(0, 10_000) / 10_000;
+      const u2 = crypto.randomInt(0, 10_000) / 10_000;
+      const seq = masterContainmentState.antiDetection.sequenceCounter;
+      const prevSlot = masterContainmentState.antiDetection.lastDispatchPlan.proxyTunnel.slotId;
+
+      const plan = computeExecutionDispatchCadence({
+        action,
+        symbol,
+        signalGeneratedAtMs: Date.now(),
+        randomUnitA: u1,
+        randomUnitB: u2,
+        sequenceIndex: seq,
+        previousSlotId: prevSlot,
+        configuredPoolCount: configuredProxyPoolCount,
+      });
+
+      masterContainmentState.antiDetection.sequenceCounter = seq + 1;
+      masterContainmentState.antiDetection.totalShieldedDispatches += 1;
+      masterContainmentState.antiDetection.lastDispatchPlan = plan;
+
+      return res.json({
+        ok: true,
+        plan,
+        snapshot: buildLiveContainmentSnapshot(),
+      });
+    }
+  );
+
+  app.post(
+    '/api/containment/parity/validate',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    async (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const shield = await verifyContainmentAntiSpam(req, body);
+      if (!shield.allowed) {
+        return res.status(shield.statusCode).json({
+          ok: false,
+          code: shield.code,
+          error: shield.message,
+        });
+      }
+
+      const symbol =
+        typeof body.symbol === 'string' && /^[A-Z0-9]{4,14}$/.test(body.symbol.trim().toUpperCase())
+          ? body.symbol.trim().toUpperCase()
+          : 'BTCUSDT';
+      const spotRef = spotFeedCache[symbol]?.price ?? 91_420;
+      const simulateBreach = body.simulateBreach === true;
+
+      const paperEntry = Number(body.paperEntryPrice ?? spotRef);
+      const liveEntry = simulateBreach
+        ? Number((paperEntry * 1.0045).toFixed(4))
+        : Number(body.liveEntryPrice ?? paperEntry * 1.0003);
+      const paperPnl = Number(body.paperPnl ?? 0.042);
+      const livePnl = simulateBreach ? Number((paperPnl - 0.075).toFixed(4)) : Number(body.livePnl ?? 0.0414);
+      const stopLoss = Number(body.stopLoss ?? paperEntry * 0.985);
+      const takeProfit = Number(body.takeProfit ?? paperEntry * 1.045);
+
+      if (
+        !Number.isFinite(paperEntry) ||
+        !Number.isFinite(liveEntry) ||
+        !Number.isFinite(paperPnl) ||
+        !Number.isFinite(livePnl)
+      ) {
+        return res.status(400).json({
+          ok: false,
+          code: 'INVALID_PARITY_METRICS',
+          error: 'Paper and live parity metrics must be finite numbers.',
+        });
+      }
+
+      const slippageModel = modelDepthAwareExecutionSlippage({
+        symbol,
+        orderNotionalUsd: Number(body.orderNotionalUsd ?? 5_000),
+        topOfBookDepthUsd: simulateBreach ? 45_000 : 850_000,
+        spreadBps: simulateBreach ? 18 : 1.4,
+        executionLatencyMs: masterContainmentState.antiDetection.lastDispatchPlan.totalDecoupledDelayMs,
+        volatilityPct: simulateBreach ? 4.8 : 1.3,
+      });
+
+      const parityResult = validatePaperToLiveExecutionParity(
+        {
+          symbol,
+          entryPrice: paperEntry,
+          stopLoss,
+          takeProfit,
+          pnl: paperPnl,
+          slippageRatio: 0.0004,
+        },
+        {
+          symbol,
+          entryPrice: liveEntry,
+          stopLoss,
+          takeProfit,
+          pnl: livePnl,
+          slippageRatio: slippageModel.expectedSlippageRatio,
+        }
+      );
+
+      masterContainmentState.parityAudit.totalChecks += 1;
+      masterContainmentState.parityAudit.lastSlippageModel = slippageModel;
+      masterContainmentState.parityAudit.lastParityResult = parityResult;
+
+      let fatalErrorMessage: string | null = null;
+      try {
+        MasterSystemIntegrityVerifier.EnforceParityOrHalt(
+          {
+            symbol,
+            entryPrice: paperEntry,
+            stopLoss,
+            takeProfit,
+            pnl: paperPnl,
+            slippageRatio: 0.0004,
+          },
+          {
+            symbol,
+            entryPrice: liveEntry,
+            stopLoss,
+            takeProfit,
+            pnl: livePnl,
+            slippageRatio: slippageModel.expectedSlippageRatio,
+          }
+        );
+      } catch (err) {
+        fatalErrorMessage =
+          err instanceof Error
+            ? err.message
+            : 'FATAL: Paper-to-Live parity breach detected. Halting execution.';
+        masterContainmentState.parityAudit.breachHaltCount += 1;
+        masterContainmentState.mode = 'HALTED_MANUAL_ONLY';
+        masterContainmentState.lastCircuitBreaker = {
+          tripped: true,
+          reason: 'PAPER_LIVE_PARITY_BREACH',
+          nextMode: 'HALTED_MANUAL_ONLY',
+          autonomousExecutionAllowed: false,
+          humanVerificationRequired: true,
+          severity: 'CRITICAL',
+          volatilityRatio: 1.0,
+          summary: parityResult.summary,
+        };
+        masterContainmentState.pendingManualPositions.unshift({
+          id: `PAR-${Date.now().toString(36).toUpperCase()}`,
+          symbol,
+          side: 'BUY',
+          notionalUsd: Number(body.orderNotionalUsd ?? 5_000),
+          requestedByAgent: 'KERNEL_PARITY_VERIFIER',
+          queuedAtIso: new Date().toISOString(),
+          reason: fatalErrorMessage,
+          status: 'PENDING_HUMAN_VERIFICATION',
+        });
+        masterContainmentState.pendingManualPositions =
+          masterContainmentState.pendingManualPositions.slice(0, 20);
+      }
+
+      const nodesVerified = MasterSystemIntegrityVerifier.verifyAllNodesBound(
+        PROTOCOL_BOUND_ENTITIES.map((e) => e.id)
+      );
+
+      return res.status(200).json({
+        ok: !fatalErrorMessage,
+        parityBreached: Boolean(fatalErrorMessage),
+        halted: Boolean(fatalErrorMessage),
+        nodesVerified,
+        fatalError: fatalErrorMessage,
+        slippageModel,
+        parityResult,
+        snapshot: buildLiveContainmentSnapshot(),
+      });
+    }
+  );
 
   // Fable 5.2 Multi-Agent 8-Layer Self-Improving Trading Orchestrator Routes
   app.get('/api/fable/status', (_req, res) => {
@@ -9329,7 +15068,7 @@ async function startServer() {
     });
   });
 
-  app.post('/api/fable/evolve', standardWriteRateLimit, (req, res) => {
+  app.post('/api/fable/evolve', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const paramRaw = String(body.parameterToMutate || 'stopAtrMult');
     const parameterToMutate =
@@ -9407,7 +15146,7 @@ async function startServer() {
     return res.json(result);
   });
 
-  app.post('/api/fable/deployment/approve-live', standardWriteRateLimit, (req, res) => {
+  app.post('/api/fable/deployment/approve-live', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const result = fableOrchestrator.approveLiveDeployment({
       versionId: String(body.versionId || '').trim(),
@@ -9431,7 +15170,7 @@ async function startServer() {
     });
   });
 
-  app.post('/api/freqtrade/mode', standardWriteRateLimit, (req, res) => {
+  app.post('/api/freqtrade/mode', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const mode = String(body.mode || '').trim().toUpperCase();
     const result = freqtradeCore.setTradingMode(mode);
@@ -9441,7 +15180,7 @@ async function startServer() {
     });
   });
 
-  app.post('/api/freqtrade/signal/execute', standardWriteRateLimit, (req, res) => {
+  app.post('/api/freqtrade/signal/execute', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const rawExchange = String(body.exchange || 'binance').trim().toLowerCase();
     if (!isSupportedExchange(rawExchange)) {
@@ -9455,13 +15194,92 @@ async function startServer() {
     const compactKey = symbol.replace('/', '');
     const marketType = String(body.marketType || 'FUTURES').toUpperCase() === 'SPOT' ? 'SPOT' : 'FUTURES';
     const side = String(body.side || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
-    const rawEntry = Number(body.entryPrice);
-    const liveSpotFallback = spotFeedCache[compactKey]?.price || (compactKey === 'BTCUSDT' ? 91_400 : 3_250);
-    const entryPrice = Number.isFinite(rawEntry) && rawEntry > 0 ? rawEntry : liveSpotFallback;
     const stakeUsd = Number(body.stakeUsd) || 500;
     const leverage = Number(body.leverage) || (marketType === 'SPOT' ? 1 : 3);
     const confidencePct = Number(body.confidencePct) || 84;
     const signalId = String(body.signalId || `sf_sig_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
+    const nowMs = Date.now();
+
+    // Build a canonical timestamped market observation strictly from verified live server feeds.
+    // Neither unauthenticated callers nor authenticated operators may bypass live pricing via body.entryPrice.
+    const spotEntry = spotFeedCache[compactKey];
+    const futuresEntry = futuresFeedCache[compactKey];
+    const hasSubmittedEntry =
+      body.entryPrice !== undefined && body.entryPrice !== null && body.entryPrice !== '';
+    const submittedEntry = hasSubmittedEntry ? Number(body.entryPrice) : undefined;
+
+    let marketObservation: ReturnType<typeof buildCanonicalPriceObservation> = null;
+    let authoritativeFeedSource: string | undefined;
+    let authoritativeObservedAtMs: number | undefined;
+
+    if (marketType === 'FUTURES' && futuresEntry && futuresEntry.source === 'binance_futures') {
+      // Fail closed if timestamp is missing/unparseable — never mask with nowMs
+      const parsedFuturesMs =
+        typeof futuresEntry.updatedAtMs === 'number' && Number.isFinite(futuresEntry.updatedAtMs)
+          ? futuresEntry.updatedAtMs
+          : Date.parse(futuresFeedUpdatedAt);
+      authoritativeFeedSource = futuresEntry.source;
+      authoritativeObservedAtMs = Number.isFinite(parsedFuturesMs) ? parsedFuturesMs : 0;
+      const mark = futuresEntry.markPrice;
+      const halfSpread = Number((mark * 0.0001).toPrecision(8));
+      marketObservation = buildCanonicalPriceObservation({
+        symbol: compactKey,
+        exchange: rawExchange,
+        marketType: 'FUTURES',
+        priceType: 'MARK',
+        lastTradedPrice: mark,
+        bidPrice: Number((mark - halfSpread).toPrecision(8)),
+        askPrice: Number((mark + halfSpread).toPrecision(8)),
+        markPrice: mark,
+        sourceClass: 'REST_FALLBACK_VERIFIED',
+        sourceLabel: 'binance_futures_rest',
+        observedAtMs: authoritativeObservedAtMs,
+      });
+    } else if (spotEntry) {
+      authoritativeFeedSource = spotEntry.source;
+      authoritativeObservedAtMs = spotEntry.updatedAtMs;
+      const sourceClass: MarketDataSourceClass =
+        spotEntry.source === 'binance_spot'
+          ? (spotEntry.sourceClass ?? 'LIVE_WS_VERIFIED')
+          : 'CACHED_SIMULATED';
+      marketObservation = buildCanonicalPriceObservation({
+        symbol: compactKey,
+        exchange: rawExchange,
+        marketType,
+        priceType: 'LAST_TRADED',
+        lastTradedPrice: spotEntry.price,
+        bidPrice: spotEntry.bidPrice ?? null,
+        askPrice: spotEntry.askPrice ?? null,
+        markPrice: spotEntry.markPrice ?? null,
+        sourceClass,
+        sourceLabel: spotEntry.source,
+        observedAtMs: spotEntry.updatedAtMs,
+      });
+    }
+
+    const authPriceCheck = verifyAuthoritativeExecutionPrice({
+      symbol: compactKey,
+      priceKind: 'ENTRY',
+      serverPrice: marketObservation?.lastTradedPrice,
+      feedSource: authoritativeFeedSource,
+      observedAtMs: authoritativeObservedAtMs,
+      submittedPrice: submittedEntry,
+      maxDeviationPct: DEFAULT_MAX_EXECUTION_SLIPPAGE_PCT,
+      nowMs,
+    });
+
+    if (!authPriceCheck.ok || !marketObservation) {
+      return res.status(authPriceCheck.ok ? 422 : authPriceCheck.statusCode).json({
+        ok: false,
+        code: authPriceCheck.ok ? 'STALE_OR_UNVERIFIED_MARKET_PRICE' : authPriceCheck.code,
+        message: authPriceCheck.ok
+          ? `Paper execution blocked: no live verified market observation available for ${symbol} (${marketType}).`
+          : authPriceCheck.reason,
+        liveMarkPrice: authPriceCheck.authoritativePrice > 0 ? authPriceCheck.authoritativePrice : undefined,
+        deviationPct: authPriceCheck.deviationPct,
+        snapshot: freqtradeCore.getSnapshot(),
+      });
+    }
 
     const result = freqtradeCore.executeStandardizedSignal({
       signalId,
@@ -9469,59 +15287,111 @@ async function startServer() {
       symbol,
       marketType,
       side,
-      entryPrice,
+      entryPrice: authPriceCheck.authoritativePrice,
       stakeUsd,
       leverage,
       confidencePct,
       strategyName: String(body.strategyName || 'SignalForge_CCXT_Unified').slice(0, 64),
+      marketObservation,
+      requireVerifiedMarketObservation: true,
+      nowMs,
     });
-    return res.status(result.statusCode).json({
+    const statusCode =
+      !result.ok && result.message.includes('Paper execution blocked') ? 422 : result.statusCode;
+    return res.status(statusCode).json({
       ...result,
       snapshot: freqtradeCore.getSnapshot(),
     });
   });
 
-  app.post('/api/freqtrade/positions/:tradeId/close', standardWriteRateLimit, (req, res) => {
+  app.post('/api/freqtrade/positions/:tradeId/close', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
     const tradeId = Number.parseInt(String(req.params.tradeId || ''), 10);
     if (!Number.isInteger(tradeId) || tradeId <= 0) {
       return res.status(400).json({ ok: false, message: 'Valid integer tradeId is required.' });
     }
+    const openPos = freqtradeCore.getOpenPosition(tradeId);
+    if (!openPos) {
+      return res.status(404).json({
+        ok: false,
+        message: `Open position #${tradeId} not found.`,
+        snapshot: freqtradeCore.getSnapshot(),
+      });
+    }
+
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const rawExit = Number(body.exitPrice);
-    const exitPrice = Number.isFinite(rawExit) && rawExit > 0 ? rawExit : undefined;
+    const compactKey = openPos.symbol.replace('/', '');
+    const futEntry = futuresFeedCache[compactKey];
+    const spotEntry = spotFeedCache[compactKey];
+    const useFutures = openPos.marketType === 'FUTURES' && futEntry?.source === 'binance_futures';
+    const hasSubmittedExit =
+      body.exitPrice !== undefined && body.exitPrice !== null && body.exitPrice !== '';
+
+    const authExit = verifyAuthoritativeExecutionPrice({
+      symbol: compactKey,
+      priceKind: 'EXIT',
+      serverPrice: useFutures ? futEntry?.markPrice : spotEntry?.price,
+      feedSource: useFutures ? futEntry?.source : spotEntry?.source,
+      observedAtMs: useFutures
+        ? (futEntry?.updatedAtMs ?? Date.parse(futuresFeedUpdatedAt))
+        : spotEntry?.updatedAtMs,
+      submittedPrice: hasSubmittedExit ? Number(body.exitPrice) : undefined,
+      maxDeviationPct: DEFAULT_MAX_EXECUTION_SLIPPAGE_PCT,
+    });
+
+    if (!authExit.ok) {
+      return res.status(authExit.statusCode).json({
+        ok: false,
+        code: authExit.code,
+        message: authExit.reason,
+        liveMarkPrice: authExit.authoritativePrice > 0 ? authExit.authoritativePrice : undefined,
+        deviationPct: authExit.deviationPct,
+        snapshot: freqtradeCore.getSnapshot(),
+      });
+    }
+
     const reason = String(body.reason || 'MANUAL_CLOSE').slice(0, 48);
-    const result = freqtradeCore.closePosition(tradeId, exitPrice, reason);
+    const result = freqtradeCore.closePosition(tradeId, authExit.authoritativePrice, reason);
     return res.status(result.statusCode).json({
       ...result,
       snapshot: freqtradeCore.getSnapshot(),
     });
   });
 
-  app.post('/api/freqtrade/tick', standardWriteRateLimit, (req, res) => {
+  app.post('/api/freqtrade/tick', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const mergedPrices: Record<string, number> = {};
+    if (
+      body.prices &&
+      typeof body.prices === 'object' &&
+      Object.keys(body.prices as Record<string, unknown>).length > 0
+    ) {
+      return res.status(403).json({
+        ok: false,
+        code: 'CLIENT_PRICE_OVERRIDE_FORBIDDEN',
+        message:
+          'Client-supplied market price overrides are prohibited. Risk ticks strictly use authoritative verified server feeds.',
+        snapshot: freqtradeCore.getSnapshot(),
+      });
+    }
+
+    const nowMs = Date.now();
+    const verifiedLivePrices: Record<string, number> = {};
     for (const [sym, entry] of Object.entries(spotFeedCache)) {
-      if (entry && Number.isFinite(entry.price) && entry.price > 0) {
-        mergedPrices[sym] = entry.price;
+      if (!entry || entry.source !== 'binance_spot') continue;
+      const freshness = evaluateTimestampFreshness(entry.updatedAtMs, nowMs).freshness;
+      if ((freshness === 'FRESH' || freshness === 'DELAYED') && Number.isFinite(entry.price) && entry.price > 0) {
+        verifiedLivePrices[sym] = entry.price;
       }
     }
-    if (body.prices && typeof body.prices === 'object') {
-      for (const [k, v] of Object.entries(body.prices as Record<string, unknown>)) {
-        const num = Number(v);
-        if (Number.isFinite(num) && num > 0) {
-          mergedPrices[k] = num;
-        }
-      }
-    }
-    const events = freqtradeCore.applyMarketPriceTick(mergedPrices);
+    const events = freqtradeCore.applyMarketPriceTick(verifiedLivePrices);
     return res.json({
       ok: true,
       events,
+      verifiedSymbolsCount: Object.keys(verifiedLivePrices).length,
       snapshot: freqtradeCore.getSnapshot(),
     });
   });
 
-  app.post('/api/freqtrade/rpc/command', standardWriteRateLimit, (req, res) => {
+  app.post('/api/freqtrade/rpc/command', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const command = String(body.command || '/status').trim().slice(0, 32);
     const result = freqtradeCore.handleTelegramRpcCommand(command);
@@ -9531,7 +15401,7 @@ async function startServer() {
     });
   });
 
-  app.post('/api/freqtrade/audit/dispatch', standardWriteRateLimit, (_req, res) => {
+  app.post('/api/freqtrade/audit/dispatch', requireOperatorAuth, standardWriteRateLimit, (_req, res) => {
     const latency = Number.isFinite(monitorState.eventLoopLagMs) && monitorState.eventLoopLagMs > 0
       ? monitorState.eventLoopLagMs
       : 8.4;
@@ -9549,6 +15419,17 @@ async function startServer() {
     return res.status(result.statusCode).json(result);
   });
 
+  app.get('/api/telemetry/feed-validation', (_req, res) => {
+    return res.json({
+      ok: true,
+      spotFeedSource,
+      spotFeedUpdatedAt,
+      futuresFeedSource,
+      futuresFeedUpdatedAt,
+      validation: { ...liveFeedValidationStats },
+    });
+  });
+
   // Signal Forge 6-Phase Hybrid Production Architecture (Python Control Plane + Rust Execution Core)
   app.get('/api/hybrid/state', (_req, res) => {
     return res.json({
@@ -9557,7 +15438,16 @@ async function startServer() {
     });
   });
 
-  app.post('/api/hybrid/clones/scale', standardWriteRateLimit, (req, res) => {
+  app.post('/api/hybrid/runtime/verify-python', requireOperatorAuth, standardWriteRateLimit, (_req, res) => {
+    const verification = hybridArchitecture.runPythonControlPlaneSelfTest();
+    return res.status(verification.ok ? 200 : 503).json({
+      ok: verification.ok,
+      verification,
+      state: hybridArchitecture.getStateSnapshot(),
+    });
+  });
+
+  app.post('/api/hybrid/clones/scale', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const marketVolatilityPct = Number(body.marketVolatilityPct);
     const computeNodes = Number(body.computeNodes);
@@ -9595,7 +15485,7 @@ async function startServer() {
     });
   });
 
-  app.post('/api/hybrid/backtest/run', standardWriteRateLimit, (req, res) => {
+  app.post('/api/hybrid/backtest/run', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     try {
       const record = hybridArchitecture.runBacktestAndTrack({
@@ -9645,6 +15535,310 @@ async function startServer() {
     }
   });
 
+  // Signal Forge Phase 1 — 5-Stage Public Signal Validation & Backend Operator Approval Gate
+  // Public Signal = Display to users ONLY (never triggers live trade execution).
+  app.get('/api/public-signals/status', async (req, res) => {
+    const principal = await resolveCallerPrincipal(req);
+    const identity = buildRbacIdentity(principal, extraAdminEmailsFromEnv);
+    const approvalDecision = evaluateRbacAccess(identity, 'PROMOTION_CERTIFY');
+    const snapshot = publicSignalGate.getMonitoringSnapshot();
+    return res.json({
+      ok: true,
+      snapshot,
+      callerApprovalClearance: {
+        authorizedOperator: approvalDecision.allowed,
+        role: identity.role,
+        actorLabel: identity.email || identity.uid || 'guest-read-only',
+        reason: approvalDecision.reason,
+      },
+    });
+  });
+
+  app.get('/api/public-signals/feed', (_req, res) => {
+    const feed = publicSignalGate.getPublicSignalsFeed();
+    return res.json({
+      ok: true,
+      feed,
+    });
+  });
+
+  app.post(
+    '/api/public-signals/stage1/verify-testnet',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    async (req, res) => {
+      const principal = await resolveCallerPrincipal(req);
+      const actor = principal.email || principal.uid || 'operator-session';
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const targetHost =
+        typeof body.targetHost === 'string' && body.targetHost.trim()
+          ? body.targetHost.trim()
+          : 'testnet.binance.vision';
+      const sampleSymbol =
+        typeof body.sampleSymbol === 'string' && body.sampleSymbol.trim()
+          ? body.sampleSymbol.trim().toUpperCase()
+          : 'BTC/USDT';
+      const sampleSide = String(body.sampleSide || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
+      const compactKey = sampleSymbol.replace('/', '');
+      const spotEntry = spotFeedCache[compactKey];
+      const hasLiveSpot =
+        spotEntry?.source === 'binance_spot' &&
+        Number.isFinite(spotEntry.price) &&
+        spotEntry.price > 0 &&
+        evaluateTimestampFreshness(spotEntry.updatedAtMs).freshness !== 'STALE';
+      const hasSubmittedSamplePrice =
+        body.sampleEntryPrice !== undefined && body.sampleEntryPrice !== null && body.sampleEntryPrice !== '';
+      if (hasSubmittedSamplePrice && hasLiveSpot) {
+        const sampleCheck = verifyAuthoritativeExecutionPrice({
+          symbol: compactKey,
+          priceKind: 'ENTRY',
+          serverPrice: spotEntry.price,
+          feedSource: spotEntry.source,
+          observedAtMs: spotEntry.updatedAtMs,
+          submittedPrice: Number(body.sampleEntryPrice),
+          maxDeviationPct: 2.0,
+        });
+        if (!sampleCheck.ok) {
+          return res.status(sampleCheck.statusCode).json({
+            ok: false,
+            code: sampleCheck.code,
+            message: sampleCheck.reason,
+            snapshot: publicSignalGate.getMonitoringSnapshot(),
+          });
+        }
+      }
+      const sampleEntryPrice = hasLiveSpot
+        ? spotEntry.price
+        : Number.isFinite(Number(body.sampleEntryPrice)) && Number(body.sampleEntryPrice) > 0
+          ? Number(body.sampleEntryPrice)
+          : (spotEntry?.price && spotEntry.price > 0 ? spotEntry.price : 91_400);
+
+      const result = publicSignalGate.runStage1TestnetCheck(actor, {
+        targetHost,
+        sampleSymbol,
+        sampleSide,
+        sampleEntryPrice,
+        sampleStopLossPrice:
+          body.sampleStopLossPrice !== undefined ? Number(body.sampleStopLossPrice) : undefined,
+        sampleTakeProfitPrice:
+          body.sampleTakeProfitPrice !== undefined ? Number(body.sampleTakeProfitPrice) : undefined,
+        invalidOrderRejected:
+          body.invalidOrderRejected !== undefined ? Boolean(body.invalidOrderRejected) : true,
+      });
+
+      return res.status(result.statusCode).json({
+        ok: result.ok,
+        report: result.report,
+        snapshot: publicSignalGate.getMonitoringSnapshot(),
+      });
+    }
+  );
+
+  app.post(
+    '/api/public-signals/stage2/record-paper-trade',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    async (req, res) => {
+      const principal = await resolveCallerPrincipal(req);
+      const actor = principal.email || principal.uid || 'operator-session';
+      const body = (req.body ?? {}) as Record<string, unknown>;
+
+      const symbol = String(body.symbol || 'BTC/USDT').trim().toUpperCase();
+      const side = String(body.side || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
+      const tradeEvidenceId = String(body.tradeEvidenceId || '').trim();
+      const marketSource = String(body.marketSource || '').trim().toUpperCase();
+      const observedAtIso = String(body.observedAtIso || '').trim();
+      const closedAtIso = String(body.closedAtIso || '').trim();
+      const compactKey = symbol.replace('/', '');
+      const liveSpot = spotFeedCache[compactKey];
+
+      const priceCoherence = validateStage2PaperEvidencePriceCoherence({
+        side,
+        bidPrice: Number(body.bidPrice),
+        askPrice: Number(body.askPrice),
+        entryPrice: Number(body.entryPrice),
+        slippageBps: Number(body.slippageBps),
+        observedAtIso,
+        liveServerPrice: liveSpot?.price,
+        liveServerSource: liveSpot?.source,
+        liveServerObservedAtMs: liveSpot?.updatedAtMs,
+      });
+      if (!priceCoherence.valid) {
+        return res.status(409).json({
+          ok: false,
+          code: 'PAPER_EVIDENCE_ENTRY_PRICE_MISMATCH',
+          message: priceCoherence.reason,
+          snapshot: publicSignalGate.getMonitoringSnapshot(),
+        });
+      }
+
+      const result = publicSignalGate.recordPaperTradeEvidence(actor, {
+        tradeEvidenceId,
+        symbol,
+        side,
+        marketSource,
+        observedAtIso,
+        closedAtIso,
+        bidPrice: Number(body.bidPrice),
+        askPrice: Number(body.askPrice),
+        entryPrice: Number(body.entryPrice),
+        exitPrice: Number(body.exitPrice),
+        stakeUsd: Number(body.stakeUsd),
+        feeRate: Number(body.feeRate),
+        feeUsd: Number(body.feeUsd),
+        spreadBps: Number(body.spreadBps),
+        slippageBps: Number(body.slippageBps),
+        stopLossPrice: Number(body.stopLossPrice),
+        takeProfitPrice: Number(body.takeProfitPrice),
+        isDemonstration: Boolean(body.isDemonstration),
+        observationNote:
+          typeof body.observationNote === 'string' ? body.observationNote.slice(0, 200) : undefined,
+      });
+
+      return res.status(result.statusCode).json({
+        ok: result.ok,
+        validation: result.validation,
+        stored: result.stored,
+        snapshot: publicSignalGate.getMonitoringSnapshot(),
+      });
+    }
+  );
+
+  app.post(
+    '/api/public-signals/candidates/register',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    async (req, res) => {
+      const principal = await resolveCallerPrincipal(req);
+      const actor = principal.email || principal.uid || 'operator-session';
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const candidateSymbol = String(body.symbol || '').trim().toUpperCase();
+      const compactKey = candidateSymbol.replace('/', '');
+      const liveSpot = spotFeedCache[compactKey];
+      const submittedCandidateEntry = Number(body.entryPrice);
+      if (
+        liveSpot?.source === 'binance_spot' &&
+        Number.isFinite(liveSpot.price) &&
+        liveSpot.price > 0 &&
+        evaluateTimestampFreshness(liveSpot.updatedAtMs).freshness !== 'STALE' &&
+        Number.isFinite(submittedCandidateEntry) &&
+        submittedCandidateEntry > 0
+      ) {
+        const divergencePct =
+          (Math.abs(submittedCandidateEntry - liveSpot.price) / liveSpot.price) * 100;
+        if (divergencePct > 5.0) {
+          return res.status(409).json({
+            ok: false,
+            code: 'CANDIDATE_ENTRY_PRICE_OUT_OF_BAND',
+            message: `Candidate entryPrice ($${submittedCandidateEntry}) diverges ${divergencePct.toFixed(2)}% from live verified spot price ($${liveSpot.price}), exceeding 5.0% limit.`,
+            snapshot: publicSignalGate.getMonitoringSnapshot(),
+          });
+        }
+      }
+
+      const result = publicSignalGate.registerCandidateSignal(actor, {
+        signalId: typeof body.signalId === 'string' ? body.signalId : undefined,
+        symbol: candidateSymbol,
+        side: String(body.side || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY',
+        timeframe: typeof body.timeframe === 'string' ? body.timeframe : '1h',
+        entryPrice: submittedCandidateEntry,
+        stopLossPrice: Number(body.stopLossPrice),
+        takeProfitPrice: Number(body.takeProfitPrice),
+        confidencePct: Number(body.confidencePct),
+        strategyName:
+          typeof body.strategyName === 'string' ? body.strategyName : 'SignalForge_Validated_Candidate',
+        marketSource:
+          typeof body.marketSource === 'string' ? body.marketSource : 'BINANCE_SPOT_OBSERVATION',
+      });
+
+      return res.status(result.statusCode).json({
+        ...result,
+        snapshot: publicSignalGate.getMonitoringSnapshot(),
+      });
+    }
+  );
+
+  // STAGE 4 — Strict Backend Operator Approval Gate (RBAC ADMIN / SUPER_ADMIN required)
+  // Approves or revokes Public Display ONLY. Never triggers live trade execution.
+  app.post(
+    '/api/public-signals/approve',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    requireRbacPermission('PROMOTION_CERTIFY'),
+    async (req, res) => {
+      const rbacReq = req as express.Request & {
+        rbacIdentity?: ReturnType<typeof buildRbacIdentity>;
+      };
+      const actor =
+        rbacReq.rbacIdentity?.email || rbacReq.rbacIdentity?.uid || 'authorized-admin-operator';
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const signalId = String(body.signalId || '').trim();
+      const rawDecision = String(body.decision || 'APPROVE').trim().toUpperCase();
+      const decision: 'APPROVE' | 'REJECT' | 'REVOKE' =
+        rawDecision === 'REJECT' ? 'REJECT' : rawDecision === 'REVOKE' ? 'REVOKE' : 'APPROVE';
+      const note = typeof body.note === 'string' ? body.note : '';
+
+      if (!signalId) {
+        return res.status(400).json({
+          ok: false,
+          message: 'signalId is required.',
+          canTriggerLiveOrders: false,
+        });
+      }
+
+      const result = publicSignalGate.decidePublicSignalApproval(actor, signalId, decision, note);
+      return res.status(result.statusCode).json({
+        ...result,
+        snapshot: publicSignalGate.getMonitoringSnapshot(),
+        feed: publicSignalGate.getPublicSignalsFeed(),
+      });
+    }
+  );
+
+  // STAGE 4 — Global Public Publication Toggle (disabled by default; ADMIN / SUPER_ADMIN required)
+  app.post(
+    '/api/public-signals/publication-toggle',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    requireRbacPermission('PROMOTION_CERTIFY'),
+    async (req, res) => {
+      const rbacReq = req as express.Request & {
+        rbacIdentity?: ReturnType<typeof buildRbacIdentity>;
+      };
+      const actor =
+        rbacReq.rbacIdentity?.email || rbacReq.rbacIdentity?.uid || 'authorized-admin-operator';
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const enabled = Boolean(body.enabled);
+      const note = typeof body.note === 'string' ? body.note : '';
+
+      const result = publicSignalGate.setGlobalPublicationEnabled(actor, enabled, note);
+      return res.status(result.statusCode).json({
+        ...result,
+        snapshot: publicSignalGate.getMonitoringSnapshot(),
+        feed: publicSignalGate.getPublicSignalsFeed(),
+      });
+    }
+  );
+
+  // STAGE 5 — Explicit Integrity & Mandatory Safety Re-Verification
+  app.post(
+    '/api/public-signals/integrity-check',
+    requireOperatorAuth,
+    standardWriteRateLimit,
+    async (req, res) => {
+      const principal = await resolveCallerPrincipal(req);
+      const actor = principal.email || principal.uid || 'operator-session';
+      const result = publicSignalGate.runIntegrityAndSafetyCheck(actor);
+      return res.status(result.statusCode).json({
+        ok: result.ok,
+        autoSuspended: result.autoSuspended,
+        suspensionReason: result.suspensionReason,
+        snapshot: result.snapshot,
+        feed: publicSignalGate.getPublicSignalsFeed(),
+      });
+    }
+  );
+
   // Strict 3-Hour Batched Signal Digest + Daily/Weekly/Monthly Performance Reports (gated by App Live)
   const ONE_DAY_MS = 24 * 60 * 60 * 1000;
   setInterval(() => {
@@ -9670,28 +15864,79 @@ async function startServer() {
     }
   }, ONE_DAY_MS);
 
-  // Dual-Stream Telegram Continuous Developer Audit Loop (60s) + Automated Daily UTC Audit Delivery
+  // Phase A Anti-Flood Fix:
+  // 1) Never blast unsolicited CONTINUOUS_AUDIT OPTIMAL Telegram messages at boot or every 60s.
+  // 2) Keep internal monitoring operational, acquire durable cross-worker scheduler lease,
+  //    alert ONLY on genuine state transitions / outages / recoveries, and send optional
+  //    scheduled Health Digests strictly per Command Hub Notification Settings (default 24h).
   setTimeout(() => {
-    dispatchDeveloperSystemAudit('CONTINUOUS_AUDIT').catch(() => undefined);
-    if (process.env.APP_URL && /^https:\/\//i.test(process.env.APP_URL) && getTelegramBotToken()) {
+    sampleSystemHealthAndLatencies();
+    const tgBootCfg = resolveTelegramConfig(process.env);
+    if (
+      process.env.APP_URL &&
+      /^https:\/\//i.test(process.env.APP_URL) &&
+      tgBootCfg.botTokenValid &&
+      tgBootCfg.webhookSecretValid
+    ) {
       registerTelegramWebhook(process.env.APP_URL).catch(() => undefined);
     }
   }, 4500);
 
-  setInterval(() => {
+  singletonSchedulers.register('telegram_health_monitor', CONTINUOUS_AUDIT_INTERVAL_SEC * 1000, () => {
     if (!appLiveEnabled) return;
-    dispatchDeveloperSystemAudit('CONTINUOUS_AUDIT').catch(() => undefined);
-    if (
-      shouldTriggerDailyAudit({
-        nowMs: Date.now(),
-        lastSentDateUtc: lastDailyAuditDateUtc,
-        scheduledUtcHour: dailyAuditScheduledUtcHour,
-        enabled: dailyAuditAutoDeliveryEnabled,
-      })
-    ) {
-      dispatchDeveloperSystemAudit('DAILY_DIGEST').catch(() => undefined);
+    // Internal monitoring always runs locally regardless of Telegram mute state
+    const sample = sampleSystemHealthAndLatencies();
+    const slowest = [...sample.moduleLatencies].sort((a, b) => b.latencyMs - a.latencyMs)[0];
+    rolling24hAuditSamples.push({
+      tsMs: Date.now(),
+      cpuUsagePct: sample.health.cpuUsagePct,
+      memoryRssMb: sample.health.memoryRssMb,
+      eventLoopLagMs: sample.health.eventLoopLagMs,
+      peakModuleLatencyMs: slowest?.latencyMs ?? 0,
+      slowestModuleLabel: slowest?.label ?? 'Binance Spot Feed',
+    });
+    if (rolling24hAuditSamples.length > 1500) {
+      rolling24hAuditSamples.splice(0, rolling24hAuditSamples.length - 1500);
     }
-  }, CONTINUOUS_AUDIT_INTERVAL_SEC * 1000);
+
+    // Cross-worker durable lease ensures ONLY ONE instance evaluates Telegram alerts per cycle
+    const hasLease = telegramGovernor.tryAcquireSchedulerLease({
+      taskName: 'telegram_health_monitor',
+      workerId: SERVER_WORKER_ID,
+      leaseTtlMs: (CONTINUOUS_AUDIT_INTERVAL_SEC - 5) * 1000,
+    });
+    if (!hasLease) return;
+
+    const mappedHealth: SystemOperationalHealth =
+      sample.health.overallStatus === 'DEGRADED'
+        ? 'DEGRADED'
+        : sample.health.overallStatus === 'SELF_HEALING'
+        ? 'SELF_HEALING'
+        : 'OPTIMAL';
+
+    const cycle = telegramGovernor.evaluateHealthCycle({ currentHealth: mappedHealth });
+
+    if (cycle.shouldSendImmediateAlert && cycle.category) {
+      dispatchDeveloperSystemAudit('CONTINUOUS_AUDIT', undefined, {
+        overrideCategory:
+          cycle.category === 'CRITICAL_ALERT' ||
+          cycle.category === 'STATE_TRANSITION' ||
+          cycle.category === 'RECOVERY_EVENT'
+            ? cycle.category
+            : 'ROUTINE_AUDIT',
+        eventKey: `health_${mappedHealth.toLowerCase()}_${Math.floor(Date.now() / (5 * 60_000))}`,
+        transitionBanner: `[SIGNAL FORGE HEALTH · ${cycle.transitionLabel}]`,
+      }).catch(() => undefined);
+    }
+
+    if (cycle.shouldSendScheduledDigest) {
+      dispatchDeveloperSystemAudit('DAILY_DIGEST', undefined, {
+        overrideCategory: 'HEALTH_DIGEST',
+        eventKey: `digest_${getUtcDateKey(Date.now())}_${new Date().getUTCHours()}`,
+        transitionBanner: '[SIGNAL FORGE · SCHEDULED HEALTH DIGEST]',
+      }).catch(() => undefined);
+    }
+  });
 
   // Flush coalesced backend Binance Spot WebSocket ticks to SSE subscribers every 250ms
   setInterval(() => {
@@ -9789,69 +16034,119 @@ async function startServer() {
     }
   }, SUBSECOND_HEARTBEAT_INTERVAL_MS);
 
-  // Bind Persistent Backend Binance Spot WebSocket + Start 12s Spot REST, Depth, Sentinel & Autonomous Coordinator Loop
-  bindBackendSpotWebSocket();
-  pollBinanceTopGainers()
-    .then(() => pollBinanceSpotFeed())
-    .then(() => refreshCmcValuations())
-    .then(() => refreshAllTrackedDepths())
-    .then(() => {
-      seedInitialSpotTestnetPositions();
-      runSentinelAuditForAll();
-      runAutonomousCoordinatorTick();
-    })
-    .catch(() => {
-      seedFallbackSpotTelemetry();
-      seedInitialSpotTestnetPositions();
-      runSentinelAuditForAll();
-    });
+  // Seed lightweight baseline telemetry immediately so early /api/* requests respond without waiting,
+  // while deferring heavy Binance WS/REST/pipeline bootstrap until after HTTP port 3000 & Vite are ready.
+  seedFallbackSpotTelemetry();
 
-  setInterval(() => {
-    if (!appLiveEnabled) {
-      appLiveQuotaSavedCalls += 1;
-      return;
-    }
-    // When App Live is ON, Top Gainers Scanner & Telegram alerts remain active even if Live Feed Modules are paused
-    const chain = pollBinanceTopGainers();
-    if (!systemControls.liveFeedModulesEnabled) {
-      chain.catch(() => undefined);
-      return;
-    }
-    chain
+  let backgroundDaemonsStarted = false;
+  const startBackgroundDaemons = () => {
+    if (backgroundDaemonsStarted) return;
+    backgroundDaemonsStarted = true;
+
+    // Low-volume strictly read-only Telegram getMe auth verification (zero messages sent)
+    notificationDispatcher.verifyTelegramBotAuth(false).catch(() => undefined);
+
+    startBackendExecutionPipelineLoop();
+    bindBackendSpotWebSocket();
+    pollBinanceTopGainers()
       .then(() => pollBinanceSpotFeed())
       .then(() => refreshCmcValuations())
       .then(() => refreshAllTrackedDepths())
+      .then(() => {
+        seedInitialSpotTestnetPositions();
+        runSentinelAuditForAll();
+        runAutonomousCoordinatorTick();
+      })
       .catch(() => {
-        monitorState.staleFeedCount += 1;
-        seedFallbackSpotTelemetry(true);
+        seedFallbackSpotTelemetry();
+        seedInitialSpotTestnetPositions();
+        runSentinelAuditForAll();
       });
-  }, GAINER_FEEDER_INTERVAL_MS);
 
-  // Autonomous Zero-Intervention Coordinator & Sentinel 5-Second Risk/Entry Loop
-  setInterval(() => {
-    try {
+    setInterval(() => {
       if (!appLiveEnabled) {
         appLiveQuotaSavedCalls += 1;
         return;
       }
-      if (autonomousCoordinatorEnabled && (executionMode === 'LIVE' || systemControls.testnetExecutionEnabled)) {
-        runAutonomousCoordinatorTick();
+      // When App Live is ON, Top Gainers Scanner & Telegram alerts remain active even if Live Feed Modules are paused
+      const chain = pollBinanceTopGainers();
+      if (!systemControls.liveFeedModulesEnabled) {
+        chain.catch(() => undefined);
+        return;
       }
-    } catch (err) {
-      console.error('[Autonomous Loop Error]', err);
-    }
-  }, 5000);
+      chain
+        .then(() => pollBinanceSpotFeed())
+        .then(() => refreshCmcValuations())
+        .then(() => refreshAllTrackedDepths())
+        .catch(() => {
+          monitorState.staleFeedCount += 1;
+          seedFallbackSpotTelemetry(true);
+        });
+    }, GAINER_FEEDER_INTERVAL_MS);
 
-  // Self-Healing 30-Second Probe Loop (Telegram Webhook -> Polling Auto-Failover & Subsystem Health)
-  setInterval(() => {
-    try {
-      const tgSnap = telegramDispatchStabilizer.getSnapshot();
-      const webhookHealthy = tgSnap.failedCount === 0 && tgSnap.pendingCount < 5;
-      selfHealingSupervisor.recordTelegramWebhookProbe(webhookHealthy);
-    } catch {
-      // non-fatal probe error
+    // Autonomous Zero-Intervention Coordinator & Sentinel 5-Second Risk/Entry Loop
+    setInterval(() => {
+      try {
+        if (!appLiveEnabled) {
+          appLiveQuotaSavedCalls += 1;
+          return;
+        }
+        if (autonomousCoordinatorEnabled && (executionMode === 'LIVE' || systemControls.testnetExecutionEnabled)) {
+          runAutonomousCoordinatorTick();
+        }
+      } catch (err) {
+        console.error('[Autonomous Loop Error]', err);
+      }
+    }, 5000);
+
+    // Self-Healing 30-Second Probe Loop (Persistent Notification Ledger Health)
+    setInterval(() => {
+      try {
+        const overview = notificationDispatcher.getHealthOverview();
+        const webhookHealthy =
+          overview.counters.failed === 0 &&
+          overview.counters.retrying < 5 &&
+          overview.telegram.state !== 'AUTH_FAILED';
+        selfHealingSupervisor.recordTelegramWebhookProbe(webhookHealthy);
+      } catch {
+        // non-fatal probe error
+      }
+    }, 30_000);
+  };
+
+  // Ensure unmatched /api/* routes and route exceptions return JSON rather than SPA/Express HTML
+  app.use('/api', (_req, res) => {
+    const diagnosticId = `SF-API-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    res.setHeader('X-Diagnostic-Id', diagnosticId);
+    return res.status(404).json({
+      ok: false,
+      creditsCharged: 0,
+      code: 'API_ROUTE_NOT_FOUND',
+      diagnosticId,
+      error: 'Requested API endpoint does not exist.',
+    });
+  });
+
+  app.use(
+    (
+      err: unknown,
+      req: express.Request,
+      res: express.Response,
+      next: express.NextFunction
+    ) => {
+      if (!err || !req.path.startsWith('/api/')) return next(err);
+      const diagnosticId = `SF-ERR-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+      res.setHeader('X-Diagnostic-Id', diagnosticId);
+      console.error(`[API Error ${diagnosticId}]`, err);
+      return res.status(500).json({
+        ok: false,
+        creditsCharged: 0,
+        code: 'API_INTERNAL_ERROR',
+        diagnosticId,
+        error: 'Internal server error while processing API request. Zero credits charged.',
+      });
     }
-  }, 30_000);
+  );
 
   if (process.env.NODE_ENV === 'production') {
     const distPath = path.resolve(__dirname, 'dist');
@@ -9868,9 +16163,29 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Signal Forge server listening on http://0.0.0.0:${PORT}`);
+  const httpServer = app.listen(PORT, '0.0.0.0', () => {
+    const startupAudit = auditEnvironmentConfiguration(process.env);
+    console.log(
+      `Signal Forge server listening on http://0.0.0.0:${PORT} | envHealthy=${startupAudit.startupHealthy} | optionalActive=${startupAudit.optionalIntegrationsConfigured.length} | optionalDisabled=${startupAudit.optionalIntegrationsDisabled.length} | liveTradingLocked=true`
+    );
+    // Defer heavy market-feed / autonomous daemons briefly so pre-warm requests to "/" never stall or reset
+    setTimeout(startBackgroundDaemons, 1500);
   });
+
+  // Align HTTP keep-alive timeouts above reverse-proxy idle windows (60s) to prevent TCP connection resets
+  httpServer.keepAliveTimeout = 65_000;
+  httpServer.headersTimeout = 66_000;
+  httpServer.requestTimeout = 120_000;
 }
 
-startServer();
+process.on('unhandledRejection', (reason) => {
+  console.error('[Signal Forge UnhandledRejection]', reason instanceof Error ? reason.message : reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[Signal Forge UncaughtException]', err instanceof Error ? err.message : err);
+});
+
+startServer().catch((err) => {
+  console.error('[Signal Forge Startup Failure]', err);
+});

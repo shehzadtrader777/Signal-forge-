@@ -33,6 +33,7 @@ import { useRbacIdentity } from '../hooks/useRbacIdentity';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { TrustConsolePanel } from '../components/TrustConsolePanel';
 import { ModularBacktestMatrixPanel } from '../components/ModularBacktestMatrixPanel';
+import { Step2StrategyBacktestComparator } from '../components/Step2StrategyBacktestComparator';
 
 const BAR_RADIUS: [number, number, number, number] = [6, 6, 0, 0];
 const AREA_CHART_MARGIN = { top: 8, right: 12, left: 4, bottom: 0 };
@@ -261,12 +262,33 @@ export function Backtesting() {
     []
   );
 
+  const [anchoredBacktestPrice, setAnchoredBacktestPrice] = useState<number | undefined>(() =>
+    tickers[simSeed.symbol]?.price ?? futuresTelemetry[simSeed.symbol]?.markPrice
+  );
+
   useEffect(() => {
     syncLiveFeedAndCandles(simSeed.symbol, simSeed.timeframe);
+    const snap =
+      tickersRef.current[simSeed.symbol]?.price ??
+      futuresTelemetryRef.current[simSeed.symbol]?.markPrice;
+    if (snap && Number.isFinite(snap)) {
+      setAnchoredBacktestPrice(snap);
+    }
   }, [simSeed.symbol, simSeed.timeframe, syncLiveFeedAndCandles]);
 
   const liveWsPrice =
     tickers[simSeed.symbol]?.price ?? futuresTelemetry[simSeed.symbol]?.markPrice;
+
+  // Capture initial live WS price once per symbol if mounted before WS hydration
+  useEffect(() => {
+    if (
+      anchoredBacktestPrice === undefined &&
+      liveWsPrice !== undefined &&
+      Number.isFinite(liveWsPrice)
+    ) {
+      setAnchoredBacktestPrice(liveWsPrice);
+    }
+  }, [anchoredBacktestPrice, liveWsPrice]);
 
   // Comparative 30 / 60 / 90-Day Optimization Protocol Report (strictly 300–500 trades/window, 5% Max SL, 5x ATR Trail TP)
   const comparativeReport = useMemo(
@@ -276,9 +298,9 @@ export function Backtesting() {
         timeframe: simSeed.timeframe,
         strategy: simSeed.strategy,
         providedCandles: liveCandles,
-        liveWsPrice,
+        liveWsPrice: anchoredBacktestPrice,
       }),
-    [simSeed, liveCandles, liveWsPrice]
+    [simSeed, liveCandles, anchoredBacktestPrice]
   );
 
   const [wfInSampleBars, setWfInSampleBars] = useState<number>(85);
@@ -325,6 +347,9 @@ export function Backtesting() {
 
   return (
     <div className="mx-auto max-w-[1440px] px-4 py-8 sm:px-6 lg:px-8 space-y-8">
+      {/* Step 2: Point-in-Time 8-Strategy Comparison Backtest Upgrade (Zero Look-Ahead, Fees, Slippage, OOS) */}
+      <Step2StrategyBacktestComparator />
+
       {/* Decoupled Parameterized 1,000-Trade Multi-Horizon Simulation Matrix & Auto-Optimizer */}
       <ModularBacktestMatrixPanel symbol={simSeed.symbol} />
 

@@ -105,6 +105,22 @@ export interface TelegramQueueDeliveryItem {
   direction: 'BUY' | 'SELL';
   targetChatId: string;
   payloadText: string;
+  provider?: 'MAKE_WEBHOOK' | 'TELEGRAM_DIRECT' | 'DISCORD_WEBHOOK';
+  providerMessageId?: string | null;
+  deliveryState?:
+    | 'QUEUED'
+    | 'PROVIDER_ACCEPTED'
+    | 'DELIVERED_WHEN_VERIFIABLE'
+    | 'FAILED'
+    | 'RETRYING'
+    | 'SUPPRESSED';
+  errorHistory?: Array<{
+    attempt: number;
+    provider: string;
+    httpStatus: number | null;
+    error: string;
+    timestampIso: string;
+  }>;
   attempts: number;
   maxAttempts: number;
   nextRetryAtMs: number;
@@ -491,7 +507,7 @@ export class TelegramDispatchStabilizer {
     const failedCount = this.queue.filter((q) => q.status === 'FAILED_EXHAUSTED').length;
     const completed = this.totalDelivered + failedCount;
     const reliabilityPct =
-      completed > 0 ? Number(((this.totalDelivered / completed) * 100).toFixed(1)) : 100;
+      completed > 0 ? Number(((this.totalDelivered / completed) * 100).toFixed(1)) : 0;
     return {
       reliabilityPct,
       totalEnqueued: this.totalEnqueued,

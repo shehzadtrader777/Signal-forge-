@@ -13,10 +13,12 @@
 }
 
 @layer base {
-  html {
+  html,
+  body {
     background-color: #050914;
     color: #f1f5f9;
     font-family: var(--font-sans);
+    overflow-x: clip;
   }
 
   h1, h2, h3, .font-display {
@@ -64,8 +66,6 @@
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  transform: translateZ(0);
-  will-change: transform;
   background-image:
     radial-gradient(ellipse 80% 45% at 50% -10%, rgba(6, 182, 212, 0.11), transparent 70%),
     linear-gradient(to right, rgba(6, 182, 212, 0.045) 1px, transparent 1px),
@@ -167,6 +167,18 @@
   .cyber-ai-wave,
   .forge-ticker-track {
     animation: none;
+  }
+}
+
+/* Mobile & coarse-pointer GPU/battery optimization: disable infinite decorative sweeps while keeping visual identity intact */
+@media (max-width: 767px), (pointer: coarse) {
+  .cyber-stream-rail::after,
+  .cyber-ai-wave {
+    animation: none;
+    will-change: auto;
+  }
+  .cyber-stream-rail::after {
+    display: none;
   }
 }
 

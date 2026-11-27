@@ -83,29 +83,47 @@ fn main() -> std::io::Result<()> {
                 end_epoch_ns,
                 fast_window,
                 slow_window,
-            }) => match MmapTickDataset::open(&PathBuf::from(mmap_path)) {
-                Ok(dataset) => {
-                    let summary = dataset.run_vectorized_scan(
-                        start_epoch_ns,
-                        end_epoch_ns,
-                        fast_window,
-                        slow_window,
-                        2.5,
-                    );
+            }) => {
+                let candidate = PathBuf::from(&mmap_path);
+                let has_parent_dir = candidate
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir));
+                let allowed_prefix =
+                    mmap_path.starts_with("/tmp/sf_mmap_") || mmap_path.starts_with(".data/");
+                if has_parent_dir || !allowed_prefix {
                     ExecutionReply {
-                        ok: true,
+                        ok: false,
                         engine_ts_ns: monotonic_epoch_ns(),
                         latency_ns: started.elapsed().as_nanos() as u64,
-                        payload_json: serde_json::to_string(&summary).unwrap_or_default(),
+                        payload_json: r#"{"error":"mmap_path confinement violation blocked"}"#
+                            .to_string(),
+                    }
+                } else {
+                    match MmapTickDataset::open(&candidate) {
+                        Ok(dataset) => {
+                            let summary = dataset.run_vectorized_scan(
+                                start_epoch_ns,
+                                end_epoch_ns,
+                                fast_window,
+                                slow_window,
+                                2.5,
+                            );
+                            ExecutionReply {
+                                ok: true,
+                                engine_ts_ns: monotonic_epoch_ns(),
+                                latency_ns: started.elapsed().as_nanos() as u64,
+                                payload_json: serde_json::to_string(&summary).unwrap_or_default(),
+                            }
+                        }
+                        Err(err) => ExecutionReply {
+                            ok: false,
+                            engine_ts_ns: monotonic_epoch_ns(),
+                            latency_ns: started.elapsed().as_nanos() as u64,
+                            payload_json: format!(r#"{{"error":"{}"}}"#, err),
+                        },
                     }
                 }
-                Err(err) => ExecutionReply {
-                    ok: false,
-                    engine_ts_ns: monotonic_epoch_ns(),
-                    latency_ns: started.elapsed().as_nanos() as u64,
-                    payload_json: format!(r#"{{"error":"{}"}}"#, err),
-                },
-            },
+            }
             Ok(ControlPlaneCommand::UpdateRiskEnvelope {
                 max_position_pct,
                 max_leverage,

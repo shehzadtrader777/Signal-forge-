@@ -45,6 +45,8 @@ import {
   ForgeWidgetFrame,
 } from './ui/ForgeDesignSystem';
 
+import { ErrorBoundary } from './ErrorBoundary';
+
 const LOCAL_STORAGE_KEY = 'signal_forge_daily_pnl_vault_v1';
 
 const WIDGET_LAYOUT: WidgetLayoutContract = {
@@ -55,6 +57,18 @@ const WIDGET_LAYOUT: WidgetLayoutContract = {
   gpuContain: true,
   showStreamRail: true,
 };
+
+const VAULT_BAR_CHART_MARGIN = { top: 8, right: 12, left: 0, bottom: 0 } as const;
+const VAULT_BAR_RADIUS: [number, number, number, number] = [4, 4, 0, 0];
+const VAULT_AXIS_TICK_STYLE = { fill: '#94a3b8', fontSize: 11, fontFamily: 'monospace' } as const;
+const VAULT_AXIS_LINE_STYLE = { stroke: 'rgba(148,163,184,0.2)' } as const;
+const VAULT_TOOLTIP_STYLE = {
+  backgroundColor: '#0f172a',
+  border: '1px solid rgba(56,189,248,0.35)',
+  borderRadius: '8px',
+  fontSize: '12px',
+  fontFamily: 'monospace',
+} as const;
 
 type VaultPanelTab = 'VAULT_OVERRIDE' | 'DAILY_PNL' | 'IMMUTABLE_LEDGER';
 
@@ -111,6 +125,16 @@ function formatPct4(val: number): string {
   return `${sign}${val.toFixed(4)}%`;
 }
 
+function formatVaultYAxisTick(v: number): string {
+  return `${v > 0 ? '+' : ''}${v.toFixed(2)}%`;
+}
+
+function formatVaultTooltip(value: unknown, name: unknown): [string, string] {
+  const num = Number(value) || 0;
+  if (name === 'returnPct') return [formatPct4(num), 'Daily Return'];
+  return [formatUsdSigned(num, 4), String(name)];
+}
+
 function formatCsvValue(v: string | number): string {
   const str = String(v);
   if (str.includes(',') || str.includes('"') || str.includes('\n')) {
@@ -155,8 +179,21 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
 
   const lastSyncedDailyHashRef = useRef<Map<string, string>>(new Map());
   const lastSyncedVaultVersionRef = useRef<number>(0);
+  const syncInFlightRef = useRef<boolean>(false);
+  const resyncRequestedRef = useRef<boolean>(false);
+  const latestVaultRef = useRef<ProfitVaultSnapshot | null>(vault);
+  latestVaultRef.current = vault;
 
   const verifiedUid = user && user.emailVerified ? user.uid : null;
+
+  const vaultSyncSignature = useMemo(() => {
+    if (!vault) return '';
+    const historySig = vault.dailyHistory
+      .slice(-14)
+      .map((d) => `${d.dateKey}:${d.recordHash}`)
+      .join('|');
+    return `${vault.stateVersion}::${historySig}`;
+  }, [vault]);
 
   const syncDraftsFromConfig = useCallback((cfg: ProfitScoopConfig) => {
     setEnabledDraft(cfg.enabled);
@@ -166,6 +203,9 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     setScoopRatioDraft(String(cfg.scoopExcessRatioPct));
     setConfigDirty(false);
   }, []);
+
+  const configDirtyRef = useRef<boolean>(configDirty);
+  configDirtyRef.current = configDirty;
 
   const fetchVaultState = useCallback(async () => {
     try {
@@ -178,14 +218,14 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
       if (data?.ok && data.vault) {
         setVault(data.vault);
         saveCachedVaultSnapshot(data.vault);
-        if (!configDirty) {
+        if (!configDirtyRef.current) {
           syncDraftsFromConfig(data.vault.config);
         }
       }
     } catch {
       // retain cached local snapshot cleanly
     }
-  }, [configDirty, syncDraftsFromConfig]);
+  }, [syncDraftsFromConfig]);
 
   useEffect(() => {
     fetchVaultState();
@@ -193,7 +233,10 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
 
   useEffect(() => {
     if (!appLiveEnabled) return;
-    const id = window.setInterval(fetchVaultState, 5000);
+    const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      fetchVaultState();
+    }, 15_000);
     return () => window.clearInterval(id);
   }, [appLiveEnabled, fetchVaultState]);
 
@@ -221,57 +264,83 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     return () => unsub();
   }, [verifiedUid]);
 
-  // Auto-persist high-precision Daily PnL records & Vault Locker state to Firestore when signed in
+  // Reset per-account cloud sync watermarks when signed-in user changes
   useEffect(() => {
-    if (!verifiedUid || !vault) return;
+    lastSyncedVaultVersionRef.current = 0;
+    lastSyncedDailyHashRef.current.clear();
+  }, [verifiedUid]);
 
-    const persistToCloud = async () => {
+  // Auto-persist high-precision Daily PnL records & Vault Locker state to Firestore when signed in
+  // Single-flight serialized drain prevents overlapping polling passes from racing on Firestore writes.
+  useEffect(() => {
+    if (!verifiedUid || !vaultSyncSignature) return;
+
+    let cancelled = false;
+
+    const drainCloudSync = async () => {
+      if (syncInFlightRef.current) {
+        resyncRequestedRef.current = true;
+        return;
+      }
+      syncInFlightRef.current = true;
       try {
-        if (vault.stateVersion > lastSyncedVaultVersionRef.current) {
-          await saveVaultLockerSnapshotToFirestore(verifiedUid, {
-            thresholdMode: vault.config.thresholdMode,
-            profitThresholdUsd: vault.config.profitThresholdUsd,
-            profitThresholdPct: vault.config.profitThresholdPct,
-            scoopExcessRatioPct: vault.config.scoopExcessRatioPct,
-            enabled: vault.config.enabled,
-            lockedVaultBalanceUsd: vault.lockedVaultBalanceUsd,
-            totalScoopedLifetimeUsd: vault.totalScoopedLifetimeUsd,
-            stateVersion: vault.stateVersion,
-          });
-          lastSyncedVaultVersionRef.current = vault.stateVersion;
-        }
+        do {
+          resyncRequestedRef.current = false;
+          const currentVault = latestVaultRef.current;
+          if (!currentVault || cancelled) break;
 
-        const recentDays = vault.dailyHistory.slice(-14);
-        let syncedAny = false;
-        for (const day of recentDays) {
-          if (lastSyncedDailyHashRef.current.get(day.dateKey) === day.recordHash) continue;
-          await saveDailyPnlRecordToFirestore(verifiedUid, {
-            dateKey: day.dateKey,
-            startingEquityUsd: day.startingEquityUsd,
-            endingEquityUsd: day.endingEquityUsd,
-            realizedPnlUsd: day.realizedPnlUsd,
-            returnPct: day.returnPct,
-            scoopedToVaultUsd: day.scoopedToVaultUsd,
-            manualReleasedUsd: day.manualReleasedUsd,
-            tradeCount: day.tradeCount,
-            winningTrades: day.winningTrades,
-            losingTrades: day.losingTrades,
-            winRatePct: day.winRatePct,
-            recordHash: day.recordHash,
-          });
-          lastSyncedDailyHashRef.current.set(day.dateKey, day.recordHash);
-          syncedAny = true;
-        }
-        if (syncedAny) {
-          setCloudSyncedAtIso(new Date().toISOString());
-        }
+          if (currentVault.stateVersion > lastSyncedVaultVersionRef.current) {
+            await saveVaultLockerSnapshotToFirestore(verifiedUid, {
+              thresholdMode: currentVault.config.thresholdMode,
+              profitThresholdUsd: currentVault.config.profitThresholdUsd,
+              profitThresholdPct: currentVault.config.profitThresholdPct,
+              scoopExcessRatioPct: currentVault.config.scoopExcessRatioPct,
+              enabled: currentVault.config.enabled,
+              lockedVaultBalanceUsd: currentVault.lockedVaultBalanceUsd,
+              totalScoopedLifetimeUsd: currentVault.totalScoopedLifetimeUsd,
+              stateVersion: currentVault.stateVersion,
+            });
+            lastSyncedVaultVersionRef.current = currentVault.stateVersion;
+          }
+
+          const recentDays = currentVault.dailyHistory.slice(-14);
+          let syncedAny = false;
+          for (const day of recentDays) {
+            if (cancelled) break;
+            if (lastSyncedDailyHashRef.current.get(day.dateKey) === day.recordHash) continue;
+            await saveDailyPnlRecordToFirestore(verifiedUid, {
+              dateKey: day.dateKey,
+              startingEquityUsd: day.startingEquityUsd,
+              endingEquityUsd: day.endingEquityUsd,
+              realizedPnlUsd: day.realizedPnlUsd,
+              returnPct: day.returnPct,
+              scoopedToVaultUsd: day.scoopedToVaultUsd,
+              manualReleasedUsd: day.manualReleasedUsd,
+              tradeCount: day.tradeCount,
+              winningTrades: day.winningTrades,
+              losingTrades: day.losingTrades,
+              winRatePct: day.winRatePct,
+              recordHash: day.recordHash,
+            });
+            lastSyncedDailyHashRef.current.set(day.dateKey, day.recordHash);
+            syncedAny = true;
+          }
+          if (syncedAny && !cancelled) {
+            setCloudSyncedAtIso(new Date().toISOString());
+          }
+        } while (resyncRequestedRef.current && !cancelled);
       } catch {
         // non-blocking cloud sync; local cache remains authoritative
+      } finally {
+        syncInFlightRef.current = false;
       }
     };
 
-    void persistToCloud();
-  }, [verifiedUid, vault]);
+    void drainCloudSync();
+    return () => {
+      cancelled = true;
+    };
+  }, [verifiedUid, vaultSyncSignature]);
 
   const handleSaveConfig = useCallback(async () => {
     setSavingConfig(true);
@@ -986,49 +1055,41 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
             </div>
 
             {/* Daily Return % Bar Chart */}
-            <div className="h-56 w-full rounded-xl border border-slate-800/80 bg-slate-950/65 p-3">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.12)" />
-                  <XAxis
-                    dataKey="date"
-                    tick={{ fill: '#94a3b8', fontSize: 11, fontFamily: 'monospace' }}
-                    axisLine={{ stroke: 'rgba(148,163,184,0.2)' }}
-                    tickLine={false}
-                  />
-                  <YAxis
-                    tickFormatter={(v: number) => `${v > 0 ? '+' : ''}${v.toFixed(2)}%`}
-                    tick={{ fill: '#94a3b8', fontSize: 11, fontFamily: 'monospace' }}
-                    axisLine={{ stroke: 'rgba(148,163,184,0.2)' }}
-                    tickLine={false}
-                    width={62}
-                  />
-                  <ReferenceLine y={0} stroke="rgba(148,163,184,0.45)" />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#0f172a',
-                      border: '1px solid rgba(56,189,248,0.35)',
-                      borderRadius: '8px',
-                      fontSize: '12px',
-                      fontFamily: 'monospace',
-                    }}
-                    formatter={(value: unknown, name: unknown) => {
-                      const num = Number(value) || 0;
-                      if (name === 'returnPct') return [formatPct4(num), 'Daily Return'];
-                      return [formatUsdSigned(num, 4), String(name)];
-                    }}
-                  />
-                  <Bar dataKey="returnPct" radius={[4, 4, 0, 0]}>
-                    {chartData.map((entry) => (
-                      <Cell
-                        key={entry.fullDate}
-                        fill={entry.returnPct >= 0 ? '#10b981' : '#f43f5e'}
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            <ErrorBoundary title="Daily PnL Chart Recovery">
+              <div className="h-56 w-full min-w-0 rounded-xl border border-slate-800/80 bg-slate-950/65 p-3">
+                <ResponsiveContainer width="100%" height={200} minWidth={0} debounce={50}>
+                  <BarChart data={chartData} margin={VAULT_BAR_CHART_MARGIN}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.12)" />
+                    <XAxis
+                      dataKey="date"
+                      tick={VAULT_AXIS_TICK_STYLE}
+                      axisLine={VAULT_AXIS_LINE_STYLE}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tickFormatter={formatVaultYAxisTick}
+                      tick={VAULT_AXIS_TICK_STYLE}
+                      axisLine={VAULT_AXIS_LINE_STYLE}
+                      tickLine={false}
+                      width={62}
+                    />
+                    <ReferenceLine y={0} stroke="rgba(148,163,184,0.45)" />
+                    <Tooltip
+                      contentStyle={VAULT_TOOLTIP_STYLE}
+                      formatter={formatVaultTooltip}
+                    />
+                    <Bar dataKey="returnPct" radius={VAULT_BAR_RADIUS} isAnimationActive={false}>
+                      {chartData.map((entry) => (
+                        <Cell
+                          key={entry.fullDate}
+                          fill={entry.returnPct >= 0 ? '#10b981' : '#f43f5e'}
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </ErrorBoundary>
 
             {/* High-Precision Daily PnL Table */}
             <div className="overflow-x-auto rounded-xl border border-slate-800/80 bg-slate-950/65">

@@ -83,9 +83,7 @@ service cloud.firestore {
     function isValidUserProfile(data, userId) {
       return data.keys().hasAll(['uid', 'email', 'displayName', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly(['uid', 'email', 'displayName', 'createdAt', 'updatedAt'])
-        && data.uid is string
-        && data.uid.size() >= 1
-        && data.uid.size() <= 128
+        && isValidId(data.uid)
         && data.uid == userId
         && data.uid == request.auth.uid
         && data.email is string
@@ -101,13 +99,10 @@ service cloud.firestore {
     function isValidWatchlistItem(data, userId, coinId) {
       return data.keys().hasAll(['id', 'userId', 'symbol', 'coinName', 'createdAt'])
         && data.keys().hasOnly(['id', 'userId', 'symbol', 'coinName', 'notes', 'createdAt'])
-        && data.id is string
+        && isValidId(data.id)
         && data.id == coinId
-        && data.id.size() >= 1
         && data.id.size() <= 32
-        && data.userId is string
-        && data.userId.size() >= 1
-        && data.userId.size() <= 128
+        && isValidId(data.userId)
         && data.userId == userId
         && data.userId == request.auth.uid
         && data.symbol is string
@@ -130,13 +125,10 @@ service cloud.firestore {
           'id', 'userId', 'symbol', 'condition', 'targetPrice',
           'active', 'triggered', 'emailNotify', 'createdAt', 'updatedAt'
         ])
-        && data.id is string
+        && isValidId(data.id)
         && data.id == alertId
-        && data.id.size() >= 1
         && data.id.size() <= 64
-        && data.userId is string
-        && data.userId.size() >= 1
-        && data.userId.size() <= 128
+        && isValidId(data.userId)
         && data.userId == userId
         && data.userId == request.auth.uid
         && data.symbol is string
@@ -158,13 +150,10 @@ service cloud.firestore {
     function isValidWorkspaceControlConfig(data, userId, configId) {
       return data.keys().hasAll(['id', 'userId', 'checksum', 'toggles', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly(['id', 'userId', 'checksum', 'toggles', 'createdAt', 'updatedAt'])
-        && data.id is string
+        && isValidId(data.id)
         && data.id == configId
-        && data.id.size() >= 1
         && data.id.size() <= 64
-        && data.userId is string
-        && data.userId.size() >= 1
-        && data.userId.size() <= 128
+        && isValidId(data.userId)
         && data.userId == userId
         && data.userId == request.auth.uid
         && data.checksum is string
@@ -178,13 +167,10 @@ service cloud.firestore {
     function isValidRollbackCheckpoint(data, userId, snapshotId) {
       return data.keys().hasAll(['snapshotId', 'userId', 'version', 'reason', 'checksum', 'toggles', 'createdAt'])
         && data.keys().hasOnly(['snapshotId', 'userId', 'version', 'reason', 'checksum', 'toggles', 'createdAt'])
-        && data.snapshotId is string
+        && isValidId(data.snapshotId)
         && data.snapshotId == snapshotId
-        && data.snapshotId.size() >= 1
         && data.snapshotId.size() <= 64
-        && data.userId is string
-        && data.userId.size() >= 1
-        && data.userId.size() <= 128
+        && isValidId(data.userId)
         && data.userId == userId
         && data.userId == request.auth.uid
         && data.version is number
@@ -202,13 +188,10 @@ service cloud.firestore {
     function isValidErrorAuditRecord(data, userId, logId) {
       return data.keys().hasAll(['id', 'userId', 'correlationId', 'serviceId', 'severity', 'code', 'message', 'recoveryAction', 'createdAt'])
         && data.keys().hasOnly(['id', 'userId', 'correlationId', 'serviceId', 'severity', 'code', 'message', 'recoveryAction', 'createdAt'])
-        && data.id is string
+        && isValidId(data.id)
         && data.id == logId
-        && data.id.size() >= 1
         && data.id.size() <= 64
-        && data.userId is string
-        && data.userId.size() >= 1
-        && data.userId.size() <= 128
+        && isValidId(data.userId)
         && data.userId == userId
         && data.userId == request.auth.uid
         && data.correlationId is string
@@ -247,9 +230,7 @@ service cloud.firestore {
         ])
         && isValidDateKey(data.dateKey)
         && data.dateKey == dateKey
-        && data.userId is string
-        && data.userId.size() >= 1
-        && data.userId.size() <= 128
+        && isValidId(data.userId)
         && data.userId == userId
         && data.userId == request.auth.uid
         && data.startingEquityUsd is number
@@ -289,13 +270,10 @@ service cloud.firestore {
           'scoopExcessRatioPct', 'enabled', 'lockedVaultBalanceUsd', 'totalScoopedLifetimeUsd',
           'stateVersion', 'createdAt', 'updatedAt'
         ])
-        && data.id is string
+        && isValidId(data.id)
         && data.id == vaultId
-        && data.id.size() >= 1
         && data.id.size() <= 64
-        && data.userId is string
-        && data.userId.size() >= 1
-        && data.userId.size() <= 128
+        && isValidId(data.userId)
         && data.userId == userId
         && data.userId == request.auth.uid
         && data.thresholdMode is string
@@ -323,16 +301,17 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow get: if isValidId(userId) && isOwner(userId);
-      allow create: if isValidId(userId)
-        && isVerified()
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+      allow create: if isVerified()
         && isOwner(userId)
+        && isValidId(userId)
         && isValidUserProfile(incoming(), userId)
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
-      allow update: if isValidId(userId)
-        && isVerified()
+      allow update: if isVerified()
         && isOwner(userId)
+        && isValidId(userId)
         && isValidUserProfile(incoming(), userId)
         && incoming().uid == existing().uid
         && incoming().createdAt == existing().createdAt
@@ -341,68 +320,73 @@ service cloud.firestore {
       allow delete: if false;
 
       match /watchlist/{coinId} {
-        allow get: if isValidId(userId) && isValidId(coinId) && isOwner(userId);
-        allow list: if isValidId(userId) && isOwner(userId) && resource.data.userId == request.auth.uid;
-        allow create: if isValidId(userId)
-          && isValidId(coinId)
-          && isVerified()
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(coinId);
+        allow list: if isOwner(userId) && isValidId(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isVerified()
           && isOwner(userId)
-          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidId(userId)
+          && isValidId(coinId)
           && isValidWatchlistItem(incoming(), userId, coinId)
-          && incoming().createdAt == request.time;
-        allow update: if isValidId(userId)
-          && isValidId(coinId)
-          && isVerified()
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow update: if isVerified()
           && isOwner(userId)
+          && isValidId(userId)
+          && isValidId(coinId)
           && isValidWatchlistItem(incoming(), userId, coinId)
           && incoming().id == existing().id
           && incoming().userId == existing().userId
           && incoming().symbol == existing().symbol
           && incoming().createdAt == existing().createdAt
           && incoming().diff(existing()).affectedKeys().hasOnly(['notes']);
-        allow delete: if isValidId(userId) && isValidId(coinId) && isVerified() && isOwner(userId);
+        allow delete: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(coinId);
       }
 
       match /alerts/{alertId} {
-        allow get: if isValidId(userId) && isValidId(alertId) && isOwner(userId);
-        allow list: if isValidId(userId) && isOwner(userId) && resource.data.userId == request.auth.uid;
-        allow create: if isValidId(userId)
-          && isValidId(alertId)
-          && isVerified()
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(alertId);
+        allow list: if isOwner(userId) && isValidId(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isVerified()
           && isOwner(userId)
-          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidId(userId)
+          && isValidId(alertId)
           && isValidPriceAlert(incoming(), userId, alertId)
           && incoming().createdAt == request.time
-          && incoming().updatedAt == request.time;
-        allow update: if isValidId(userId)
-          && isValidId(alertId)
-          && isVerified()
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow update: if isVerified()
           && isOwner(userId)
+          && isValidId(userId)
+          && isValidId(alertId)
           && isValidPriceAlert(incoming(), userId, alertId)
           && incoming().id == existing().id
           && incoming().userId == existing().userId
           && incoming().symbol == existing().symbol
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
-          && incoming().diff(existing()).affectedKeys().hasOnly(['active', 'triggered', 'targetPrice', 'condition', 'emailNotify', 'updatedAt']);
-        allow delete: if isValidId(userId) && isValidId(alertId) && isVerified() && isOwner(userId);
+          && (
+            // Action: Trigger or toggle alert status
+            incoming().diff(existing()).affectedKeys().hasOnly(['active', 'triggered', 'updatedAt']) ||
+            // Action: Edit alert parameters
+            incoming().diff(existing()).affectedKeys().hasOnly(['active', 'triggered', 'targetPrice', 'condition', 'emailNotify', 'updatedAt'])
+          );
+        allow delete: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(alertId);
       }
 
       match /workspaceConfig/{configId} {
-        allow get: if isValidId(userId) && isValidId(configId) && isOwner(userId);
-        allow list: if isValidId(userId) && isOwner(userId) && resource.data.userId == request.auth.uid;
-        allow create: if isValidId(userId)
-          && isValidId(configId)
-          && isVerified()
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(configId);
+        allow list: if isOwner(userId) && isValidId(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isVerified()
           && isOwner(userId)
-          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidId(userId)
+          && isValidId(configId)
           && isValidWorkspaceControlConfig(incoming(), userId, configId)
           && incoming().createdAt == request.time
-          && incoming().updatedAt == request.time;
-        allow update: if isValidId(userId)
-          && isValidId(configId)
-          && isVerified()
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow update: if isVerified()
           && isOwner(userId)
+          && isValidId(userId)
+          && isValidId(configId)
           && isValidWorkspaceControlConfig(incoming(), userId, configId)
           && incoming().id == existing().id
           && incoming().userId == existing().userId
@@ -413,48 +397,48 @@ service cloud.firestore {
       }
 
       match /rollbackSnapshots/{snapshotId} {
-        allow get: if isValidId(userId) && isValidId(snapshotId) && isOwner(userId);
-        allow list: if isValidId(userId) && isOwner(userId) && resource.data.userId == request.auth.uid;
-        allow create: if isValidId(userId)
-          && isValidId(snapshotId)
-          && isVerified()
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(snapshotId);
+        allow list: if isOwner(userId) && isValidId(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isVerified()
           && isOwner(userId)
-          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidId(userId)
+          && isValidId(snapshotId)
           && isValidRollbackCheckpoint(incoming(), userId, snapshotId)
-          && incoming().createdAt == request.time;
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId));
         allow update: if false;
-        allow delete: if isValidId(userId) && isValidId(snapshotId) && isVerified() && isOwner(userId);
+        allow delete: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(snapshotId);
       }
 
       match /errorLogs/{logId} {
-        allow get: if isValidId(userId) && isValidId(logId) && isOwner(userId);
-        allow list: if isValidId(userId) && isOwner(userId) && resource.data.userId == request.auth.uid;
-        allow create: if isValidId(userId)
-          && isValidId(logId)
-          && isVerified()
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(logId);
+        allow list: if isOwner(userId) && isValidId(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isVerified()
           && isOwner(userId)
-          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidId(userId)
+          && isValidId(logId)
           && isValidErrorAuditRecord(incoming(), userId, logId)
-          && incoming().createdAt == request.time;
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId));
         allow update: if false;
-        allow delete: if isValidId(userId) && isValidId(logId) && isVerified() && isOwner(userId);
+        allow delete: if isVerified() && isOwner(userId) && isValidId(userId) && isValidId(logId);
       }
 
       match /dailyPnlRecords/{dateKey} {
-        allow get: if isValidId(userId) && isValidDateKey(dateKey) && isOwner(userId);
-        allow list: if isValidId(userId) && isOwner(userId) && resource.data.userId == request.auth.uid;
-        allow create: if isValidId(userId)
-          && isValidDateKey(dateKey)
-          && isVerified()
+        allow get: if isOwner(userId) && isValidId(userId) && isValidDateKey(dateKey);
+        allow list: if isOwner(userId) && isValidId(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isVerified()
           && isOwner(userId)
-          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidId(userId)
+          && isValidDateKey(dateKey)
           && isValidDailyPnlRecord(incoming(), userId, dateKey)
           && incoming().createdAt == request.time
-          && incoming().updatedAt == request.time;
-        allow update: if isValidId(userId)
-          && isValidDateKey(dateKey)
-          && isVerified()
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow update: if isVerified()
           && isOwner(userId)
+          && isValidId(userId)
+          && isValidDateKey(dateKey)
           && isValidDailyPnlRecord(incoming(), userId, dateKey)
           && incoming().dateKey == existing().dateKey
           && incoming().userId == existing().userId
@@ -469,20 +453,20 @@ service cloud.firestore {
       }
 
       match /vaultLocker/{vaultId} {
-        allow get: if isValidId(userId) && isValidId(vaultId) && isOwner(userId);
-        allow list: if isValidId(userId) && isOwner(userId) && resource.data.userId == request.auth.uid;
-        allow create: if isValidId(userId)
-          && isValidId(vaultId)
-          && isVerified()
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(vaultId);
+        allow list: if isOwner(userId) && isValidId(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isVerified()
           && isOwner(userId)
-          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidId(userId)
+          && isValidId(vaultId)
           && isValidVaultLockerState(incoming(), userId, vaultId)
           && incoming().createdAt == request.time
-          && incoming().updatedAt == request.time;
-        allow update: if isValidId(userId)
-          && isValidId(vaultId)
-          && isVerified()
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow update: if isVerified()
           && isOwner(userId)
+          && isValidId(userId)
+          && isValidId(vaultId)
           && isValidVaultLockerState(incoming(), userId, vaultId)
           && incoming().id == existing().id
           && incoming().userId == existing().userId
