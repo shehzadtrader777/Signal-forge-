@@ -18,6 +18,7 @@ import {
 import { GlobalSearchModal } from './components/GlobalSearchModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Dashboard } from './pages/Dashboard';
+import { PremiumLanding } from './pages/PremiumLanding';
 import { Portfolio } from './pages/Portfolio';
 import { Signals } from './pages/Signals';
 import { SignalHistory } from './pages/SignalHistory';
@@ -84,6 +85,7 @@ function AppShell() {
         <ErrorBoundary title="Dashboard View Recovery">
           <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/welcome" element={<PremiumLanding />} />
             <Route path="/portfolio" element={<Portfolio />} />
             <Route path="/signals" element={<Signals />} />
             <Route path="/signal-history" element={<SignalHistory />} />
