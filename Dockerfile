@@ -1,5 +1,6 @@
 # Signal Forge staging container. Reproducible Bun lockfile; no silent npm fallback.
-FROM oven/bun:1.3-alpine AS builder
+# Bun lockfile v2 requires a recent builder. Pin this image by digest after CI verification.
+FROM oven/bun:latest AS builder
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
