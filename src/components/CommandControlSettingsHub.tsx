@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ForgeHaltServerStatus } from './ForgeHaltServerStatus';
+import { useRbacIdentity } from '../hooks/useRbacIdentity';
 import {
   COMMAND_DOMAINS,
   computeControlMatrixDelta,
@@ -131,6 +132,8 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
     forgeCapitalBusy,
   } = useApp();
 
+  const { rbac } = useRbacIdentity();
+  const ownerControlsAllowed = rbac.role === 'SUPER_ADMIN';
   const hub = useCommandControlStore((s) => s.hub);
   const setGlobalOverride = useCommandControlStore((s) => s.setGlobalOverride);
   const setDomainOverride = useCommandControlStore((s) => s.setDomainOverride);
@@ -170,6 +173,10 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
 
   const syncDerivedMatrixToBackend = useCallback(
     async (nextHubState: typeof hub, contextLabel: string) => {
+      if (!ownerControlsAllowed) {
+        setSyncNotice('Owner-level account required for global system configuration. Changes are not authorized.');
+        return;
+      }
       const nextSnap = evaluateCommandControlSnapshot(nextHubState);
       if (!subscriptionSummary.premiumUnlocked) {
         setSyncNotice(
@@ -207,6 +214,7 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
     },
     [
       architectureState.controlMatrix,
+      ownerControlsAllowed,
       subscriptionSummary.premiumUnlocked,
       toggleControlMatrixKey,
     ]
@@ -214,6 +222,10 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
 
   const handleGlobalOverrideChange = useCallback(
     async (mode: GlobalMasterOverride) => {
+      if (!ownerControlsAllowed) {
+        setSyncNotice('Owner-level access required to change global command overrides.');
+        return;
+      }
       const next = setGlobalOverride(mode);
       if (mode === 'FORCE_ALL_OFF' && appLiveEnabled) {
         await setAppLiveEnabled(false);
@@ -227,20 +239,28 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
           : 'Granular Command Mode'
       );
     },
-    [appLiveEnabled, setAppLiveEnabled, setGlobalOverride, syncDerivedMatrixToBackend]
+    [appLiveEnabled, ownerControlsAllowed, setAppLiveEnabled, setGlobalOverride, syncDerivedMatrixToBackend]
   );
 
   const handleDomainOverrideChange = useCallback(
     async (domain: CommandDomainId, mode: MasterOverrideMode) => {
+      if (!ownerControlsAllowed) {
+        setSyncNotice('Owner-level access required to change domain controls.');
+        return;
+      }
       const next = setDomainOverride(domain, mode);
       const label = COMMAND_DOMAINS.find((d) => d.id === domain)?.shortLabel ?? domain;
       await syncDerivedMatrixToBackend(next, `${label} Master -> ${mode}`);
     },
-    [setDomainOverride, syncDerivedMatrixToBackend]
+    [ownerControlsAllowed, setDomainOverride, syncDerivedMatrixToBackend]
   );
 
   const handleGranularModuleToggle = useCallback(
     async (mod: EvaluatedCommandModule) => {
+      if (!ownerControlsAllowed) {
+        setSyncNotice('Owner-level access required to change system modules.');
+        return;
+      }
       const nextEnabled = !mod.granularEnabled;
       const next = setGranularToggle(mod.descriptor.id, nextEnabled);
       let backendConfirmed = false;
@@ -260,15 +280,19 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
           : `${mod.descriptor.label}: local preference saved; backend change NOT confirmed. Check permissions and resync.`
       );
     },
-    [setGranularToggle, subscriptionSummary.premiumUnlocked, toggleControlMatrixKey]
+    [ownerControlsAllowed, setGranularToggle, subscriptionSummary.premiumUnlocked, toggleControlMatrixKey]
   );
 
   const handlePresetClick = useCallback(
     async (preset: CommandPresetId, label: string) => {
+      if (!ownerControlsAllowed) {
+        setSyncNotice('Owner-level access required to change maintenance presets.');
+        return;
+      }
       const next = applyPreset(preset);
       await syncDerivedMatrixToBackend(next, `Preset "${label}"`);
     },
-    [applyPreset, syncDerivedMatrixToBackend]
+    [applyPreset, ownerControlsAllowed, syncDerivedMatrixToBackend]
   );
 
   const handleVerifiedEmergencyRequest = useCallback(async () => {
@@ -280,9 +304,13 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
   }, [engageForgeFailSafeNow]);
 
   const handleResetAll = useCallback(async () => {
+    if (!ownerControlsAllowed) {
+      setSyncNotice('Owner-level account required to reset maintenance controls.');
+      return;
+    }
     const next = resetHubToDefaults();
     await syncDerivedMatrixToBackend(next, 'Command Hub Defaults (app state unchanged)');
-  }, [resetHubToDefaults, syncDerivedMatrixToBackend]);
+  }, [ownerControlsAllowed, resetHubToDefaults, syncDerivedMatrixToBackend]);
 
   const metrics: readonly WidgetMetricItem[] = useMemo(
     () => [
@@ -409,6 +437,11 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
         <div className="space-y-5">
           <ForgeMetricStrip items={metrics} columns={4} />
           <ForgeHaltServerStatus />
+          {!ownerControlsAllowed && (
+            <p role="status" className="rounded-lg border border-rose-500/40 bg-rose-950/20 px-3 py-2 text-xs text-rose-200">
+              Read-only system control view: a verified SUPER_ADMIN account is required to change shared backend modules, maintenance presets or rollbacks. Emergency-stop requests retain their separate operator authentication.
+            </p>
+          )}
           {pendingBackendDiffs > 0 && (
             <div role="status" className="rounded-lg border border-amber-500/40 bg-amber-950/30 p-3 text-xs text-amber-100">
               Maintenance reconciliation needed: {pendingBackendDiffs} command toggles differ from the last reported backend matrix. This is not a confirmed backend configuration; inspect and resync before relying on it.
