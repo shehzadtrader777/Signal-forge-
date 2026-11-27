@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { BrowserRouter, Link, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { MotionConfig } from 'motion/react';
 import { MessageCircle } from 'lucide-react';
 import { AppProvider, useApp } from './context/AppContext';
@@ -50,12 +50,16 @@ function ProtectedConsoleRoute({ children }: { children: ReactNode }) {
 
 function AppShell() {
   const [sideMenuOpen, setSideMenuOpen] = useState(false);
+  const location = useLocation();
   const { forgeCapitalState } = useApp();
   const { rbac } = useRbacIdentity();
   const neonGridOverlay = useWorkspaceStore((s) => s.cyber.neonGridOverlay);
   const designVariant = useWorkspaceStore((s) => s.cyber.designVariant);
   const density = useWorkspaceStore((s) => s.cyber.density);
   const activeProfile = forgeCapitalState?.activeGuardProfile;
+
+  // Keep the public pre-login experience separate from the dark terminal shell.
+  if (location.pathname === '/welcome') return <PremiumLanding />;
 
   if (!activeProfile) {
     return (
@@ -85,7 +89,6 @@ function AppShell() {
         <ErrorBoundary title="Dashboard View Recovery">
           <Routes>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/welcome" element={<PremiumLanding />} />
             <Route path="/portfolio" element={<Portfolio />} />
             <Route path="/signals" element={<Signals />} />
             <Route path="/signal-history" element={<SignalHistory />} />
