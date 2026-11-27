@@ -42,6 +42,10 @@ const MONITOR_OPTIONS: readonly SegmentedOption<MonitorId>[] = [
   { value: 'DISPLAY_3', label: 'Display 3 · Intelligence', testId: 'monitor-tab-DISPLAY_3' },
 ];
 
+// Keep motion prop identities stable across high-frequency market rerenders.
+const PRESET_BTN_TAP = { scale: 0.96 } as const;
+const PANEL_BTN_TAP = { scale: 0.97 } as const;
+
 const BATCH_OPTIONS: Array<{ ms: 8 | 16 | 50 | 100; label: string }> = [
   { ms: 8, label: '120Hz (8ms)' },
   { ms: 16, label: '60Hz (16ms)' },
@@ -230,7 +234,7 @@ export const MultiScreenWorkspaceBar = memo(function MultiScreenWorkspaceBar({
             ).map((preset) => (
               <motion.button
                 key={preset.id}
-                whileTap={{ scale: 0.96 }}
+                whileTap={PRESET_BTN_TAP}
                 transition={MOTION_120HZ_SPRINGS.snappy}
                 type="button"
                 onClick={() => applyPreset(preset.id)}
@@ -240,7 +244,7 @@ export const MultiScreenWorkspaceBar = memo(function MultiScreenWorkspaceBar({
               </motion.button>
             ))}
             <motion.button
-              whileTap={{ scale: 0.96 }}
+              whileTap={PRESET_BTN_TAP}
               transition={MOTION_120HZ_SPRINGS.snappy}
               type="button"
               onClick={() => resetMonitors()}
@@ -258,7 +262,7 @@ export const MultiScreenWorkspaceBar = memo(function MultiScreenWorkspaceBar({
             return (
               <motion.button
                 key={panel.key}
-                whileTap={{ scale: 0.97 }}
+                whileTap={PANEL_BTN_TAP}
                 transition={MOTION_120HZ_SPRINGS.snappy}
                 type="button"
                 onClick={() => togglePanelVisibility(panel.key)}
