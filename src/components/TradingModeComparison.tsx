@@ -1,15 +1,17 @@
 import React from 'react';
-import { summarizeByMode, type ComparableTrade, type TradingMode } from '../lib/tradingModes';
+import { summarizeAccountByMode, type ComparableTrade, type TradingMode } from '../lib/tradingModes';
 
 /**
  * Read-only comparison panel for the three execution environments.
  * Never switches execution mode or calls an exchange.
  */
-export function TradingModeComparison({ trades, activeMode }: {
+export function TradingModeComparison({ trades, activeMode, authorizedAccountId }: {
   trades: readonly ComparableTrade[];
   activeMode: TradingMode;
+  /** Must be derived from the authenticated session, not a user-supplied query. */
+  authorizedAccountId: string;
 }) {
-  const summaries = summarizeByMode(trades);
+  const summaries = summarizeAccountByMode(trades, authorizedAccountId);
   const titles: Record<TradingMode, string> = {
     PAPER: 'Paper Simulation',
     DEMO: 'Exchange Demo / Testnet',
