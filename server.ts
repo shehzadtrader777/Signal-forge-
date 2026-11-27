@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
-dotenv.config({ override: true });
+// Hosted platform Secrets must take precedence over stale local .env values.
+dotenv.config({ override: false });
 import express from 'express';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
