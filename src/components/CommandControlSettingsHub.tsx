@@ -182,12 +182,19 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
       }
 
       let syncedCount = 0;
-      for (const delta of deltas.slice(0, 6)) {
-        const res = await toggleControlMatrixKey(delta.key, delta.value);
-        if (res.ok) syncedCount += 1;
+      for (const delta of deltas) {
+        try {
+          const res = await toggleControlMatrixKey(delta.key, delta.value);
+          if (!res.ok) break; // Stop on failed write; the backend may have diverged.
+          syncedCount += 1;
+        } catch {
+          break;
+        }
       }
       setSyncNotice(
-        `${contextLabel} synced (${syncedCount}/${deltas.length} backend toggles updated · ${nextSnap.matrixChecksum}).`
+        syncedCount === deltas.length
+          ? `${contextLabel} synchronized (${syncedCount}/${deltas.length} backend toggles · ${nextSnap.matrixChecksum}).`
+          : `${contextLabel}: PARTIAL BACKEND SYNC (${syncedCount}/${deltas.length}). Execution remains subject to independent server safety checks. Reconcile before relying on this state.`
       );
     },
     [
@@ -202,8 +209,6 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
       const next = setGlobalOverride(mode);
       if (mode === 'FORCE_ALL_OFF' && appLiveEnabled) {
         await setAppLiveEnabled(false);
-      } else if (mode !== 'FORCE_ALL_OFF' && !appLiveEnabled) {
-        await setAppLiveEnabled(true);
       }
       await syncDerivedMatrixToBackend(
         next,
@@ -245,21 +250,15 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
   const handlePresetClick = useCallback(
     async (preset: CommandPresetId, label: string) => {
       const next = applyPreset(preset);
-      if (preset === 'FULL_COMMAND' && !appLiveEnabled) {
-        await setAppLiveEnabled(true);
-      }
       await syncDerivedMatrixToBackend(next, `Preset "${label}"`);
     },
-    [appLiveEnabled, applyPreset, setAppLiveEnabled, syncDerivedMatrixToBackend]
+    [applyPreset, syncDerivedMatrixToBackend]
   );
 
   const handleResetAll = useCallback(async () => {
     const next = resetHubToDefaults();
-    if (!appLiveEnabled) {
-      await setAppLiveEnabled(true);
-    }
-    await syncDerivedMatrixToBackend(next, 'Command Hub Defaults');
-  }, [appLiveEnabled, resetHubToDefaults, setAppLiveEnabled, syncDerivedMatrixToBackend]);
+    await syncDerivedMatrixToBackend(next, 'Command Hub Defaults (app state unchanged)');
+  }, [resetHubToDefaults, syncDerivedMatrixToBackend]);
 
   const metrics: readonly WidgetMetricItem[] = useMemo(
     () => [
