@@ -664,6 +664,37 @@ function requireRbacPermission(permission: RbacPermission) {
   };
 }
 
+/**
+ * Server-authoritative clearance for GLOBAL system maintenance mutations.
+ * Premium subscription allows research features, not ownership of the
+ * shared microservice control plane. A configured server-to-server operator
+ * bearer may act as an infrastructure principal; a browser UID cannot.
+ */
+async function requireMasterControlOwner(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  if (hasConfiguredOperatorToken(req)) return next();
+  try {
+    const principal = await resolveCallerPrincipal(req);
+    const identity = buildRbacIdentity(principal, extraAdminEmailsFromEnv);
+    if (identity.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({
+        ok: false,
+        code: 'OWNER_CONTROL_REQUIRED',
+        error: 'Global system maintenance requires a verified owner-level account.',
+      });
+    }
+    return next();
+  } catch {
+    return res.status(403).json({
+      ok: false, code: 'OWNER_CONTROL_VERIFICATION_FAILED',
+      error: 'Owner authorization could not be verified.',
+    });
+  }
+}
+
 function requireOperatorAuth(
   req: express.Request,
   res: express.Response,
@@ -3936,7 +3967,7 @@ async function startServer() {
     });
   });
 
-  app.post('/api/architecture/toggle', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+  app.post('/api/architecture/toggle', requireOperatorAuth, requireMasterControlOwner, standardWriteRateLimit, async (req, res) => {
     const rawPatch =
       req.body?.patch && typeof req.body.patch === 'object'
         ? (req.body.patch as Record<string, unknown>)
@@ -3993,6 +4024,7 @@ async function startServer() {
   app.post(
     '/api/architecture/failover',
     requireOperatorAuth,
+    requireMasterControlOwner,
     standardWriteRateLimit,
     requirePremiumSubscription('TELEMETRY'),
     async (req, res) => {
@@ -4026,6 +4058,7 @@ async function startServer() {
   app.post(
     '/api/architecture/service-lifecycle',
     requireOperatorAuth,
+    requireMasterControlOwner,
     standardWriteRateLimit,
     requirePremiumSubscription('AGENT_OVERRIDE'),
     async (req, res) => {
@@ -4052,6 +4085,7 @@ async function startServer() {
   app.post(
     '/api/architecture/rollback',
     requireOperatorAuth,
+    requireMasterControlOwner,
     standardWriteRateLimit,
     requirePremiumSubscription('EXECUTION'),
     async (req, res) => {
@@ -4083,6 +4117,7 @@ async function startServer() {
   app.post(
     '/api/architecture/fault-drill',
     requireOperatorAuth,
+    requireMasterControlOwner,
     standardWriteRateLimit,
     requirePremiumSubscription('TELEMETRY'),
     async (req, res) => {
