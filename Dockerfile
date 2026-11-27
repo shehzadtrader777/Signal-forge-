@@ -4,7 +4,9 @@ WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY . .
-RUN bun run verify
+RUN ./node_modules/.bin/tsx --test src/lib/*.test.ts \
+ && ./node_modules/.bin/tsc --noEmit \
+ && ./node_modules/.bin/vite build
 
 FROM node:22-alpine AS runner
 WORKDIR /app
@@ -17,6 +19,8 @@ COPY --from=builder --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/dist ./dist
 COPY --from=builder --chown=node:node /app/server.ts ./server.ts
 COPY --from=builder --chown=node:node /app/src ./src
+COPY --from=builder --chown=node:node /app/hybrid_core ./hybrid_core
+COPY --from=builder --chown=node:node /app/signal_forge_core ./signal_forge_core
 COPY --from=builder --chown=node:node /app/firebase-applet-config.json ./firebase-applet-config.json
 RUN mkdir -p /app/.data && chown node:node /app/.data
 USER node
