@@ -171,6 +171,11 @@ export interface UserPriceAlert {
   emailNotify: boolean;
 }
 
+/** Public-facing reference only. Firebase UID remains the authentication identity. */
+export function getSignalForgePublicId(uid: string): string {
+  return `SF-${uid}`;
+}
+
 export async function syncUserProfile(user: User): Promise<void> {
   if (!user.emailVerified) return;
   const userRef = doc(db, 'users', user.uid);
@@ -181,6 +186,7 @@ export async function syncUserProfile(user: User): Promise<void> {
     if (!existing.exists()) {
       await setDoc(userRef, {
         uid: user.uid,
+        publicId: getSignalForgePublicId(user.uid),
         email,
         displayName,
         createdAt: serverTimestamp(),
@@ -188,6 +194,7 @@ export async function syncUserProfile(user: User): Promise<void> {
       });
     } else {
       await updateDoc(userRef, {
+        publicId: getSignalForgePublicId(user.uid),
         email,
         displayName,
         updatedAt: serverTimestamp(),
