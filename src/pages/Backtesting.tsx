@@ -13,7 +13,6 @@ import {
 } from 'recharts';
 import { ArrowDownRight, ArrowUpRight, CheckCircle2, Play, RefreshCw, ShieldCheck } from 'lucide-react';
 import {
-  TRACKED_COINS,
   fetchCoinCandles,
   formatCryptoPrice,
   type Candle,
