@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
-dotenv.config({ override: true });
+// Hosted platform Secrets must take precedence over stale local .env values.
+dotenv.config({ override: false });
 import express from 'express';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -45,6 +46,11 @@ import {
   type SentinelAssessment,
 } from './src/lib/sentinelAgent';
 import { TELEMETRY_POLL_INTERVAL_MS } from './src/lib/telemetrySync';
+import {
+  parseBinanceFiveMinuteKlines,
+  parseBybitFiveMinuteKlines,
+  computeRelativeVolumeObservation,
+} from './src/lib/realVolumeCandles';
 import {
   DEFAULT_MAX_EXECUTION_SLIPPAGE_PCT,
   MAX_WS_RECONNECT_ATTEMPTS,
@@ -421,7 +427,6 @@ const SESSION_TTL_MS = 30 * 60_000;
 const SESSION_SIGNING_KEY =
   process.env.SESSION_SIGNING_KEY || crypto.randomBytes(32).toString('hex');
 const OPERATOR_API_TOKEN = process.env.OPERATOR_API_TOKEN || '';
-const FORGE_FAILSAFE_SECRET = process.env.FORGE_FAILSAFE_SECRET || '';
 
 function createAsyncMutex() {
   let queue: Promise<void> = Promise.resolve();
@@ -659,6 +664,37 @@ function requireRbacPermission(permission: RbacPermission) {
   };
 }
 
+/**
+ * Server-authoritative clearance for GLOBAL system maintenance mutations.
+ * Premium subscription allows research features, not ownership of the
+ * shared microservice control plane. A configured server-to-server operator
+ * bearer may act as an infrastructure principal; a browser UID cannot.
+ */
+async function requireMasterControlOwner(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  if (hasConfiguredOperatorToken(req)) return next();
+  try {
+    const principal = await resolveCallerPrincipal(req);
+    const identity = buildRbacIdentity(principal, extraAdminEmailsFromEnv);
+    if (identity.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({
+        ok: false,
+        code: 'OWNER_CONTROL_REQUIRED',
+        error: 'Global system maintenance requires a verified owner-level account.',
+      });
+    }
+    return next();
+  } catch {
+    return res.status(403).json({
+      ok: false, code: 'OWNER_CONTROL_VERIFICATION_FAILED',
+      error: 'Owner authorization could not be verified.',
+    });
+  }
+}
+
 function requireOperatorAuth(
   req: express.Request,
   res: express.Response,
@@ -785,6 +821,9 @@ interface SpotStreamTick {
 }
 const pendingSseTickBatch = new Map<string, SpotStreamTick>();
 const sseTickListeners = new Set<(ticks: SpotStreamTick[]) => void>();
+const MAX_MONITOR_SSE_CLIENTS = 250;
+const MAX_MONITOR_SSE_BACKPRESSURE_BYTES = 512 * 1024; // drop slow monitor clients
+
 let backendSpotWs: WebSocket | null = null;
 let backendWsConnected = false;
 let backendWsLastFrameAtMs = 0;
@@ -3638,113 +3677,15 @@ async function dispatchPerformanceReport(
   return { record, report: m };
 }
 
+// No demo wallet transfers or fabricated cash flow in production-facing intelligence.
 function buildFallbackIntelligence(): {
-  source: 'structured_cache';
+  source: 'unverified_unavailable';
   whales: WhaleTransaction[];
   flows: ExchangeFlowMetric[];
   trending: Array<{ symbol: string; name: string; price: number; change24h: number; tag: string }>;
+  whaleFlowVerified: false;
 } {
-  const now = Date.now();
-  const flows: ExchangeFlowMetric[] = TRACKED_COINS.slice(0, 6).map((coin, idx) => {
-    const mult = idx === 0 ? 18 : idx === 1 ? 11 : 4.5 - idx * 0.4;
-    const inflow = Math.round((42 + idx * 9) * mult * 1_000_000);
-    const outflow = Math.round((idx % 2 === 0 ? 58 + idx * 10 : 34 + idx * 7) * mult * 1_000_000);
-    const changeMap = [3.42, 2.18, 6.84, 1.05, -2.74, 4.19];
-    return {
-      symbol: coin.symbol,
-      coinName: coin.name,
-      price: coin.referencePrice,
-      change24h: changeMap[idx] ?? 1.5,
-      volume24hUsd: Math.round((inflow + outflow) * 3.8),
-      inflow24hUsd: inflow,
-      outflow24hUsd: outflow,
-      netflowUsd: inflow - outflow,
-    };
-  });
-
-  const whales: WhaleTransaction[] = [
-    {
-      id: 'wh-1',
-      symbol: 'BTCUSDT',
-      coinName: 'Bitcoin',
-      amountUnits: 845,
-      amountUsd: 77_249_900,
-      type: 'Exchange Outflow',
-      fromLabel: 'Coinbase Institutional',
-      toLabel: 'Cold Custody Vault #49A',
-      timestamp: new Date(now - 6 * 60 * 1000).toISOString(),
-      impact: 'Bullish',
-    },
-    {
-      id: 'wh-2',
-      symbol: 'ETHUSDT',
-      coinName: 'Ethereum',
-      amountUnits: 14200,
-      amountUsd: 46_647_000,
-      type: 'Exchange Outflow',
-      fromLabel: 'Binance Hot Wallet',
-      toLabel: 'Lido Validator Treasury',
-      timestamp: new Date(now - 14 * 60 * 1000).toISOString(),
-      impact: 'Bullish',
-    },
-    {
-      id: 'wh-3',
-      symbol: 'SOLUSDT',
-      coinName: 'Solana',
-      amountUnits: 128000,
-      amountUsd: 27_468_800,
-      type: 'Whale Transfer',
-      fromLabel: 'Unknown Whale 7xK9',
-      toLabel: 'Solana Staking Cluster',
-      timestamp: new Date(now - 23 * 60 * 1000).toISOString(),
-      impact: 'Bullish',
-    },
-    {
-      id: 'wh-4',
-      symbol: 'XRPUSDT',
-      coinName: 'XRP',
-      amountUnits: 19500000,
-      amountUsd: 22_386_000,
-      type: 'Exchange Inflow',
-      fromLabel: 'Escrow Distribution Desk',
-      toLabel: 'Bitstamp Exchange Deposit',
-      timestamp: new Date(now - 38 * 60 * 1000).toISOString(),
-      impact: 'Bearish',
-    },
-    {
-      id: 'wh-5',
-      symbol: 'DOGEUSDT',
-      coinName: 'Dogecoin',
-      amountUnits: 54000000,
-      amountUsd: 19_872_000,
-      type: 'Exchange Inflow',
-      fromLabel: 'Whale Wallet rQ82',
-      toLabel: 'OKX Spot Deposit',
-      timestamp: new Date(now - 49 * 60 * 1000).toISOString(),
-      impact: 'Bearish',
-    },
-    {
-      id: 'wh-6',
-      symbol: 'LINKUSDT',
-      coinName: 'Chainlink',
-      amountUnits: 810000,
-      amountUsd: 13_300_200,
-      type: 'Exchange Outflow',
-      fromLabel: 'Kraken Liquidity Pool',
-      toLabel: 'Multisig Accumulation Vault',
-      timestamp: new Date(now - 63 * 60 * 1000).toISOString(),
-      impact: 'Bullish',
-    },
-  ];
-
-  const trending = [
-    { symbol: 'SOLUSDT', name: 'Solana', price: 214.6, change24h: 6.84, tag: 'Top Gaining' },
-    { symbol: 'AVAXUSDT', name: 'Avalanche', price: 38.75, change24h: 4.19, tag: 'Hot Volume' },
-    { symbol: 'BTCUSDT', name: 'Bitcoin', price: 91420, change24h: 3.42, tag: 'Trending' },
-    { symbol: 'LINKUSDT', name: 'Chainlink', price: 16.42, change24h: 3.15, tag: 'Whale Accumulation' },
-  ];
-
-  return { source: 'structured_cache', whales, flows, trending };
+  return { source: 'unverified_unavailable', whales: [], flows: [], trending: [], whaleFlowVerified: false };
 }
 
 async function fetchMarketIntelligence() {
@@ -3775,42 +3716,10 @@ async function fetchMarketIntelligence() {
     const rows = Array.isArray(json.data) ? json.data : [];
     if (rows.length === 0) return buildFallbackIntelligence();
 
-    const flows: ExchangeFlowMetric[] = rows.slice(0, 6).map((item: any) => {
-      const quote = item.quote?.USD || {};
-      const vol = Number(quote.volume_24h || 0);
-      const chg = Number(quote.percent_change_24h || 0);
-      const price = Number(quote.price || 0);
-      const outflowRatio = chg >= 0 ? 0.56 : 0.43;
-      const outflow = Math.round(vol * 0.24 * outflowRatio);
-      const inflow = Math.round(vol * 0.24 * (1 - outflowRatio));
-      return {
-        symbol: `${String(item.symbol).toUpperCase()}USDT`,
-        coinName: String(item.name),
-        price,
-        change24h: Number(chg.toFixed(2)),
-        volume24hUsd: Math.round(vol),
-        inflow24hUsd: inflow,
-        outflow24hUsd: outflow,
-        netflowUsd: inflow - outflow,
-      };
-    });
-
-    const whales: WhaleTransaction[] = flows.map((f, idx) => {
-      const isOutflow = f.netflowUsd <= 0;
-      const usdVal = Math.max(4_500_000, Math.round(Math.abs(f.netflowUsd) * 0.14));
-      return {
-        id: `cmc-wh-${idx}`,
-        symbol: f.symbol,
-        coinName: f.coinName,
-        amountUnits: Number((usdVal / Math.max(f.price, 0.01)).toFixed(2)),
-        amountUsd: usdVal,
-        type: isOutflow ? 'Exchange Outflow' : 'Exchange Inflow',
-        fromLabel: isOutflow ? 'Binance / Coinbase Desk' : 'Whale Accumulation Wallet',
-        toLabel: isOutflow ? 'Cold Custody Storage' : 'Spot Exchange Liquidity',
-        timestamp: new Date(Date.now() - (idx + 1) * 11 * 60 * 1000).toISOString(),
-        impact: isOutflow ? 'Bullish' : 'Bearish',
-      };
-    });
+    // CMC market listings offer trading volume, not observed on-chain exchange wallet transfers.
+    // Genuine whale flows require separately verified transaction hashes and wallet labels.
+    const flows: ExchangeFlowMetric[] = [];
+    const whales: WhaleTransaction[] = [];
 
     const trending = rows
       .slice()
@@ -3831,7 +3740,7 @@ async function fetchMarketIntelligence() {
         };
       });
 
-    return { source: 'cmc' as const, whales, flows, trending };
+    return { source: 'cmc' as const, whales, flows, trending, whaleFlowVerified: false as const };
   } catch {
     return buildFallbackIntelligence();
   } finally {
@@ -4044,7 +3953,8 @@ async function startServer() {
     const principal = await resolveCallerPrincipal(req);
     const subSummary = maskPrincipalSummary(principal);
     const snap = GLOBAL_MICROSERVICE_COORDINATOR.getSnapshot();
-    const fullErrorAccess = evaluateSubscriptionGate(principal, 'TELEMETRY').allowed;
+    const fullErrorAccess = evaluateSubscriptionGate(principal, 'TELEMETRY').allowed ||
+      buildRbacIdentity(principal, extraAdminEmailsFromEnv).role === 'SUPER_ADMIN';
     return res.json({
       ok: true,
       architecture: {
@@ -4061,18 +3971,16 @@ async function startServer() {
     });
   });
 
-  app.post('/api/architecture/toggle', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+  app.post('/api/architecture/toggle', requireOperatorAuth, requireMasterControlOwner, standardWriteRateLimit, async (req, res) => {
     const rawPatch =
       req.body?.patch && typeof req.body.patch === 'object'
         ? (req.body.patch as Record<string, unknown>)
         : {};
     const parsedPatch: Partial<GranularControlMatrix> = {};
-    const requiredCapabilities = new Set<CapabilityClass>();
 
     for (const key of CONTROL_TOGGLE_KEYS) {
       if (typeof rawPatch[key] === 'boolean') {
         parsedPatch[key] = rawPatch[key] as boolean;
-        requiredCapabilities.add(DESCRIPTOR_BY_KEY[key].capability);
       }
     }
 
@@ -4085,20 +3993,6 @@ async function startServer() {
     }
 
     const principal = await resolveCallerPrincipal(req);
-    for (const cap of requiredCapabilities) {
-      const gate = evaluateSubscriptionGate(principal, cap);
-      if (!gate.allowed) {
-        return res.status(gate.httpStatus).json({
-          ok: false,
-          code: gate.code,
-          capability: cap,
-          error: gate.reason,
-          remediation: gate.remediation,
-          subscriptionLocked: true,
-        });
-      }
-    }
-
     const result = await GLOBAL_MICROSERVICE_COORDINATOR.updateControlMatrix(
       parsedPatch,
       principal.uid || 'operator',
@@ -4118,8 +4012,8 @@ async function startServer() {
   app.post(
     '/api/architecture/failover',
     requireOperatorAuth,
+    requireMasterControlOwner,
     standardWriteRateLimit,
-    requirePremiumSubscription('TELEMETRY'),
     async (req, res) => {
       const serviceId = String(req.body?.serviceId || '') as MicroserviceId;
       if (!ORDERED_MICROSERVICE_IDS.includes(serviceId)) {
@@ -4151,8 +4045,8 @@ async function startServer() {
   app.post(
     '/api/architecture/service-lifecycle',
     requireOperatorAuth,
+    requireMasterControlOwner,
     standardWriteRateLimit,
-    requirePremiumSubscription('AGENT_OVERRIDE'),
     async (req, res) => {
       const serviceId = String(req.body?.serviceId || '') as MicroserviceId;
       if (!ORDERED_MICROSERVICE_IDS.includes(serviceId)) {
@@ -4177,12 +4071,10 @@ async function startServer() {
   app.post(
     '/api/architecture/rollback',
     requireOperatorAuth,
+    requireMasterControlOwner,
     standardWriteRateLimit,
-    requirePremiumSubscription('EXECUTION'),
     async (req, res) => {
-      const principal =
-        (req as express.Request & { subscriberPrincipal?: SubscriptionPrincipal })
-          .subscriberPrincipal ?? UNAUTHENTICATED_PRINCIPAL;
+      const principal = await resolveCallerPrincipal(req);
       const snapshotId = String(req.body?.snapshotId || '').trim();
       const reason = String(req.body?.reason || 'Manual workspace configuration rollback');
       if (!snapshotId) {
@@ -4208,8 +4100,8 @@ async function startServer() {
   app.post(
     '/api/architecture/fault-drill',
     requireOperatorAuth,
+    requireMasterControlOwner,
     standardWriteRateLimit,
-    requirePremiumSubscription('TELEMETRY'),
     async (req, res) => {
       const serviceId = String(req.body?.serviceId || 'market-data-svc') as MicroserviceId;
       if (!ORDERED_MICROSERVICE_IDS.includes(serviceId)) {
@@ -6070,7 +5962,24 @@ async function startServer() {
     }
   });
 
-  app.post('/api/forge-capital/failsafe/engage', requireOperatorAuth, standardWriteRateLimit, requirePremiumSubscription('EXECUTION'), (req, res) => {
+  // Authenticated, read-only server status for cross-device halt confirmation.
+  // Deliberately never returns confirmation tokens or enables live execution.
+  app.get('/api/forge-capital/failsafe/status', requireOperatorAuth, (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const engaged = forgeCapitalState.failSafe.engaged || forgeCapitalState.allTradingHalted;
+    return res.json({
+      ok: true,
+      state: engaged ? 'HALTED_CONFIRMED' : 'UNKNOWN',
+      sealId: forgeCapitalState.failSafe.immutableSealId,
+      engaged,
+      haltCode: forgeCapitalState.failSafe.haltCode,
+      acknowledgedAtIso: forgeCapitalState.failSafe.triggeredAt,
+      executionEnabled: false,
+      // This endpoint is a snapshot, not a durable event history; do not infer restart safety.
+    });
+  });
+
+  app.post('/api/forge-capital/failsafe/engage', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
     try {
       const reason = String(
         req.body?.reason || 'Manual emergency Fail-Safe seal engaged via Forge Capital Hub.'
@@ -6124,16 +6033,17 @@ async function startServer() {
           </div>
         `,
       });
-      if (process.env.NODE_ENV !== 'production' && emailRecord.status !== 'sent') {
-        console.info(`[FailSafe Challenge][DEV] seal=${sealId} code=${recoveryCode}`);
-      }
 
+      if (emailRecord.status !== 'sent') {
+        failsafeChallenges.delete(challengeId);
+        return res.status(503).json({ ok: false, error: 'Recovery email delivery unavailable. Fail-safe remains engaged.' });
+      }
       return res.json({
         ok: true,
         challengeId,
         sealId,
         expiresAt: new Date(expiresAt).toISOString(),
-        deliveryMode: emailRecord.status === 'sent' ? 'email' : 'server_log',
+        deliveryMode: 'email',
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unable to issue Fail-Safe recovery challenge.';
@@ -6156,11 +6066,9 @@ async function startServer() {
       }
 
       let authorized = false;
-      if (FORGE_FAILSAFE_SECRET && timingSafeEqualStr(confirmationCode, FORGE_FAILSAFE_SECRET)) {
-        authorized = true;
-      } else if (challengeId) {
+      if (challengeId) {
         const challenge = failsafeChallenges.get(challengeId);
-        if (!challenge || challenge.used || challenge.expiresAt < Date.now()) {
+        if (!challenge || challenge.used || challenge.expiresAt < Date.now() || challenge.sealId !== forgeCapitalState.failSafe.immutableSealId || !forgeCapitalState.failSafe.engaged) {
           return res.status(403).json({
             ok: false,
             error: 'Fail-Safe recovery challenge missing or expired. Generate a fresh recovery seal.',
@@ -6191,7 +6099,7 @@ async function startServer() {
       } else {
         return res.status(403).json({
           ok: false,
-          error: 'Recovery seal challengeId or configured FORGE_FAILSAFE_SECRET is required.',
+          error: 'A valid one-time recovery challenge is required.',
           state: forgeCapitalState,
         });
       }
@@ -6928,6 +6836,12 @@ async function startServer() {
         ? intervalRaw
         : '4h';
     const limit = Math.min(360, Math.max(40, Number(req.query.limit || 160)));
+    // Optional historical endTime for signal inspection; bounded to current time.
+    const endTimeInput = req.query.endTime === undefined ? null : Number(req.query.endTime);
+    if (endTimeInput !== null && (!Number.isSafeInteger(endTimeInput) || endTimeInput < 1_500_000_000_000 || endTimeInput > Date.now() + 60_000)) {
+      return res.status(400).json({error:'Invalid historical candle endTime'});
+    }
+    const historicalEndParam = endTimeInput !== null ? `&endTime=${endTimeInput}` : '';
     const refPriceParam = Number(req.query.refPrice);
     const cachedPrice =
       spotFeedCache[symbol]?.price ??
@@ -6938,9 +6852,9 @@ async function startServer() {
 
     const candidateUrls =
       market === 'futures'
-        ? [`${FUTURES_FEED_ENDPOINT}/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`]
+        ? [`${FUTURES_FEED_ENDPOINT}/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}${historicalEndParam}`]
         : SPOT_REST_ENDPOINTS.map(
-            (host) => `${host}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`
+            (host) => `${host}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}${historicalEndParam}`
           );
 
     for (const url of candidateUrls) {
@@ -6975,6 +6889,11 @@ async function startServer() {
       }
     }
 
+    // Historical inspections fail closed: never replace missing historical candles with synthetic price paths.
+    if (endTimeInput !== null) {
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(503).json({source:'unavailable',symbol,interval,candles:[],error:'Historical exchange candles unavailable'});
+    }
     return res.json({
       source: 'cache',
       symbol,
@@ -6983,8 +6902,59 @@ async function startServer() {
     });
   });
 
+  // Staging-only read-only exchange volume scanner, owner/operator authenticated.
+  // No AI-generated price data, fake whale flows, or automatic orders.
+  app.get('/api/research/early-volume/:symbol', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+    const symbol = String(req.params.symbol || '').toUpperCase();
+    if (!/^[A-Z0-9]{2,16}USDT$/.test(symbol)) {
+      return res.status(400).json({ ok:false, error:'Invalid Spot USDT symbol.' });
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4500);
+    res.setHeader('Cache-Control', 'no-store');
+    const nowMs = Date.now();
+    const providers = [
+      { venue:'BINANCE', url:`https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=5m&limit=55` },
+      { venue:'BYBIT', url:`https://api.bybit.com/v5/market/kline?category=spot&symbol=${encodeURIComponent(symbol)}&interval=5&limit=55` },
+    ] as const;
+    try {
+      const results = await Promise.all(providers.map(async (provider) => {
+        try {
+          const response = await fetch(provider.url, { signal:controller.signal, headers:{ Accept:'application/json' } });
+          if (!response.ok) return { venue:provider.venue, status:'UNAVAILABLE', observation:null };
+          const body = await response.json();
+          const rows:unknown[] = provider.venue==='BINANCE'
+            ? Array.isArray(body)?body:[]
+            : body?.retCode===0 && Array.isArray(body?.result?.list)?body.result.list:[];
+          const parsed= provider.venue==='BINANCE'
+            ? parseBinanceFiveMinuteKlines(symbol,rows,nowMs)
+            : parseBybitFiveMinuteKlines(symbol,rows,nowMs);
+          const observation=computeRelativeVolumeObservation(parsed);
+          const age=observation?nowMs-observation.observedAtMs:Infinity;
+          if (!observation||age>6*60_000) return { venue:provider.venue,status:'STALE_OR_INCOMPLETE',observation:null };
+          return { venue:provider.venue,status:'OBSERVED_CLOSED_CANDLES',observation };
+        } catch {
+          return { venue:provider.venue,status:'UNAVAILABLE',observation:null };
+        }
+      }));
+      const independentlyObserved=results.filter(r=>r.observation).length;
+      return res.json({
+        ok:true,symbol,source:'PUBLIC_EXCHANGE_CLOSED_5M_CANDLES',checkedAtIso:new Date(nowMs).toISOString(),
+        providers:results,
+        crossExchangeVolumeObserved:independentlyObserved===2,
+        whaleOrOnchainInflowVerified:false,
+        mayExecuteLiveTrade:false,
+        interpretation:'Trading volume is not net cash inflow. Bybit candles do not supply aggressor-side trading data in this adapter.',
+        stage:'OWNER_RESEARCH_ONLY',
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  });
+
   app.get('/api/cmc/intelligence', async (_req, res) => {
     const data = await fetchMarketIntelligence();
+    res.setHeader('Cache-Control', 'no-store');
     res.json(data);
   });
 
@@ -8386,6 +8356,10 @@ async function startServer() {
   });
 
   app.get('/api/monitor/stream', (req, res) => {
+    if (sseTickListeners.size >= MAX_MONITOR_SSE_CLIENTS) {
+      res.setHeader('Retry-After', '5');
+      return res.status(503).json({ ok:false, error:'Monitor stream capacity reached, retry shortly.' });
+    }
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -8413,7 +8387,13 @@ async function startServer() {
     const writeHeartbeat = () => {
       if (closed || res.writableEnded || !systemControls.liveFeedModulesEnabled) return;
       try {
-        res.write(`event: heartbeat\ndata: ${JSON.stringify(monitorState)}\n\n`);
+        if (res.writableLength > MAX_MONITOR_SSE_BACKPRESSURE_BYTES) {
+          cleanupStream();
+          return;
+        }
+        if (!res.write(`event: heartbeat\ndata: ${JSON.stringify(monitorState)}\n\n`)) {
+          cleanupStream();
+        }
       } catch {
         cleanupStream();
       }
@@ -8425,7 +8405,14 @@ async function startServer() {
         return;
       }
       try {
-        res.write(`event: spot_ticks\ndata: ${JSON.stringify({ ticks, syncEpoch: serverSyncEpoch })}\n\n`);
+        if (res.writableLength > MAX_MONITOR_SSE_BACKPRESSURE_BYTES) {
+          cleanupStream();
+          return;
+        }
+        // Monitor UI feeds are informational; do not buffer unbounded slow clients.
+        if (!res.write(`event: spot_ticks\ndata: ${JSON.stringify({ ticks, syncEpoch: serverSyncEpoch })}\n\n`)) {
+          cleanupStream();
+        }
       } catch {
         cleanupStream();
       }
@@ -8484,6 +8471,7 @@ async function startServer() {
         fundamentalScore: fundamental.score,
         fundamentalSummary: fundamental.summary,
         whaleBias,
+        whaleFlowVerified: false,
         netflowUsd: flow?.netflowUsd ?? 0,
         inflow24hUsd: flow?.inflow24hUsd ?? 0,
         outflow24hUsd: flow?.outflow24hUsd ?? 0,

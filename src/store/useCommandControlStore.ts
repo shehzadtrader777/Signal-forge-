@@ -121,7 +121,13 @@ export const useCommandControlStore = create<CommandControlStoreState>((set, get
   },
 
   resetHubToDefaults: () => {
-    const next = createDefaultCommandControlState();
+    const current = get().hub;
+    // Reset must be a new revision, otherwise other open tabs discard it.
+    const next: CommandControlHubState = {
+      ...createDefaultCommandControlState(),
+      stateVersion: current.stateVersion + 1,
+      updatedAtIso: new Date().toISOString(),
+    };
     persistAndBroadcast(next);
     set({ hub: next });
     return next;
@@ -134,11 +140,11 @@ if (typeof window !== 'undefined') {
     ch.onmessage = (event: MessageEvent<CommandControlSyncEnvelope>) => {
       const msg = event.data;
       if (!msg || msg.originTabId === TAB_ID || !msg.hub) return;
+      const incoming = sanitizeCommandControlState(msg.hub);
       const current = useCommandControlStore.getState().hub;
-      if (msg.hub.stateVersion <= current.stateVersion) return;
-      useCommandControlStore.setState({
-        hub: sanitizeCommandControlState(msg.hub),
-      });
+      // Validate before comparison. Do not let forged/invalid huge versions replace state.
+      if (incoming.stateVersion <= current.stateVersion) return;
+      useCommandControlStore.setState({ hub: incoming });
     };
   }
 }

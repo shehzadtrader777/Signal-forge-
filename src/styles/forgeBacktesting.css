@@ -1,0 +1,47 @@
+/* Signal Forge research lab — visual overrides only; no trade/data behavior changes. */
+.forge-backtesting {
+  font-family: Inter, system-ui, sans-serif;
+  color: #F4F0E8;
+}
+.forge-backtesting :is(h1,h2,h3) {
+  font-family: Manrope, Inter, system-ui, sans-serif;
+  letter-spacing: -.025em;
+  line-height: 1.35;
+}
+.forge-backtesting :is(p,td,th,label) { line-height: 1.65; }
+.forge-backtesting :is(input,select,button) { font-family: Inter, system-ui, sans-serif; }
+.forge-backtesting :is(select,button):focus-visible {
+  outline: 2px solid #D2A66A;
+  outline-offset: 3px;
+}
+.forge-backtesting :is(select,button) { min-height: 34px; }
+.forge-backtesting :is(select):not(:disabled) { border-color: #695A49; }
+.forge-backtesting :is(section):not([aria-label="Backtesting guide"]) {
+  scroll-margin-top: 22px;
+}
+.forge-backtesting #sf-backtest-comparison,
+.forge-backtesting #sf-backtest-advanced {
+  border-color: #735C40;
+}
+.forge-backtesting :is(#sf-backtest-comparison,#sf-backtest-advanced) :is(h2,summary) {
+  letter-spacing: -.02em;
+}
+.forge-backtesting #sf-backtest-comparison :is(th,td) {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.forge-backtesting #sf-backtest-charts > div > div {
+  border-color: #69543B;
+  background: #191C20;
+  border-radius: 18px;
+  box-shadow: 0 12px 30px rgba(0,0,0,.17);
+}
+.forge-backtesting #sf-backtest-charts h2 { color: #EBD5B1; }
+.forge-backtesting #sf-backtest-charts { scroll-margin-top: 22px; }
+@media (prefers-reduced-motion: reduce) {
+  .forge-backtesting *, .forge-backtesting *::before, .forge-backtesting *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    transition-duration: .01ms !important;
+  }
+}

@@ -94,7 +94,8 @@ export interface PrePumpSupportCandidate {
   supportConfirmed: boolean;
   distanceToSupportPct: number;
   holdPolicy: 'HOLD_UNTIL_MAX_PROFIT';
-  autoExecuteEligible: boolean;
+  autoExecuteEligible: boolean; // DISABLED until independently verified execution authorization
+  verificationStatus: 'UNVERIFIED_VOLUME' | 'RESEARCH_ONLY';
   status: 'MONITORING_SUPPORT' | 'SUPPORT_EXECUTED_HOLDING' | 'MAX_TARGET_LIQUIDATED';
 }
 
@@ -296,7 +297,9 @@ export class PrePumpSupportExecutionModule extends BaseSignalPipelineModule<
         supportConfirmed,
         distanceToSupportPct,
         holdPolicy: 'HOLD_UNTIL_MAX_PROFIT',
-        autoExecuteEligible: supportConfirmed && status === 'MONITORING_SUPPORT',
+        // A ticker-derived pre-pump score is not validated market flow. Never route from this estimate.
+        autoExecuteEligible: false,
+        verificationStatus: 'UNVERIFIED_VOLUME',
         status,
       });
     }

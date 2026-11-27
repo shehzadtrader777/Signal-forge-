@@ -64,23 +64,9 @@ export function Navbar({ onOpenSideMenu }: NavbarProps) {
             to="/"
             className="flex items-center gap-2.5 whitespace-nowrap shrink-0 text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3b82f6] rounded-md"
           >
-            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[#3b82f6] text-white shadow-sm">
-              <svg
-                viewBox="0 0 24 24"
-                className="h-4 w-4"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M3 17l5-5 4 3 8-8" />
-                <path d="M16 7h4v4" />
-              </svg>
-            </span>
+            <img src="/signal-forge-mark.svg" alt="" width="34" height="34" className="h-8 w-8 shrink-0" />
             <span className="font-display text-lg font-bold tracking-tight text-white">
-              <span className="text-[#3b82f6] mr-1.5">SF</span>Signal Forge
+              Signal Forge
             </span>
           </Link>
         </div>
@@ -185,6 +171,8 @@ export function Navbar({ onOpenSideMenu }: NavbarProps) {
                 {item.label}
               </NavLink>
             ))}
+              <Link to="/welcome#guide" onClick={() => setMobileOpen(false)} className="rounded-lg px-3 py-2.5 text-sm font-medium text-slate-300 hover:bg-slate-800/70">Super Guide · Read only</Link>
+              <Link to="/pricing" onClick={() => setMobileOpen(false)} className="rounded-lg px-3 py-2.5 text-sm font-medium text-slate-300 hover:bg-slate-800/70">Plans & Roadmap</Link>
               <NavLink
                 to="/settings"
                 onClick={() => setMobileOpen(false)}
