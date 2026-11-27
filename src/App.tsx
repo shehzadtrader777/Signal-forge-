@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useCallback, useState, type ReactNode } from 'react';
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { MotionConfig } from 'motion/react';
 import { MessageCircle } from 'lucide-react';
@@ -51,6 +51,8 @@ function ProtectedConsoleRoute({ children }: { children: ReactNode }) {
 
 function AppShell() {
   const [sideMenuOpen, setSideMenuOpen] = useState(false);
+  const handleOpenSideMenu = useCallback(() => setSideMenuOpen(true), []);
+  const handleCloseSideMenu = useCallback(() => setSideMenuOpen(false), []);
   const location = useLocation();
   const { forgeCapitalState } = useApp();
   const { rbac } = useRbacIdentity();
@@ -82,8 +84,8 @@ function AppShell() {
         neonGridOverlay ? 'cyber-grid-backdrop' : 'bg-[var(--forge-canvas-bg)]'
       }`}
     >
-      <Navbar onOpenSideMenu={() => setSideMenuOpen(true)} />
-      <SideMenuDrawer open={sideMenuOpen} onClose={() => setSideMenuOpen(false)} />
+      <Navbar onOpenSideMenu={handleOpenSideMenu} />
+      <SideMenuDrawer open={sideMenuOpen} onClose={handleCloseSideMenu} />
       <GlobalAppLiveBar />
       <LivePriceStrip />
 
