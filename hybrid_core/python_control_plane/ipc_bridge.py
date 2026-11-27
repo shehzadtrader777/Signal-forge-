@@ -33,12 +33,14 @@ class RustIpcBridge:
         self.socket_path = socket_path or os.environ.get(
             "SIGNAL_FORGE_IPC_SOCKET", "/tmp/signal_forge_hybrid.sock"
         )
-        self.timeout_sec = timeout_sec
+        if not (isinstance(timeout_sec, (int, float)) and 0.05 <= timeout_sec <= 30):
+            raise ValueError("IPC timeout must be between 0.05 and 30 seconds")
+        self.timeout_sec = float(timeout_sec)
 
     def dispatch(self, command: Dict[str, Any]) -> IpcDispatchResult:
         t0 = time.perf_counter_ns()
         encoded = json.dumps(command, separators=(",", ":")).encode("utf-8")
-        if len(encoded) > MAX_IPC_FRAME_BYTES:
+        if len(encoded) == 0 or len(encoded) > MAX_IPC_FRAME_BYTES:
             raise ValueError(f"IPC frame exceeds {MAX_IPC_FRAME_BYTES} bytes")
 
         if os.path.exists(self.socket_path):
@@ -60,16 +62,20 @@ class RustIpcBridge:
                         latency_ns=int(decoded.get("latency_ns", time.perf_counter_ns() - t0)),
                         payload=json.loads(decoded.get("payload_json", "{}")),
                     )
-            except OSError:
-                pass
+            except (OSError, ValueError, json.JSONDecodeError, TypeError, KeyError) as exc:
+                return self._offline_result(command, t0, type(exc).__name__)
 
-        # Deterministic local control-plane bridge fallback when Rust daemon is not attached
-        elapsed_ns = max(1, time.perf_counter_ns() - t0)
+        return self._offline_result(command, t0, "SOCKET_UNAVAILABLE")
+
+    @staticmethod
+    def _offline_result(command: Dict[str, Any], start_ns: int, cause: str) -> IpcDispatchResult:
+        # A disconnected execution daemon is NEVER a successful order or risk update.
+        # Ping and research calls also report unavailable rather than fake healthy Rust telemetry.
         return IpcDispatchResult(
-            ok=True,
-            transport="PYTHON_IN_PROCESS_SHIM",
-            latency_ns=elapsed_ns,
-            payload={"echo_op": command.get("op", "UNKNOWN"), "simulated_rust_ack": True},
+            ok=False,
+            transport="RUST_IPC_UNAVAILABLE",
+            latency_ns=max(1, time.perf_counter_ns() - start_ns),
+            payload={"op": str(command.get("op", "UNKNOWN")), "error": "RUST_ENGINE_UNAVAILABLE", "cause": cause},
         )
 
     @staticmethod

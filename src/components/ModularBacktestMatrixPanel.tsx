@@ -131,6 +131,11 @@ export const ModularBacktestMatrixPanel = memo(function ModularBacktestMatrixPan
         </div>
       </div>
 
+      <div role="note" data-testid="synthetic-matrix-disclosure" className="border-b border-amber-700/30 bg-amber-950/20 px-5 py-3 text-xs leading-relaxed text-amber-100">
+        <strong>Synthetic scenario model — not a verified historical backtest.</strong>{' '}
+        This matrix uses preset strategy probabilities and deterministic simulated trades. Returns, win rates and the leading agent are illustrative; they do not prove real-market performance. Compare strategies on matched historical data, with fees, slippage and out-of-sample checks before making decisions.
+      </div>
+
       {/* Parameter Override Control Bar */}
       <div className="grid grid-cols-1 gap-4 border-b border-slate-800/90 bg-[#060c1b]/90 px-5 py-4 sm:grid-cols-2 lg:grid-cols-5 text-xs">
         <label className="block">
@@ -304,7 +309,7 @@ export const ModularBacktestMatrixPanel = memo(function ModularBacktestMatrixPan
                       <span className="font-semibold text-white">{prof.strategyLabel}</span>
                       {isLeader && (
                         <span className="font-mono text-[10px] font-bold text-cyan-300 border border-cyan-500/40 bg-cyan-500/10 rounded px-1.5 py-0.5">
-                          LEADER
+                          SIM LEADER
                         </span>
                       )}
                     </div>

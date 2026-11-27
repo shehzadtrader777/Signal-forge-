@@ -11,6 +11,7 @@ import {
   Unlock,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { ForgeHaltServerStatus } from './ForgeHaltServerStatus';
 import {
   BINANCE_FUTURES_TESTNET_ENDPOINT,
   BINANCE_SPOT_TESTNET_ENDPOINT,
@@ -372,6 +373,10 @@ export const ForgeCapitalHub = memo(function ForgeCapitalHub() {
         </div>
       </div>
 
+      <div className="px-5 py-3" aria-label="Cross-device emergency halt confirmation">
+        <ForgeHaltServerStatus />
+      </div>
+
       {/* Immutable Fail-Safe Lock Recovery Bar (Visible strictly when halted) */}
       {isLocked && (
         <div className="border-b border-rose-500/40 bg-rose-950/30 px-5 py-4">
@@ -410,6 +415,7 @@ export const ForgeCapitalHub = memo(function ForgeCapitalHub() {
               </button>
               <input
                 type="text"
+                autoComplete="one-time-code"
                 value={unlockCode}
                 onChange={(e) => setUnlockCode(e.target.value)}
                 placeholder="Enter recovery seal (SF-...)"

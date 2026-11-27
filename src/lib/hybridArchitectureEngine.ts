@@ -3,7 +3,7 @@
  *
  * Pure deterministic domain engine modeling:
  * - Phase 1: Python Control Plane <-> Rust Execution Core IPC metrics & envelope
- * - Phase 2: Multi-Agent Orchestration & Unbounded Horizontal AI Worker Clone Scaling
+ * - Phase 2: Multi-Agent Orchestration & Bounded AI Worker Clone Planning
  * - Phase 3: Nanosecond Memory-Mapped (mmap) Multi-Asset Vectorized Backtesting
  * - Phase 4: Paper Trading Validation Chamber (L2 slippage, exchange fees, latency)
  * - Phase 5: Dynamic Risk Parameter Optimization (autonomous volatility feedback loop)
@@ -314,10 +314,10 @@ export function computeHorizontalCloneScalePlan(params: {
   targetStreams?: number;
 }): HorizontalCloneScalePlan {
   const volatility = Math.max(0.5, Math.min(100, Number(params.marketVolatilityPct) || 22));
-  const computeNodes = Math.max(1, Math.min(512, Math.floor(Number(params.computeNodes) || 8)));
+  const computeNodes = Math.max(1, Math.min(16, Math.floor(Number(params.computeNodes) || 8)));
   const baseClonesPerNode = Math.max(
     8,
-    Math.min(512, Math.floor(Number(params.baseClonesPerNode) || 64)),
+    Math.min(128, Math.floor(Number(params.baseClonesPerNode) || 64)),
   );
   const targetStreams = Math.max(
     1,
@@ -325,7 +325,7 @@ export function computeHorizontalCloneScalePlan(params: {
   );
 
   const volatilityMultiplier = 1 + Math.pow(volatility / 12.5, 1.35);
-  const clonesPerNode = Math.ceil(baseClonesPerNode * volatilityMultiplier);
+  const clonesPerNode = Math.min(256, Math.ceil(baseClonesPerNode * volatilityMultiplier));
   const totalActiveClones = computeNodes * clonesPerNode;
 
   const familyDistribution: Record<HybridStrategyFamily, number> = {
