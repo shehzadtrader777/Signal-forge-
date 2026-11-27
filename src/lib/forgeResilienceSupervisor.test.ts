@@ -31,3 +31,16 @@ test('restoring primary requires three healthy checks and stable interval',()=>{
  assert.equal(r.state.mode,'PRIMARY');assert.equal(r.liveExecutionAllowed,false);
 });
 test('exponential backoff is bounded',()=>{assert.ok(recoveryBackoffMs(30)<=120000);assert.ok(recoveryBackoffMs(3)>recoveryBackoffMs(1));});
+
+test('transient isolation may re-enter probing only after backoff and clean checks',()=>{
+ const untrusted={...safe,fallbackTrusted:false};
+ let r=evaluateRecovery(initialRecoveryState(),{nowMs:1,healthy:false,fault:'RATE_LIMIT',safety:untrusted});
+ r=evaluateRecovery(r.state,{nowMs:2,healthy:false,fault:'RATE_LIMIT',safety:untrusted});
+ assert.equal(r.state.mode,'ISOLATED');
+ const premature=evaluateRecovery(r.state,{nowMs:5000,healthy:true,safety:safe});
+ assert.equal(premature.state.mode,'ISOLATED');
+ r=evaluateRecovery(premature.state,{nowMs:30000,healthy:true,safety:safe});
+ assert.equal(r.state.mode,'PROBING');
+ r=evaluateRecovery(r.state,{nowMs:70000,healthy:true,safety:safe});
+ assert.equal(r.state.mode,'PRIMARY');
+});
