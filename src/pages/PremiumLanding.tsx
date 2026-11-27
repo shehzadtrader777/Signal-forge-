@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { Activity, ArrowUpRight, BarChart3, Blocks, ChartCandlestick, LockKeyhole, MoveRight, Palette, ShieldCheck, SlidersHorizontal, Sparkles, Wallet } from 'lucide-react';
 import '../styles/neoPremium.css';
+import { GuideOnlyAssistant } from '../components/GuideOnlyAssistant';
 
 /** Public product preview. All cards illustrate capabilities, never fabricated P&L. */
 export function PremiumLanding() {
@@ -12,6 +13,8 @@ export function PremiumLanding() {
           <nav className="neo-toplinks" aria-label="Landing links">
             <a href="#features">Features</a>
             <a href="#workspace">Workspace</a>
+            <a href="#roadmap">Roadmap</a>
+            <a href="#guide">Super Guide</a>
             <Link className="neo-pill" to="/login">Login</Link>
           </nav>
         </header>
@@ -56,6 +59,25 @@ export function PremiumLanding() {
               ].map(item => <article key={item.title} className="neo-feature-card"><span className="neo-feature-icon">{item.icon}</span><h3>{item.title}</h3><p>{item.text}</p></article>)}
             </div>
           </section>
+
+          <section id="roadmap" className="mx-auto max-w-6xl py-16 sm:py-24" aria-labelledby="roadmap-title">
+            <p className="text-xs font-bold uppercase tracking-[0.22em] text-blue-700">Product journey</p>
+            <h2 id="roadmap-title" className="mt-3 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">Built in clear, verifiable stages.</h2>
+            <p className="mt-4 max-w-2xl text-slate-600">Planned capabilities are not presented as released features. Milestones advance only after review, security checks and testing.</p>
+            <div className="mt-8 grid gap-4 md:grid-cols-3">
+              {[
+                { step: '01', title: 'Premium foundation', detail: 'Landing experience, customizable workspaces and accessible navigation. Refinement and quality checks ongoing.', status: 'In development' },
+                { step: '02', title: 'Guided research', detail: 'Smart chart workflows, clear signal explanations and read-only user education. AI-powered conversation requires separate integration.', status: 'In development' },
+                { step: '03', title: 'Verified readiness', detail: 'Mode isolation, account-level authorization, security reviews and proof-backed release gates before any live operations.', status: 'Not released' },
+              ].map(item => <article key={item.step} className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                <span className="text-xs font-bold tracking-wider text-blue-700">{item.step} · {item.status}</span>
+                <h3 className="mt-4 text-lg font-semibold text-slate-900">{item.title}</h3>
+                <p className="mt-2 text-sm leading-7 text-slate-600">{item.detail}</p>
+              </article>)}
+            </div>
+          </section>
+
+          <GuideOnlyAssistant />
 
           <section id="workspace" className="neo-last-cta">
             <div><p className="neo-eyebrow">YOUR WORKSPACE. YOUR PACE.</p><h2>One place to see what matters.</h2><p>Build a personalized, paper-first market research workflow with transparent data and thoughtful controls.</p></div>
