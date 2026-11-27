@@ -9,7 +9,7 @@ export function PremiumLanding() {
     <div className="neo-page" data-neo-theme="stone">
       <div className="neo-container">
         <header className="neo-topbar" aria-label="Welcome navigation">
-          <Link to="/welcome" className="neo-brand"><span className="neo-brand-symbol">SF</span> Signal Forge</Link>
+          <Link to="/welcome" className="neo-brand"><img src="/signal-forge-mark.svg" alt="" width="34" height="34" className="inline-block align-middle" /> Signal Forge</Link>
           <nav className="neo-toplinks" aria-label="Landing links">
             <a href="#features">Features</a>
             <a href="#workspace">Workspace</a>
