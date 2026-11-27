@@ -5,7 +5,7 @@ import {buildBacktestResearchUniverse,validateHistoricalCoverage} from './backte
 test('dynamic research universe includes live market symbols and deduplicates without watchlist limit',()=>{
  const result=buildBacktestResearchUniverse(
   [{symbol:'SUIUSDT',baseAsset:'SUI',name:'Sui',referencePrice:1,dailyVolatility:0.04}],
-  [{symbol:'SUIUSDT',baseAsset:'SUI',name:'Sui',referencePrice:1,change24hPercent:2,high24h:2,low24h:1,volume24hUsd:2000000,gainerRank:1,isTopGainer:true}],
+  [{symbol:'SUIUSDT',baseAsset:'SUI',name:'Sui',price:1,change24hPercent:2,high24h:2,low24h:1,volume24hUsd:2000000,gainerRank:1,isTopGainer:true}],
   ['RENDERUSDT','BTCUSDT','bad pair'],
  );
  assert.ok(result.some(c=>c.symbol==='SUIUSDT'));
