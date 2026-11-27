@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { BarChart3, Play, Sparkles, SlidersHorizontal } from 'lucide-react';
 import { motion } from 'motion/react';
 import {
@@ -14,6 +14,7 @@ interface ModularBacktestMatrixPanelProps {
   symbol: string;
 }
 
+const MATRIX_BTN_TAP = { scale: 0.96 } as const;
 const HORIZONS: BacktestTradeHorizon[] = [100, 250, 500, 1000];
 
 export const ModularBacktestMatrixPanel = memo(function ModularBacktestMatrixPanel({
@@ -50,9 +51,13 @@ export const ModularBacktestMatrixPanel = memo(function ModularBacktestMatrixPan
     [symbol]
   );
 
+  // Keep the latest requested parameters without making the effect depend on
+  // an unstable closure or kicking off a new matrix on every render.
+  const paramsRef = useRef(params);
+  paramsRef.current = params;
   useEffect(() => {
-    runMatrix(params);
-  }, [symbol]);
+    void runMatrix(paramsRef.current);
+  }, [runMatrix]);
 
   const handleRunOptimizer = async () => {
     setOptimizing(true);
@@ -106,7 +111,7 @@ export const ModularBacktestMatrixPanel = memo(function ModularBacktestMatrixPan
 
         <div className="flex flex-wrap items-center gap-2">
           <motion.button
-            whileTap={{ scale: 0.96 }}
+            whileTap={MATRIX_BTN_TAP}
             type="button"
             disabled={optimizing}
             onClick={handleRunOptimizer}
@@ -118,7 +123,7 @@ export const ModularBacktestMatrixPanel = memo(function ModularBacktestMatrixPan
           </motion.button>
 
           <motion.button
-            whileTap={{ scale: 0.96 }}
+            whileTap={MATRIX_BTN_TAP}
             type="button"
             disabled={runningMatrix}
             onClick={() => runMatrix(params)}
