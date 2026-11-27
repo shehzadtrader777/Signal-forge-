@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import { Copy, CheckCircle2 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   signInWithGoogle,
   signInWithEmail,
   signUpWithEmail,
+  getSignalForgePublicId,
 } from '../lib/firebase';
 import { formatFirebaseAuthError } from '../lib/firebaseAuthErrors';
 import { useApp } from '../context/AppContext';
@@ -19,6 +21,7 @@ export function Auth() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const handleGoogle = async () => {
     setError(null);
@@ -93,6 +96,24 @@ export function Auth() {
           </p>
         </div>
 
+        {user && (
+          <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-4">
+            <div className="flex items-center gap-2">
+              <img src="/signal-forge-mark.svg" alt="" className="h-9 w-9" />
+              <div><p className="text-[11px] font-semibold uppercase tracking-widest text-cyan-300">Signal Forge ID</p>
+                <p className="text-xs text-slate-400">Permanent account reference</p></div>
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              <code className="min-w-0 flex-1 break-all rounded-lg bg-slate-950 px-3 py-2 font-mono text-xs text-white">{getSignalForgePublicId(user.uid)}</code>
+              <button type="button" aria-label="Copy Signal Forge ID"
+                onClick={async () => { try { await navigator.clipboard.writeText(getSignalForgePublicId(user.uid)); setCopied(true); } catch { setCopied(false); } }}
+                className="rounded-lg border border-slate-700 p-2 text-cyan-300 hover:bg-slate-800">
+                {copied ? <CheckCircle2 size={17} /> : <Copy size={17} />}
+              </button>
+            </div>
+            <p className="mt-2 text-[11px] leading-5 text-slate-400">Your Firebase account is created at signup. Verified profiles sync this reference to Firestore. This ID is not a password or access token.</p>
+          </div>
+        )}
         {user && (
           <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 text-xs text-emerald-200 space-y-2">
             <p className="font-semibold">
