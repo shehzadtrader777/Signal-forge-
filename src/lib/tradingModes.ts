@@ -54,14 +54,47 @@ export interface ModeSummary {
   count: number;
   realizedNetPnlUsd: number;
 }
-/** Never merge mode ledgers. A missing mode is reported as Not run by the UI. */
-export function summarizeByMode(trades: readonly ComparableTrade[]): ModeSummary[] {
+/**
+ * Use server-authenticated accountId to scope comparisons. Never accept an
+ * accountId from an untrusted request without checking the authenticated
+ * principal on the server. Invalid entries are excluded, not normalized into
+ * fabricated zero-PnL trades. This is read-only presentation, not settlement.
+ */
+export function summarizeAccountByMode(
+  trades: readonly ComparableTrade[],
+  authorizedAccountId: string
+): ModeSummary[] {
+  if (!authorizedAccountId || !authorizedAccountId.trim()) {
+    throw new Error('Verified account ID is required');
+  }
+  const valid = trades.filter(t =>
+    t.accountId === authorizedAccountId &&
+    (t.mode === 'PAPER' || t.mode === 'DEMO' || t.mode === 'LIVE') &&
+    Number.isFinite(t.realizedNetPnlUsd) &&
+    !!t.signalId &&
+    !!t.strategyVersion
+  );
   return (['PAPER', 'DEMO', 'LIVE'] as const).map(mode => {
-    const rows = trades.filter(t => t.mode === mode);
+    const rows = valid.filter(t => t.mode === mode);
     return {
       mode,
       count: rows.length,
       realizedNetPnlUsd: rows.reduce((sum, t) => sum + t.realizedNetPnlUsd, 0),
     };
   });
+}
+
+/**
+ * Unscoped calculations are for trusted, pre-filtered datasets only.
+ * Do not feed records from multiple users to this function.
+ */
+export function summarizeByMode(trades: readonly ComparableTrade[]): ModeSummary[] {
+  const accountIds = new Set(trades.map(t => t.accountId));
+  if (accountIds.size > 1) {
+    throw new Error('Cannot compare trades from multiple accounts');
+  }
+  if (!trades.length) {
+    return (['PAPER', 'DEMO', 'LIVE'] as const).map(mode => ({ mode, count: 0, realizedNetPnlUsd: 0 }));
+  }
+  return summarizeAccountByMode(trades, trades[0].accountId);
 }
