@@ -632,11 +632,14 @@ export class HybridArchitectureServerRuntime {
         phase5_optimized_position_pct?: number;
         phase6_tracked_rows?: number;
       };
+      const transport = parsed.phase1_ipc?.transport ?? 'UNAVAILABLE';
+      const ipcVerified = parsed.phase1_ipc?.ok === true && transport === 'RUST_UDS_IPC';
       const result: PythonControlPlaneSelfTestResult = {
-        ok: Boolean(parsed.phase1_ipc?.ok),
+        ok: ipcVerified,
         executedAtIso,
         durationMs: Math.max(1, Date.now() - startedAt),
-        transport: String(parsed.phase1_ipc?.transport || 'PYTHON_IN_PROCESS_SHIM'),
+        transport,
+        ...(!ipcVerified && { error: 'Rust IPC handshake failed (' + transport + ').' }),
         phase2Clones: Number(parsed.phase2_clones ?? 0),
         phase3Ticks: Number(parsed.phase3_ticks ?? 0),
         phase3NsPerTick: Number(parsed.phase3_ns_per_tick ?? 0),

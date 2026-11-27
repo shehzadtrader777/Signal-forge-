@@ -2,7 +2,7 @@
 
 Speaks the exact 4-byte big-endian length-prefixed JSON framing protocol
 implemented in `rust_engine/src/ipc_ring.rs` over Unix Domain Sockets, with
-a deterministic local execution fallback when the Rust daemon socket is offline.
+fail-closed reporting when the Rust daemon socket is offline.
 """
 
 from __future__ import annotations
@@ -56,13 +56,21 @@ class RustIpcBridge:
                         raise ValueError(f"Invalid reply length {reply_len}")
                     raw_reply = self._recv_exact(sock, reply_len)
                     decoded = json.loads(raw_reply.decode("utf-8"))
+                    if not isinstance(decoded, dict) or type(decoded.get("ok")) is not bool:
+                        raise ValueError("Invalid IPC reply status")
+                    latency = decoded.get("latency_ns")
+                    if type(latency) is not int or latency < 0:
+                        raise ValueError("Invalid IPC reply latency")
+                    payload = json.loads(decoded["payload_json"])
+                    if not isinstance(payload, dict):
+                        raise ValueError("Invalid IPC reply payload")
                     return IpcDispatchResult(
-                        ok=bool(decoded.get("ok", False)),
+                        ok=decoded["ok"],
                         transport="RUST_UDS_IPC",
-                        latency_ns=int(decoded.get("latency_ns", time.perf_counter_ns() - t0)),
-                        payload=json.loads(decoded.get("payload_json", "{}")),
+                        latency_ns=latency,
+                        payload=payload,
                     )
-            except (OSError, ValueError, json.JSONDecodeError, TypeError, KeyError) as exc:
+            except (OSError, ValueError, TypeError, KeyError) as exc:
                 return self._offline_result(command, t0, type(exc).__name__)
 
         return self._offline_result(command, t0, "SOCKET_UNAVAILABLE")

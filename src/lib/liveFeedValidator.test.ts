@@ -354,6 +354,7 @@ describe('Gap 3 — Native Python & Rust Runtime Diagnostics & Control Plane Ver
     const runtime = new HybridArchitectureServerRuntime(process.cwd(), ':memory:');
     const result = runtime.runPythonControlPlaneSelfTest();
     assert.equal(result.ok, true, result.error);
+    assert.equal(result.transport, 'RUST_UDS_IPC');
     assert.ok(result.phase2Clones > 0);
     assert.ok(result.phase3Ticks >= 1_000);
     assert.equal(result.phase4ChamberPromoted, true);
