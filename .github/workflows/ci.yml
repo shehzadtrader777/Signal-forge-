@@ -2,7 +2,7 @@ name: Signal Forge Five-Phase Hardening CI/CD
 
 on:
   push:
-    branches: [main, master, integration/studio-react-stability-2026-11-27]
+    branches: [main, master, integration/studio-react-stability-2026-11-27, reconciliation/studio-2026-11-27]
   pull_request:
     branches: [main, master]
 

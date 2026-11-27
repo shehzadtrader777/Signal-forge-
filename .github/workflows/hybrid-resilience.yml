@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main, master]
   push:
-    branches: [feature/ai-studio-source-migration, integration/studio-react-stability-2026-11-27]
+    branches: [feature/ai-studio-source-migration, integration/studio-react-stability-2026-11-27, reconciliation/studio-2026-11-27]
   workflow_dispatch:
 
 concurrency:
@@ -43,3 +43,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify frozen dependency install and Node runtime image
         run: docker build --pull --tag signal-forge:staging .
+      - name: Exercise the isolated container and trading locks
+        run: sh scripts/smoke-container.sh signal-forge:staging

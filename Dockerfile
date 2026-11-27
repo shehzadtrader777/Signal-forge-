@@ -5,7 +5,7 @@ FROM oven/bun:latest AS bun_toolchain
 FROM rust:bookworm AS rust_verification
 WORKDIR /build
 COPY hybrid_core/rust_engine/ ./
-RUN cargo build --locked --release
+RUN cargo test --locked --all-targets && cargo build --locked --release
 
 FROM node:22-bookworm-slim AS builder
 # Hybrid verification includes Python bridge subprocesses.
@@ -17,6 +17,7 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY . .
 COPY --from=rust_verification /build/target/release/signal_forge_rust_engine /usr/local/bin/signal_forge_rust_engine
+RUN python3 -m unittest discover -s hybrid_core/python_control_plane -p 'test_*.py' -v
 RUN sh scripts/verify-with-rust.sh /usr/local/bin/signal_forge_rust_engine
 
 FROM node:22-bookworm-slim AS runner
