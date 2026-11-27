@@ -15,7 +15,7 @@ export function PlansPreview() {
         <header className="neo-topbar" aria-label="Plans navigation">
           <Link to="/welcome" className="neo-brand"><img src="/signal-forge-mark.svg" alt="" width="34" height="34" className="inline-block align-middle" /> Signal Forge</Link>
           <nav className="neo-toplinks" aria-label="Plans links">
-            <Link to="/welcome">Overview</Link>
+            <Link className="neo-mobile-visible" to="/welcome">Overview</Link>
             <Link to="/welcome#roadmap">Roadmap</Link>
             <Link to="/login" className="neo-pill">Login</Link>
           </nav>
