@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   signInWithGoogle,
   signInWithEmail,
@@ -11,7 +11,8 @@ import { useApp } from '../context/AppContext';
 export function Auth() {
   const { user } = useApp();
   const navigate = useNavigate();
-  const [mode, setMode] = useState<'login' | 'signup'>('login');
+  const [searchParams] = useSearchParams();
+  const [mode, setMode] = useState<'login' | 'signup'>(() => searchParams.get('mode') === 'signup' ? 'signup' : 'login');
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
