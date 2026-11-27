@@ -78,13 +78,18 @@ export function evaluateRecovery(
       nextProbeAtMs:now + recoveryBackoffMs(failures),lastCause:input.fault ?? 'TIMEOUT',
     };
   } else {
-    const healthy = previous.consecutiveHealthy + 1;
-    const stable = now - previous.lastTransitionMs >= MIN_STABLE_MS;
-    const recovered = trustworthy && healthy >= SUCCESSES_TO_RESTORE && stable
-      && (previous.mode === 'FALLBACK' || previous.mode === 'PROBING');
+    const criticalHistory = previous.lastCause !== null && CRITICAL.has(previous.lastCause);
+    // Only transiently isolated services can enter probing; integrity and auth incidents remain isolated.
+    const mayProbe = previous.mode === 'ISOLATED' && !criticalHistory
+      && trustworthy && now >= previous.nextProbeAtMs;
+    const candidate = mayProbe ? {...previous,mode:'PROBING' as const} : previous;
+    const healthy = candidate.consecutiveHealthy + 1;
+    const stable = now - candidate.lastTransitionMs >= MIN_STABLE_MS;
+    const recovered = !criticalHistory && trustworthy && healthy >= SUCCESSES_TO_RESTORE && stable
+      && (candidate.mode === 'FALLBACK' || candidate.mode === 'PROBING');
     next = recovered
-      ? {...previous,mode:'PRIMARY',consecutiveFailures:0,consecutiveHealthy:0,lastTransitionMs:now,nextProbeAtMs:now,lastCause:null}
-      : {...previous,consecutiveHealthy:healthy,nextProbeAtMs:now};
+      ? {...candidate,mode:'PRIMARY',consecutiveFailures:0,consecutiveHealthy:0,lastTransitionMs:now,nextProbeAtMs:now,lastCause:null}
+      : {...candidate,consecutiveHealthy:healthy,nextProbeAtMs:now};
   }
   const fallback = next.mode === 'FALLBACK' && input.safety.fallbackTrusted
     && input.safety.fallbackIsReadOnly && trustworthy;
