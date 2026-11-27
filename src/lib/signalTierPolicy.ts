@@ -4,7 +4,7 @@ import type { SubscriptionPrincipal } from './subscriptionGatekeeper';
  * permission to trade. Current backend has FREE/PRO/PREMIUM_INSTITUTIONAL;
  * Ultimate is a proposed product label, not a newly granted entitlement.
  */
-export type SignalClass='PUBLIC_MARKET_WATCH'|'VERIFIED_MOMENTUM'|'PRE_PUMP_RESEARCH'|'WHALe_ONCHAIN_FLOW'|'FUTURES_RESEARCH';
+export type SignalClass='PUBLIC_MARKET_WATCH'|'VERIFIED_MOMENTUM'|'PRE_PUMP_RESEARCH'|'WHALE_ONCHAIN_FLOW'|'FUTURES_RESEARCH';
 export type SignalProvenance='EXCHANGE_OBSERVED'|'INDEPENDENTLY_CROSS_CHECKED'|'MODELED'|'STALE';
 export interface SignalAccessDecision {
  readonly canView:boolean;
@@ -22,7 +22,7 @@ export function evaluateSignalAccess(
  const verified=provenance==='INDEPENDENTLY_CROSS_CHECKED';
  if(provenance==='MODELED'||provenance==='STALE')return {canView:false,displayStatus:'UNVERIFIED',canPlaceLiveOrder:false,reasons:['Only fresh independently verified premium signal data may be promoted']};
  if(kind==='PUBLIC_MARKET_WATCH') return {canView:true,displayStatus:'AVAILABLE',canPlaceLiveOrder:false,reasons:[]};
- const needsPremium=kind==='PRE_PUMP_RESEARCH'||kind==='WHALe_ONCHAIN_FLOW'||kind==='FUTURES_RESEARCH';
+ const needsPremium=kind==='PRE_PUMP_RESEARCH'||kind==='WHALE_ONCHAIN_FLOW'||kind==='FUTURES_RESEARCH';
  const allowed=needsPremium?premium&&verified:pro&&verified;
  return {canView:Boolean(allowed),displayStatus:allowed?'AVAILABLE':'REDACTED_UPGRADE',canPlaceLiveOrder:false,
  reasons:allowed?[]:[needsPremium?'Premium Institutional (future Ultimate mapping) entitlement and independent verification required':'Pro entitlement and independent verification required']};
