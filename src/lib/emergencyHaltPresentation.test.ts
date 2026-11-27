@@ -44,5 +44,5 @@ test('approved recovery does not unlock live trading', () => {
 test('stale or invalid local-shaped state does not override server state', () => {
   assert.equal(acceptNewerAuthoritativeSnapshot(halted, { ...halted, revision: 3 }), halted);
   assert.equal(acceptNewerAuthoritativeSnapshot(halted, { ...halted, revision: 5, source: 'client' as 'server' }), halted);
-  assert.equal(acceptNewerAuthoritativeSnapshot(halted, { ...halted, revision: 5 }).revision, 5);
+  assert.equal(acceptNewerAuthoritativeSnapshot(halted, { ...halted, revision: 5 })?.revision, 5);
 });
