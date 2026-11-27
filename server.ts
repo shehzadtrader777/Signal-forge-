@@ -46,6 +46,11 @@ import {
 } from './src/lib/sentinelAgent';
 import { TELEMETRY_POLL_INTERVAL_MS } from './src/lib/telemetrySync';
 import {
+  parseBinanceFiveMinuteKlines,
+  parseBybitFiveMinuteKlines,
+  computeRelativeVolumeObservation,
+} from './src/lib/realVolumeCandles';
+import {
   DEFAULT_MAX_EXECUTION_SLIPPAGE_PCT,
   MAX_WS_RECONNECT_ATTEMPTS,
   SUBSECOND_HEARTBEAT_INTERVAL_MS,
@@ -6866,6 +6871,56 @@ async function startServer() {
       interval,
       candles: generateDeterministicCandles(symbol, interval, limit, undefined, refPrice),
     });
+  });
+
+  // Staging-only read-only exchange volume scanner, owner/operator authenticated.
+  // No AI-generated price data, fake whale flows, or automatic orders.
+  app.get('/api/research/early-volume/:symbol', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+    const symbol = String(req.params.symbol || '').toUpperCase();
+    if (!/^[A-Z0-9]{2,16}USDT$/.test(symbol)) {
+      return res.status(400).json({ ok:false, error:'Invalid Spot USDT symbol.' });
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4500);
+    res.setHeader('Cache-Control', 'no-store');
+    const nowMs = Date.now();
+    const providers = [
+      { venue:'BINANCE', url:`https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=5m&limit=55` },
+      { venue:'BYBIT', url:`https://api.bybit.com/v5/market/kline?category=spot&symbol=${encodeURIComponent(symbol)}&interval=5&limit=55` },
+    ] as const;
+    try {
+      const results = await Promise.all(providers.map(async (provider) => {
+        try {
+          const response = await fetch(provider.url, { signal:controller.signal, headers:{ Accept:'application/json' } });
+          if (!response.ok) return { venue:provider.venue, status:'UNAVAILABLE', observation:null };
+          const body = await response.json();
+          const rows:unknown[] = provider.venue==='BINANCE'
+            ? Array.isArray(body)?body:[]
+            : body?.retCode===0 && Array.isArray(body?.result?.list)?body.result.list:[];
+          const parsed= provider.venue==='BINANCE'
+            ? parseBinanceFiveMinuteKlines(symbol,rows,nowMs)
+            : parseBybitFiveMinuteKlines(symbol,rows,nowMs);
+          const observation=computeRelativeVolumeObservation(parsed);
+          const age=observation?nowMs-observation.observedAtMs:Infinity;
+          if (!observation||age>6*60_000) return { venue:provider.venue,status:'STALE_OR_INCOMPLETE',observation:null };
+          return { venue:provider.venue,status:'OBSERVED_CLOSED_CANDLES',observation };
+        } catch {
+          return { venue:provider.venue,status:'UNAVAILABLE',observation:null };
+        }
+      }));
+      const independentlyObserved=results.filter(r=>r.observation).length;
+      return res.json({
+        ok:true,symbol,source:'PUBLIC_EXCHANGE_CLOSED_5M_CANDLES',checkedAtIso:new Date(nowMs).toISOString(),
+        providers:results,
+        crossExchangeVolumeObserved:independentlyObserved===2,
+        whaleOrOnchainInflowVerified:false,
+        mayExecuteLiveTrade:false,
+        interpretation:'Trading volume is not net cash inflow. Bybit candles do not supply aggressor-side trading data in this adapter.',
+        stage:'OWNER_RESEARCH_ONLY',
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
   });
 
   app.get('/api/cmc/intelligence', async (_req, res) => {
