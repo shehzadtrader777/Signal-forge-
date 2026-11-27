@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { authorizeOrderRoute, normalizeTradingMode, summarizeByMode, type ExecutionPermit } from './tradingModes.js';
+import { authorizeOrderRoute, normalizeTradingMode, summarizeByMode, summarizeAccountByMode, type ExecutionPermit } from './tradingModes.js';
 
 const basic: ExecutionPermit = {
   mode: 'PAPER', requestedDestination: 'SIMULATOR', authenticated: true,
@@ -35,4 +35,25 @@ test('comparison keeps paper/demo/live ledgers distinct', () => {
   assert.deepEqual(summaries.map(x=>[x.mode,x.count,x.realizedNetPnlUsd]), [
     ['PAPER',1,10], ['DEMO',1,-2], ['LIVE',0,0]
   ]);
+});
+
+test('account-scoped comparison blocks cross-user PnL leakage', () => {
+  const trades = [
+    {mode:'PAPER' as const, accountId:'owner', signalId:'s1', strategyVersion:'v1', realizedNetPnlUsd:25},
+    {mode:'PAPER' as const, accountId:'other', signalId:'s2', strategyVersion:'v1', realizedNetPnlUsd:999999},
+    {mode:'LIVE' as const, accountId:'owner', signalId:'s3', strategyVersion:'v1', realizedNetPnlUsd:Number.NaN},
+  ];
+  const rows = summarizeAccountByMode(trades, 'owner');
+  assert.deepEqual(rows.map(x => [x.count, x.realizedNetPnlUsd]), [[1,25],[0,0],[0,0]]);
+  assert.throws(() => summarizeByMode(trades), /multiple accounts/);
+  assert.throws(() => summarizeAccountByMode(trades, ''), /account ID/);
+});
+test('nonfinite money and incomplete signal provenance are rejected', () => {
+  const trades = [
+    {mode:'DEMO' as const, accountId:'owner', signalId:'valid', strategyVersion:'v1', realizedNetPnlUsd:-2},
+    {mode:'DEMO' as const, accountId:'owner', signalId:'bad', strategyVersion:'v1', realizedNetPnlUsd:Number.POSITIVE_INFINITY},
+    {mode:'DEMO' as const, accountId:'owner', signalId:'', strategyVersion:'v1', realizedNetPnlUsd:3},
+  ];
+  const demo = summarizeAccountByMode(trades, 'owner')[1];
+  assert.deepEqual([demo.count, demo.realizedNetPnlUsd], [1,-2]);
 });
