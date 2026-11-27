@@ -125,7 +125,6 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
     appLiveEnabled,
     setAppLiveEnabled,
     architectureState,
-    subscriptionSummary,
     toggleControlMatrixKey,
     voiceAgent,
     engageForgeFailSafeNow,
@@ -178,13 +177,6 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
         return;
       }
       const nextSnap = evaluateCommandControlSnapshot(nextHubState);
-      if (!subscriptionSummary.premiumUnlocked) {
-        setSyncNotice(
-          `${contextLabel} saved in this browser only (Checksum ${nextSnap.matrixChecksum}). Backend sync NOT authorized/verified; execution control is not confirmed.`
-        );
-        return;
-      }
-
       const deltas = computeControlMatrixDelta(
         architectureState.controlMatrix,
         nextSnap.derivedControlMatrix
@@ -215,7 +207,6 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
     [
       architectureState.controlMatrix,
       ownerControlsAllowed,
-      subscriptionSummary.premiumUnlocked,
       toggleControlMatrixKey,
     ]
   );
@@ -264,7 +255,7 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
       const nextEnabled = !mod.granularEnabled;
       const next = setGranularToggle(mod.descriptor.id, nextEnabled);
       let backendConfirmed = false;
-      if (mod.descriptor.controlMatrixKey && subscriptionSummary.premiumUnlocked && !mod.isOverridden) {
+      if (mod.descriptor.controlMatrixKey && !mod.isOverridden) {
         try {
           const outcome = await toggleControlMatrixKey(mod.descriptor.controlMatrixKey, nextEnabled);
           backendConfirmed = outcome.ok;
@@ -280,7 +271,7 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
           : `${mod.descriptor.label}: local preference saved; backend change NOT confirmed. Check permissions and resync.`
       );
     },
-    [ownerControlsAllowed, setGranularToggle, subscriptionSummary.premiumUnlocked, toggleControlMatrixKey]
+    [ownerControlsAllowed, setGranularToggle, toggleControlMatrixKey]
   );
 
   const handlePresetClick = useCallback(
@@ -350,9 +341,9 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
         id: 'matrix-checksum',
         label: 'Control Matrix Checksum',
         value: snapshot.matrixChecksum,
-        subtext: subscriptionSummary.premiumUnlocked
-          ? 'Backend Microservice Sync ON'
-          : 'Local Hub + Multi-Display Sync',
+        subtext: ownerControlsAllowed
+          ? 'Owner may request backend sync (verify result)'
+          : 'Read-only backend / local view',
         tone: 'INFO',
       },
       {
@@ -371,7 +362,7 @@ export const CommandControlSettingsHub = memo(function CommandControlSettingsHub
       snapshot.matrixChecksum,
       snapshot.overriddenCount,
       snapshot.totalModules,
-      subscriptionSummary.premiumUnlocked,
+      ownerControlsAllowed,
       voiceAgent.listening,
     ]
   );
