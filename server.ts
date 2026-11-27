@@ -5494,6 +5494,14 @@ async function startServer() {
     res: express.Response,
     intent: OrderGateIntent
   ): boolean {
+    if (
+      (intent.kind === 'NEW_ENTRY' || intent.kind === 'SWITCH_TO_LIVE' ||
+        intent.kind === 'SELF_HEALING_BYPASS') &&
+      (forgeCapitalState.failSafe.engaged || forgeCapitalState.allTradingHalted)
+    ) {
+      res.status(423).json({ ok: false, code: 'EMERGENCY_HALT_ACTIVE' });
+      return false;
+    }
     const current = getActiveMaintenanceState();
     const decision = evaluateMaintenanceOrderGate(current, intent);
     if (!decision.allowed) {
@@ -10720,6 +10728,7 @@ async function startServer() {
   });
 
   app.post('/api/step2/approve-execute', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    if (!enforceMaintenanceOrderGate(res, { kind: 'NEW_ENTRY', source: 'MANUAL' })) return;
     const body = req.body || {};
     const signalId = String(body.signalId || '').trim();
     const requestedEnv = String(body.environment || 'PAPER').toUpperCase();
@@ -15182,6 +15191,7 @@ async function startServer() {
   });
 
   app.post('/api/freqtrade/signal/execute', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    if (!enforceMaintenanceOrderGate(res, { kind: 'NEW_ENTRY', source: 'AI_SIGNAL' })) return;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const rawExchange = String(body.exchange || 'binance').trim().toLowerCase();
     if (!isSupportedExchange(rawExchange)) {
