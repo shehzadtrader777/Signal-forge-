@@ -15,6 +15,7 @@ export function PremiumLanding() {
             <a href="#workspace">Workspace</a>
             <a href="#roadmap">Roadmap</a>
             <a href="#guide">Super Guide</a>
+            <Link to="/pricing">Plans</Link>
             <Link className="neo-pill" to="/login">Login</Link>
           </nav>
         </header>
