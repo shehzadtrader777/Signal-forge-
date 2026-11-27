@@ -3637,113 +3637,15 @@ async function dispatchPerformanceReport(
   return { record, report: m };
 }
 
+// No demo wallet transfers or fabricated cash flow in production-facing intelligence.
 function buildFallbackIntelligence(): {
-  source: 'structured_cache';
+  source: 'unverified_unavailable';
   whales: WhaleTransaction[];
   flows: ExchangeFlowMetric[];
   trending: Array<{ symbol: string; name: string; price: number; change24h: number; tag: string }>;
+  whaleFlowVerified: false;
 } {
-  const now = Date.now();
-  const flows: ExchangeFlowMetric[] = TRACKED_COINS.slice(0, 6).map((coin, idx) => {
-    const mult = idx === 0 ? 18 : idx === 1 ? 11 : 4.5 - idx * 0.4;
-    const inflow = Math.round((42 + idx * 9) * mult * 1_000_000);
-    const outflow = Math.round((idx % 2 === 0 ? 58 + idx * 10 : 34 + idx * 7) * mult * 1_000_000);
-    const changeMap = [3.42, 2.18, 6.84, 1.05, -2.74, 4.19];
-    return {
-      symbol: coin.symbol,
-      coinName: coin.name,
-      price: coin.referencePrice,
-      change24h: changeMap[idx] ?? 1.5,
-      volume24hUsd: Math.round((inflow + outflow) * 3.8),
-      inflow24hUsd: inflow,
-      outflow24hUsd: outflow,
-      netflowUsd: inflow - outflow,
-    };
-  });
-
-  const whales: WhaleTransaction[] = [
-    {
-      id: 'wh-1',
-      symbol: 'BTCUSDT',
-      coinName: 'Bitcoin',
-      amountUnits: 845,
-      amountUsd: 77_249_900,
-      type: 'Exchange Outflow',
-      fromLabel: 'Coinbase Institutional',
-      toLabel: 'Cold Custody Vault #49A',
-      timestamp: new Date(now - 6 * 60 * 1000).toISOString(),
-      impact: 'Bullish',
-    },
-    {
-      id: 'wh-2',
-      symbol: 'ETHUSDT',
-      coinName: 'Ethereum',
-      amountUnits: 14200,
-      amountUsd: 46_647_000,
-      type: 'Exchange Outflow',
-      fromLabel: 'Binance Hot Wallet',
-      toLabel: 'Lido Validator Treasury',
-      timestamp: new Date(now - 14 * 60 * 1000).toISOString(),
-      impact: 'Bullish',
-    },
-    {
-      id: 'wh-3',
-      symbol: 'SOLUSDT',
-      coinName: 'Solana',
-      amountUnits: 128000,
-      amountUsd: 27_468_800,
-      type: 'Whale Transfer',
-      fromLabel: 'Unknown Whale 7xK9',
-      toLabel: 'Solana Staking Cluster',
-      timestamp: new Date(now - 23 * 60 * 1000).toISOString(),
-      impact: 'Bullish',
-    },
-    {
-      id: 'wh-4',
-      symbol: 'XRPUSDT',
-      coinName: 'XRP',
-      amountUnits: 19500000,
-      amountUsd: 22_386_000,
-      type: 'Exchange Inflow',
-      fromLabel: 'Escrow Distribution Desk',
-      toLabel: 'Bitstamp Exchange Deposit',
-      timestamp: new Date(now - 38 * 60 * 1000).toISOString(),
-      impact: 'Bearish',
-    },
-    {
-      id: 'wh-5',
-      symbol: 'DOGEUSDT',
-      coinName: 'Dogecoin',
-      amountUnits: 54000000,
-      amountUsd: 19_872_000,
-      type: 'Exchange Inflow',
-      fromLabel: 'Whale Wallet rQ82',
-      toLabel: 'OKX Spot Deposit',
-      timestamp: new Date(now - 49 * 60 * 1000).toISOString(),
-      impact: 'Bearish',
-    },
-    {
-      id: 'wh-6',
-      symbol: 'LINKUSDT',
-      coinName: 'Chainlink',
-      amountUnits: 810000,
-      amountUsd: 13_300_200,
-      type: 'Exchange Outflow',
-      fromLabel: 'Kraken Liquidity Pool',
-      toLabel: 'Multisig Accumulation Vault',
-      timestamp: new Date(now - 63 * 60 * 1000).toISOString(),
-      impact: 'Bullish',
-    },
-  ];
-
-  const trending = [
-    { symbol: 'SOLUSDT', name: 'Solana', price: 214.6, change24h: 6.84, tag: 'Top Gaining' },
-    { symbol: 'AVAXUSDT', name: 'Avalanche', price: 38.75, change24h: 4.19, tag: 'Hot Volume' },
-    { symbol: 'BTCUSDT', name: 'Bitcoin', price: 91420, change24h: 3.42, tag: 'Trending' },
-    { symbol: 'LINKUSDT', name: 'Chainlink', price: 16.42, change24h: 3.15, tag: 'Whale Accumulation' },
-  ];
-
-  return { source: 'structured_cache', whales, flows, trending };
+  return { source: 'unverified_unavailable', whales: [], flows: [], trending: [], whaleFlowVerified: false };
 }
 
 async function fetchMarketIntelligence() {
@@ -3774,42 +3676,10 @@ async function fetchMarketIntelligence() {
     const rows = Array.isArray(json.data) ? json.data : [];
     if (rows.length === 0) return buildFallbackIntelligence();
 
-    const flows: ExchangeFlowMetric[] = rows.slice(0, 6).map((item: any) => {
-      const quote = item.quote?.USD || {};
-      const vol = Number(quote.volume_24h || 0);
-      const chg = Number(quote.percent_change_24h || 0);
-      const price = Number(quote.price || 0);
-      const outflowRatio = chg >= 0 ? 0.56 : 0.43;
-      const outflow = Math.round(vol * 0.24 * outflowRatio);
-      const inflow = Math.round(vol * 0.24 * (1 - outflowRatio));
-      return {
-        symbol: `${String(item.symbol).toUpperCase()}USDT`,
-        coinName: String(item.name),
-        price,
-        change24h: Number(chg.toFixed(2)),
-        volume24hUsd: Math.round(vol),
-        inflow24hUsd: inflow,
-        outflow24hUsd: outflow,
-        netflowUsd: inflow - outflow,
-      };
-    });
-
-    const whales: WhaleTransaction[] = flows.map((f, idx) => {
-      const isOutflow = f.netflowUsd <= 0;
-      const usdVal = Math.max(4_500_000, Math.round(Math.abs(f.netflowUsd) * 0.14));
-      return {
-        id: `cmc-wh-${idx}`,
-        symbol: f.symbol,
-        coinName: f.coinName,
-        amountUnits: Number((usdVal / Math.max(f.price, 0.01)).toFixed(2)),
-        amountUsd: usdVal,
-        type: isOutflow ? 'Exchange Outflow' : 'Exchange Inflow',
-        fromLabel: isOutflow ? 'Binance / Coinbase Desk' : 'Whale Accumulation Wallet',
-        toLabel: isOutflow ? 'Cold Custody Storage' : 'Spot Exchange Liquidity',
-        timestamp: new Date(Date.now() - (idx + 1) * 11 * 60 * 1000).toISOString(),
-        impact: isOutflow ? 'Bullish' : 'Bearish',
-      };
-    });
+    // CMC market listings offer trading volume, not observed on-chain exchange wallet transfers.
+    // Genuine whale flows require separately verified transaction hashes and wallet labels.
+    const flows: ExchangeFlowMetric[] = [];
+    const whales: WhaleTransaction[] = [];
 
     const trending = rows
       .slice()
@@ -3830,7 +3700,7 @@ async function fetchMarketIntelligence() {
         };
       });
 
-    return { source: 'cmc' as const, whales, flows, trending };
+    return { source: 'cmc' as const, whales, flows, trending, whaleFlowVerified: false as const };
   } catch {
     return buildFallbackIntelligence();
   } finally {
@@ -7000,6 +6870,7 @@ async function startServer() {
 
   app.get('/api/cmc/intelligence', async (_req, res) => {
     const data = await fetchMarketIntelligence();
+    res.setHeader('Cache-Control', 'no-store');
     res.json(data);
   });
 
@@ -8499,6 +8370,7 @@ async function startServer() {
         fundamentalScore: fundamental.score,
         fundamentalSummary: fundamental.summary,
         whaleBias,
+        whaleFlowVerified: false,
         netflowUsd: flow?.netflowUsd ?? 0,
         inflow24hUsd: flow?.inflow24hUsd ?? 0,
         outflow24hUsd: flow?.outflow24hUsd ?? 0,
