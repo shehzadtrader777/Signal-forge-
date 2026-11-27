@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Maximize2, Minimize2, X } from 'lucide-react';
-import { fetchCoinCandles, formatCryptoPrice, type Candle, type Timeframe } from '../lib/marketData';
+import { formatCryptoPrice, type Candle, type Timeframe } from '../lib/marketData';
 import type { UnifiedSignalAuditRecord } from '../lib/signalHistory';
 import { deriveTradeAuditIdentity } from '../lib/tradeAuditIdentity';
 
-type ChartState = { source: 'binance' | 'cache'; candles: Candle[] } | null;
+type ChartState = { source: 'binance' | 'unavailable'; candles: Candle[] } | null;
+
+function parseSignalTimeUtc(input:string):number|null {
+  const parsed=Date.parse(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(input)?`${input.replace(' ','T')}Z`:input);
+  return Number.isFinite(parsed)?parsed:null;
+}
 
 export function SignalInspectChart({ record, onClose }: {
   record: UnifiedSignalAuditRecord;
@@ -24,8 +29,22 @@ export function SignalInspectChart({ record, onClose }: {
     const controller = new AbortController();
     setLoading(true);
     setChart(null);
-    void fetchCoinCandles(record.symbol, timeframe, 360, undefined, controller.signal)
-      .then(result => { if (!controller.signal.aborted) setChart(result); })
+    const signalTimeMs=parseSignalTimeUtc(record.timestamp);
+    if (signalTimeMs===null || signalTimeMs>Date.now()) {
+      setLoading(false);
+      return () => controller.abort();
+    }
+    const endTime=Math.min(Date.now(),signalTimeMs+60*60*1000);
+    const query=new URLSearchParams({symbol:record.symbol,interval:timeframe,limit:'360',market:'spot',endTime:String(endTime)});
+    void fetch(`/api/binance/klines?${query.toString()}`,{signal:controller.signal,cache:'no-store'})
+      .then(async response => {
+        if(!response.ok)throw new Error('Historical data unavailable');
+        const data=await response.json() as {source?:string;candles?:Candle[]};
+        if(!controller.signal.aborted) setChart({
+          source:data.source==='binance'?'binance':'unavailable',
+          candles:Array.isArray(data.candles)?data.candles:[],
+        });
+      })
       .catch(() => { if (!controller.signal.aborted) setChart(null); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
@@ -44,14 +63,20 @@ export function SignalInspectChart({ record, onClose }: {
     const y=(p:number)=>top+((hi-p)/span)*innerHeight;
     const x=(i:number)=>left+(i/Math.max(1,candles.length-1))*innerWidth;
     const barWidth=Math.max(1,Math.min(7,innerWidth/candles.length*0.7));
+    const eventTimeMs=parseSignalTimeUtc(record.timestamp);
+    const eventIndex=eventTimeMs===null?-1:candles.findIndex(c=>{
+      const candleStartMs=c.time*1000;
+      const durationMs=({'15m':900000,'1h':3600000,'4h':14400000,'1d':86400000} as const)[timeframe];
+      return eventTimeMs>=candleStartMs&&eventTimeMs<candleStartMs+durationMs;
+    });
     const lines=[
       {price:record.entryPrice,label:'ENTRY',color:'#38bdf8'},
       {price:record.stopLoss,label:'SL',color:'#f43f5e'},
       {price:record.takeProfit,label:'TP',color:'#22c55e'},
       {price:record.exitOrMarkPrice,label:record.status==='ACTIVE'?'LATEST MARK':'EXIT / MARK',color:'#eab308'},
     ];
-    return {candles,lo,hi,y,x,barWidth,width,height,left,right,top,bottom,lines};
-  }, [chart,record]);
+    return {candles,lo,hi,y,x,barWidth,width,height,left,right,top,bottom,lines,eventIndex};
+  }, [chart,record,timeframe]);
 
   return (
     <div role="dialog" aria-modal="true" aria-label={`Inspect signal ${record.symbol}`}
@@ -100,6 +125,11 @@ export function SignalInspectChart({ record, onClose }: {
                       <rect x={xx-plot.barWidth/2} y={top} width={plot.barWidth} height={height} fill={color}/>
                     </g>;
                   })}
+                  {plot.eventIndex>=0 && <g>
+                    <line x1={plot.x(plot.eventIndex)} x2={plot.x(plot.eventIndex)} y1={plot.top} y2={plot.height-plot.bottom}
+                      stroke="#a78bfa" strokeDasharray="3 3" />
+                    <text x={plot.x(plot.eventIndex)+4} y={plot.top+12} fill="#c4b5fd" fontSize="11">SIGNAL TIMESTAMP</text>
+                  </g>}
                   {plot.lines.map(line=><g key={line.label}>
                     <line x1={plot.left} x2={plot.width-plot.right+8} y1={plot.y(line.price)} y2={plot.y(line.price)}
                       stroke={line.color} strokeWidth="1.6" strokeDasharray="6 4"/>
@@ -109,7 +139,7 @@ export function SignalInspectChart({ record, onClose }: {
                 <p className="p-8 text-sm text-amber-200">Verified historical Binance candles unavailable. A simulated chart is deliberately not presented as a historical trade chart.</p>}
           </div>
           <p className="mt-2 text-xs text-slate-400">
-            Chart source: {chart?.source==='binance'?'Binance historical candles':chart?.source==='cache'?'Simulated/cache — chart withheld':'Unavailable'}.
+            Chart source: {chart?.source==='binance'?'Binance historical candles around signal time':'Unavailable'}.
             {' '}The horizontal levels are saved signal prices, not proven historical fill markers.
             The inspection window does not establish when an order filled or verify an exchange trade ID.
           </p>
