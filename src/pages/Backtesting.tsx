@@ -33,13 +33,14 @@ import { useRbacIdentity } from '../hooks/useRbacIdentity';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { TrustConsolePanel } from '../components/TrustConsolePanel';
 import { ModularBacktestMatrixPanel } from '../components/ModularBacktestMatrixPanel';
+import '../styles/forgeBacktesting.css';
 
 const BAR_RADIUS: [number, number, number, number] = [6, 6, 0, 0];
 const AREA_CHART_MARGIN = { top: 8, right: 12, left: 4, bottom: 0 };
 const BAR_CHART_MARGIN = { top: 8, right: 12, left: 0, bottom: 0 };
 const RECHARTS_TOOLTIP_STYLE = {
-  backgroundColor: '#0d1323',
-  borderColor: '#334155',
+  backgroundColor: '#1B1E21',
+  borderColor: '#8F704B',
   borderRadius: '8px',
   fontSize: '12px',
   color: '#f8fafc',
@@ -108,8 +109,8 @@ const BacktestCharts = memo(function BacktestCharts({
               <AreaChart data={equityCurve} margin={AREA_CHART_MARGIN}>
                 <defs>
                   <linearGradient id="sfEquityGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.35} />
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                    <stop offset="5%" stopColor="#D2A66A" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="#D2A66A" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -131,7 +132,7 @@ const BacktestCharts = memo(function BacktestCharts({
                 <Area
                   type="monotone"
                   dataKey="equity"
-                  stroke="#3b82f6"
+                  stroke="#D2A66A"
                   strokeWidth={2}
                   fillOpacity={1}
                   fill="url(#sfEquityGrad)"
@@ -324,7 +325,7 @@ export function Backtesting() {
     liveWsPrice ?? simulation.latestMarkPrice ?? 0;
 
   return (
-    <div className="mx-auto max-w-[1440px] px-4 py-8 sm:px-6 lg:px-8 space-y-8">
+    <div className="forge-backtesting mx-auto max-w-[1440px] px-4 py-8 sm:px-6 lg:px-8 space-y-8">
       <section aria-label="Backtesting guide" className="rounded-2xl border border-[#8f704b]/40 bg-[#171a1d] p-5 sm:p-6">
         <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#d9b77f]">SIGNAL FORGE · RESEARCH LAB</p>
         <h2 className="mt-2 font-display text-xl font-bold text-white">Understand every test before comparing results.</h2>
