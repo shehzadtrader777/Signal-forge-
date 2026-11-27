@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Lock, RefreshCw } from 'lucide-react';
 import { CandleChart } from '../components/CandleChart';
+import { PremiumWorkspaceOverview } from '../components/PremiumWorkspaceOverview';
 import { SmcVolumeProfilePanel } from '../components/SmcVolumeProfilePanel';
 import { TopGainersPanel } from '../components/TopGainersPanel';
 import { SignalCard } from '../components/SignalCard';
@@ -649,6 +650,9 @@ export function Dashboard() {
   return (
     <div>
       <div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8 space-y-8">
+        {/* User-customizable premium overview. Never modifies trade execution or balance state. */}
+        <PremiumWorkspaceOverview />
+
         {/* Multi-Screen Workspace Synchronization, Cyber-AI Theme Controls & Backend AI Pulse */}
         <MultiScreenWorkspaceBar pipelineSnapshot={pipelineSnapshot} />
 
