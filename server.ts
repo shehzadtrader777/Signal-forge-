@@ -6819,6 +6819,12 @@ async function startServer() {
         ? intervalRaw
         : '4h';
     const limit = Math.min(360, Math.max(40, Number(req.query.limit || 160)));
+    // Optional historical endTime for signal inspection; bounded to current time.
+    const endTimeInput = req.query.endTime === undefined ? null : Number(req.query.endTime);
+    if (endTimeInput !== null && (!Number.isSafeInteger(endTimeInput) || endTimeInput < 1_500_000_000_000 || endTimeInput > Date.now() + 60_000)) {
+      return res.status(400).json({error:'Invalid historical candle endTime'});
+    }
+    const historicalEndParam = endTimeInput !== null ? `&endTime=${endTimeInput}` : '';
     const refPriceParam = Number(req.query.refPrice);
     const cachedPrice =
       spotFeedCache[symbol]?.price ??
@@ -6829,9 +6835,9 @@ async function startServer() {
 
     const candidateUrls =
       market === 'futures'
-        ? [`${FUTURES_FEED_ENDPOINT}/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`]
+        ? [`${FUTURES_FEED_ENDPOINT}/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}${historicalEndParam}`]
         : SPOT_REST_ENDPOINTS.map(
-            (host) => `${host}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`
+            (host) => `${host}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}${historicalEndParam}`
           );
 
     for (const url of candidateUrls) {
@@ -6866,6 +6872,11 @@ async function startServer() {
       }
     }
 
+    // Historical inspections fail closed: never replace missing historical candles with synthetic price paths.
+    if (endTimeInput !== null) {
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(503).json({source:'unavailable',symbol,interval,candles:[],error:'Historical exchange candles unavailable'});
+    }
     return res.json({
       source: 'cache',
       symbol,
