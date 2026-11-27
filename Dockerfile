@@ -1,13 +1,14 @@
 # Signal Forge staging container. Reproducible Bun lockfile; no silent npm fallback.
-# Bun lockfile v2 requires a recent builder. Pin this image by digest after CI verification.
-FROM oven/bun:latest AS builder
+# Use Bun only for frozen dependency installation, but execute the verification
+# on real Node.js 22 (the Bun image aliases 'node' to its own runtime).
+FROM oven/bun:latest AS bun_toolchain
+FROM node:22-alpine AS builder
 WORKDIR /app
+COPY --from=bun_toolchain /usr/local/bin/bun /usr/local/bin/bun
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY . .
-RUN ./node_modules/.bin/tsx --test src/lib/*.test.ts \
- && ./node_modules/.bin/tsc --noEmit \
- && ./node_modules/.bin/vite build
+RUN npm run verify
 
 FROM node:22-alpine AS runner
 WORKDIR /app
