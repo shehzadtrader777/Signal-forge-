@@ -6070,7 +6070,24 @@ async function startServer() {
     }
   });
 
-  app.post('/api/forge-capital/failsafe/engage', requireOperatorAuth, standardWriteRateLimit, requirePremiumSubscription('EXECUTION'), (req, res) => {
+  // Authenticated, read-only server status for cross-device halt confirmation.
+  // Deliberately never returns confirmation tokens or enables live execution.
+  app.get('/api/forge-capital/failsafe/status', requireOperatorAuth, (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const engaged = forgeCapitalState.failSafe.engaged || forgeCapitalState.allTradingHalted;
+    return res.json({
+      ok: true,
+      state: engaged ? 'HALTED_CONFIRMED' : 'RESUME_APPROVED_EXECUTION_LOCKED',
+      sealId: forgeCapitalState.failSafe.immutableSealId,
+      engaged,
+      haltCode: forgeCapitalState.failSafe.haltCode,
+      acknowledgedAtIso: forgeCapitalState.failSafe.triggeredAt,
+      executionEnabled: false,
+      // This endpoint is a snapshot, not a durable event history; do not infer restart safety.
+    });
+  });
+
+  app.post('/api/forge-capital/failsafe/engage', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
     try {
       const reason = String(
         req.body?.reason || 'Manual emergency Fail-Safe seal engaged via Forge Capital Hub.'
@@ -6124,16 +6141,17 @@ async function startServer() {
           </div>
         `,
       });
-      if (process.env.NODE_ENV !== 'production' && emailRecord.status !== 'sent') {
-        console.info(`[FailSafe Challenge][DEV] seal=${sealId} code=${recoveryCode}`);
-      }
 
+      if (emailRecord.status !== 'sent') {
+        failsafeChallenges.delete(challengeId);
+        return res.status(503).json({ ok: false, error: 'Recovery email delivery unavailable. Fail-safe remains engaged.' });
+      }
       return res.json({
         ok: true,
         challengeId,
         sealId,
         expiresAt: new Date(expiresAt).toISOString(),
-        deliveryMode: emailRecord.status === 'sent' ? 'email' : 'server_log',
+        deliveryMode: 'email',
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unable to issue Fail-Safe recovery challenge.';
@@ -6156,11 +6174,9 @@ async function startServer() {
       }
 
       let authorized = false;
-      if (FORGE_FAILSAFE_SECRET && timingSafeEqualStr(confirmationCode, FORGE_FAILSAFE_SECRET)) {
-        authorized = true;
-      } else if (challengeId) {
+      if (challengeId) {
         const challenge = failsafeChallenges.get(challengeId);
-        if (!challenge || challenge.used || challenge.expiresAt < Date.now()) {
+        if (!challenge || challenge.used || challenge.expiresAt < Date.now() || challenge.sealId !== forgeCapitalState.failSafe.immutableSealId || !forgeCapitalState.failSafe.engaged) {
           return res.status(403).json({
             ok: false,
             error: 'Fail-Safe recovery challenge missing or expired. Generate a fresh recovery seal.',
@@ -6191,7 +6207,7 @@ async function startServer() {
       } else {
         return res.status(403).json({
           ok: false,
-          error: 'Recovery seal challengeId or configured FORGE_FAILSAFE_SECRET is required.',
+          error: 'A valid one-time recovery challenge is required.',
           state: forgeCapitalState,
         });
       }
