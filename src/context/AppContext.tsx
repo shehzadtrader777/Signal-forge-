@@ -4579,10 +4579,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         });
         const data = await res.json().catch(() => ({}));
         if (data?.state) setForgeCapitalState(data.state as ForgeCapitalHubState);
+        if (!res.ok || !data?.ok || !data?.state?.failSafe?.engaged) {
+          // Fail closed locally; server acknowledgement is not confirmed.
+          setForgeCapitalState((prev) =>
+            engageImmutableFailSafe(prev, 'Server halt request unconfirmed; local execution blocked.')
+          );
+          pushNotification({
+            category: 'EXECUTION',
+            title: 'Emergency Stop — Server Confirmation Pending',
+            message: 'Local execution blocked. Server halt has NOT been verified; reconnect and check server status.',
+            severity: 'warning',
+          });
+          return;
+        }
         pushNotification({
           category: 'EXECUTION',
-          title: 'Immutable Fail-Safe Engaged',
-          message: 'All Binance Spot & USD-M Futures execution halted across Forge Capital Hub.',
+          title: 'Emergency Stop — Server Confirmed',
+          message: 'Server acknowledged the Forge Capital Hub emergency halt.',
           severity: 'warning',
         });
       } catch (err) {
