@@ -1,0 +1,5 @@
+Signal Forge source-export preflight, 27 November 2026.
+
+Local inspection of user ZIP: 2,390 regular files. Clean source candidate: 316 files; 2,072 excluded by directory or file type; 2 additional test files withheld due to potential embedded Google API key patterns (possibly fixtures): src/lib/aiProviderVaultServer.test.ts and src/lib/serverConfigRegistry.test.ts.
+
+The archive was NOT uploaded to GitHub, merged into main, deployed, or tested. A locally prepared 1.54 MB migration ZIP and SHA256 manifest are available in the conversation. This heuristic scan is not comprehensive security certification. Review exclusions and tests, compare to README/CI differences, audit Firebase rules and server-owned PnL/vault authorization, run install/typecheck/test/build, then prepare reviewed draft PR. Sync to Google AI Studio only after review. Publish and live trading remain prohibited.
