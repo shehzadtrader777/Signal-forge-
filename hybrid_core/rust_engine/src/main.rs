@@ -56,7 +56,7 @@ fn main() -> std::io::Result<()> {
         let reply = match read_framed_command(&mut stream) {
             Ok(ControlPlaneCommand::Ping { seq, sent_ns }) => {
                 let now = monotonic_epoch_ns();
-                let one_way_ns = now.saturating_sub(sent_ns) as u64;
+                let one_way_ns = now.saturating_sub(u128::from(sent_ns)) as u64;
                 ExecutionReply {
                     ok: true,
                     engine_ts_ns: now,

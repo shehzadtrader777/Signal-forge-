@@ -16,7 +16,7 @@ pub const MAX_IPC_FRAME_BYTES: usize = 1_048_576; // 1 MiB strict frame ceiling
 pub enum ControlPlaneCommand {
     Ping {
         seq: u64,
-        sent_ns: u128,
+        sent_ns: u64,
     },
     RouteOrder {
         strategy_id: String,
@@ -110,4 +110,16 @@ pub fn bind_ipc_socket(socket_path: &Path) -> io::Result<UnixListener> {
     // socket to other local users by default, even if process umask is permissive.
     std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))?;
     Ok(listener)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ControlPlaneCommand;
+
+    #[test]
+    fn parses_python_control_plane_ping() {
+        let ping = br#"{"op":"PING","seq":1,"sent_ns":1}"#;
+        let command = serde_json::from_slice::<ControlPlaneCommand>(ping).unwrap();
+        assert!(matches!(command, ControlPlaneCommand::Ping { seq: 1, sent_ns: 1 }));
+    }
 }
