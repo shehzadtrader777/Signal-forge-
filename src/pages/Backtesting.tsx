@@ -33,6 +33,7 @@ import { useRbacIdentity } from '../hooks/useRbacIdentity';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { TrustConsolePanel } from '../components/TrustConsolePanel';
 import { ModularBacktestMatrixPanel } from '../components/ModularBacktestMatrixPanel';
+import { buildBacktestResearchUniverse, validateHistoricalCoverage } from '../lib/backtestUniverse';
 import '../styles/forgeBacktesting.css';
 
 const BAR_RADIUS: [number, number, number, number] = [6, 6, 0, 0];
@@ -209,7 +210,8 @@ function SparklineSnapshot({ points, isWin }: { points: number[]; isWin: boolean
 }
 
 export function Backtesting() {
-  const { tickers, futuresTelemetry, futuresFeedSource, wsConnected } = useApp();
+  const { tickers, futuresTelemetry, futuresFeedSource, wsConnected, allKnownCoins, topGainers } = useApp();
+  const researchUniverse = useMemo(() => buildBacktestResearchUniverse(allKnownCoins, topGainers, Object.keys(tickers)), [allKnownCoins, topGainers, tickers]);
   const [selectedSymbol, setSelectedSymbol] = useState<string>('BTCUSDT');
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('15m');
   const [selectedStrategy, setSelectedStrategy] = useState<BacktestStrategy>('AUTONOMOUS_MASTER');
@@ -227,6 +229,8 @@ export function Backtesting() {
   const [feedSourceLabel, setFeedSourceLabel] = useState<'binance_futures' | 'cache'>('cache');
   const [syncingFeed, setSyncingFeed] = useState(false);
   const [historySource, setHistorySource] = useState<'SIMULATED' | 'GLOBAL'>('SIMULATED');
+  const [coinSearch, setCoinSearch] = useState('');
+  const filteredResearchUniverse = useMemo(() => researchUniverse.filter(c => `${c.symbol} ${c.name}`.toLowerCase().includes(coinSearch.trim().toLowerCase())), [researchUniverse, coinSearch]);
   const [showAllTrades, setShowAllTrades] = useState(false);
 
   const tickersRef = useRef(tickers);
@@ -265,6 +269,14 @@ export function Backtesting() {
   useEffect(() => {
     syncLiveFeedAndCandles(simSeed.symbol, simSeed.timeframe);
   }, [simSeed.symbol, simSeed.timeframe, syncLiveFeedAndCandles]);
+
+  const historyCoverage = useMemo(() => validateHistoricalCoverage({
+    symbol: simSeed.symbol,
+    bars: liveCandles ?? [],
+    windowDays: activeWindowDays,
+    timeframeMinutes: ({'15m':15,'1h':60,'4h':240,'1d':1440} as const)[simSeed.timeframe],
+    source: feedSourceLabel === 'binance_futures' ? 'binance' : 'cache',
+  }), [simSeed.symbol, simSeed.timeframe, liveCandles, activeWindowDays, feedSourceLabel]);
 
   const liveWsPrice =
     tickers[simSeed.symbol]?.price ?? futuresTelemetry[simSeed.symbol]?.markPrice;
@@ -395,15 +407,23 @@ export function Backtesting() {
             >
               Coin Pair
             </label>
+            <input
+              type="search"
+              aria-label="Search all discovered market pairs"
+              value={coinSearch}
+              onChange={(e) => setCoinSearch(e.target.value)}
+              placeholder="Search available market pairs"
+              className="mb-1 w-full rounded-lg border border-slate-700 bg-[#0a0e1a] px-2 py-1.5 text-xs text-white"
+            />
             <select
               id="bt-coin-select"
               value={selectedSymbol}
               onChange={(e) => setSelectedSymbol(e.target.value)}
               className="rounded-lg border border-slate-700 bg-[#0a0e1a] px-3 py-2 text-xs font-medium text-white focus:border-[#3b82f6] focus:outline-none"
             >
-              {TRACKED_COINS.map((c) => (
+              {filteredResearchUniverse.map((c) => (
                 <option key={c.symbol} value={c.symbol}>
-                  {c.name} ({c.symbol})
+                  {c.name} ({c.symbol}){c.origin === 'LIVE_MARKET' ? ' · live-discovered' : ''}
                 </option>
               ))}
             </select>
@@ -443,6 +463,13 @@ export function Backtesting() {
           </button>
         </form>
       </div>
+
+      <aside role="status" className="rounded-xl border border-amber-500/40 bg-amber-950/25 px-4 py-3 text-xs text-amber-100">
+        <strong>Market universe: {researchUniverse.length} currently discovered pairs.</strong> Backtest availability depends on historical candle coverage, not the watchlist limit.
+        {' '}For {simSeed.symbol} / {activeWindowDays} days: {historyCoverage.observedBars}/{historyCoverage.expectedBars} candles in the fetched window.
+        {' '}<strong>{historyCoverage.verified ? 'Historical candle coverage verified (source and continuity)' : 'Insufficient independently verified coverage — comparative results may use simulated protocol candles.'}</strong>
+        {' '}The Global History view is a generated benchmark sample, not a complete live signal audit.
+      </aside>
 
       {/* Comparative 30 / 60 / 90-Day Protocol Matrix */}
       <section
