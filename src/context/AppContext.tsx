@@ -1271,10 +1271,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         typeof enabled === 'boolean'
           ? enabled
           : !architectureStateRef.current.controlMatrix[key];
-      const blocked = blockIfNotPremium(descriptor.capability, descriptor.label);
-      if (blocked) {
-        return { ok: false, error: blocked };
-      }
+      // Global microservice control mutations require server-verified SUPER_ADMIN;
+      // subscription plan is not an infrastructure authorization mechanism.
       setArchitectureBusy(true);
       try {
         const res = await apiFetch('/api/architecture/toggle', {
