@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { authorizeOrderRoute, normalizeTradingMode, summarizeByMode, summarizeAccountByMode, type ExecutionPermit } from './tradingModes.js';
+import { authorizeOrderRoute, normalizeTradingMode, summarizeByMode, summarizeAccountByMode, type ExecutionPermit } from './tradingModes';
 
 const basic: ExecutionPermit = {
   mode: 'PAPER', requestedDestination: 'SIMULATOR', authenticated: true,
