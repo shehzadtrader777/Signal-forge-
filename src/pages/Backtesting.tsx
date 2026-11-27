@@ -325,8 +325,26 @@ export function Backtesting() {
 
   return (
     <div className="mx-auto max-w-[1440px] px-4 py-8 sm:px-6 lg:px-8 space-y-8">
-      {/* Decoupled Parameterized 1,000-Trade Multi-Horizon Simulation Matrix & Auto-Optimizer */}
-      <ModularBacktestMatrixPanel symbol={simSeed.symbol} />
+      <section aria-label="Backtesting guide" className="rounded-2xl border border-[#8f704b]/40 bg-[#171a1d] p-5 sm:p-6">
+        <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#d9b77f]">SIGNAL FORGE · RESEARCH LAB</p>
+        <h2 className="mt-2 font-display text-xl font-bold text-white">Understand every test before comparing results.</h2>
+        <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-300">A backtest replays a strategy on historical or simulated market conditions; it does not place an order. Use the 30, 60 and 90-day views to compare periods. Paper trading is a separate simulated trading workflow, not another name for a backtest.</p>
+        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          <a href="#sf-backtest-comparison" className="rounded-xl border border-white/10 bg-white/5 p-4 hover:border-[#d9b77f]/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#d9b77f]">
+            <strong className="block text-sm text-white">01 · Compare periods</strong>
+            <span className="mt-1 block text-xs leading-5 text-slate-400">Review 30 / 60 / 90-day returns, risk and win rate.</span>
+          </a>
+          <a href="#sf-backtest-charts" className="rounded-xl border border-white/10 bg-white/5 p-4 hover:border-[#d9b77f]/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#d9b77f]">
+            <strong className="block text-sm text-white">02 · Read the charts</strong>
+            <span className="mt-1 block text-xs leading-5 text-slate-400">Inspect simulated equity and trade outcomes.</span>
+          </a>
+          <a href="#sf-backtest-advanced" className="rounded-xl border border-white/10 bg-white/5 p-4 hover:border-[#d9b77f]/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#d9b77f]">
+            <strong className="block text-sm text-white">03 · Advanced tests</strong>
+            <span className="mt-1 block text-xs leading-5 text-slate-400">Open the independent 1,000-trade module when needed.</span>
+          </a>
+        </div>
+        <p className="mt-4 text-xs leading-5 text-slate-400">Displayed results are model outputs, not guaranteed outcomes. Verify historical candle coverage and data provenance before relying on a date-window label.</p>
+      </section>
 
       {/* Page Header & Backtest Runner */}
       <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between border-b border-slate-800/80 pb-6">
@@ -427,6 +445,7 @@ export function Backtesting() {
 
       {/* Comparative 30 / 60 / 90-Day Protocol Matrix */}
       <section
+        id="sf-backtest-comparison"
         aria-label="30 60 90 Day Comparative Backtest Matrix"
         className="rounded-xl border border-slate-800/90 bg-[#111827] overflow-hidden"
       >
@@ -802,6 +821,7 @@ export function Backtesting() {
       </div>
 
       {/* Recharts Visualizations (Memoized & Fixed-Axis Dimensions) */}
+      <div id="sf-backtest-charts" className="scroll-mt-8">
       <BacktestCharts
         equityCurve={simulation.equityCurve}
         outcomeBreakdown={simulation.outcomeBreakdown}
@@ -813,6 +833,18 @@ export function Backtesting() {
         riskRewardRatio={simulation.riskRewardRatio}
         sessionFilter={simulation.sessionFilter}
       />
+      </div>
+
+      {/* Advanced matrix remains independent of the 30/60/90-day comparative suite. */}
+      <details id="sf-backtest-advanced" className="group rounded-2xl border border-[#8f704b]/30 bg-[#111827] scroll-mt-8">
+        <summary className="cursor-pointer list-none rounded-2xl px-5 py-4 font-semibold text-[#e2c59b] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#d9b77f]">
+          Advanced · 1,000-Trade Multi-Horizon Matrix <span className="ml-2 text-xs font-normal text-slate-400">Select to expand</span>
+        </summary>
+        <div className="px-2 pb-4 sm:px-4">
+          <p className="mb-3 px-2 text-xs leading-5 text-slate-400">Independent advanced strategy/optimizer research. Its assumptions and totals should not be mixed with the 30/60/90-day comparative suite.</p>
+          <ModularBacktestMatrixPanel symbol={simSeed.symbol} />
+        </div>
+      </details>
 
       {/* Past Signals History Table */}
       <section
