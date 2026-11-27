@@ -821,6 +821,9 @@ interface SpotStreamTick {
 }
 const pendingSseTickBatch = new Map<string, SpotStreamTick>();
 const sseTickListeners = new Set<(ticks: SpotStreamTick[]) => void>();
+const MAX_MONITOR_SSE_CLIENTS = 250;
+const MAX_MONITOR_SSE_BACKPRESSURE_BYTES = 512 * 1024; // drop slow monitor clients
+
 let backendSpotWs: WebSocket | null = null;
 let backendWsConnected = false;
 let backendWsLastFrameAtMs = 0;
@@ -8353,6 +8356,10 @@ async function startServer() {
   });
 
   app.get('/api/monitor/stream', (req, res) => {
+    if (sseTickListeners.size >= MAX_MONITOR_SSE_CLIENTS) {
+      res.setHeader('Retry-After', '5');
+      return res.status(503).json({ ok:false, error:'Monitor stream capacity reached, retry shortly.' });
+    }
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -8380,7 +8387,13 @@ async function startServer() {
     const writeHeartbeat = () => {
       if (closed || res.writableEnded || !systemControls.liveFeedModulesEnabled) return;
       try {
-        res.write(`event: heartbeat\ndata: ${JSON.stringify(monitorState)}\n\n`);
+        if (res.writableLength > MAX_MONITOR_SSE_BACKPRESSURE_BYTES) {
+          cleanupStream();
+          return;
+        }
+        if (!res.write(`event: heartbeat\ndata: ${JSON.stringify(monitorState)}\n\n`)) {
+          cleanupStream();
+        }
       } catch {
         cleanupStream();
       }
@@ -8392,7 +8405,14 @@ async function startServer() {
         return;
       }
       try {
-        res.write(`event: spot_ticks\ndata: ${JSON.stringify({ ticks, syncEpoch: serverSyncEpoch })}\n\n`);
+        if (res.writableLength > MAX_MONITOR_SSE_BACKPRESSURE_BYTES) {
+          cleanupStream();
+          return;
+        }
+        // Monitor UI feeds are informational; do not buffer unbounded slow clients.
+        if (!res.write(`event: spot_ticks\ndata: ${JSON.stringify({ ticks, syncEpoch: serverSyncEpoch })}\n\n`)) {
+          cleanupStream();
+        }
       } catch {
         cleanupStream();
       }
