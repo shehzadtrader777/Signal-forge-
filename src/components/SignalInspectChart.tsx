@@ -53,7 +53,7 @@ export function SignalInspectChart({ record, onClose }: {
   const plot = useMemo(() => {
     if (!chart || chart.source !== 'binance' || chart.candles.length < 2) return null;
     const candles = chart.candles;
-    const levels = [record.entryPrice, record.stopLoss, record.takeProfit, record.exitOrMarkPrice];
+    const levels = [record.entryPrice, record.stopLoss, ...(record.takeProfits ?? [record.takeProfit]), record.exitOrMarkPrice];
     const prices = [...candles.flatMap(c => [c.high,c.low]),...levels].filter(x => Number.isFinite(x) && x > 0);
     if (prices.length < 2) return null;
     const lo=Math.min(...prices),hi=Math.max(...prices);
@@ -72,7 +72,7 @@ export function SignalInspectChart({ record, onClose }: {
     const lines=[
       {price:record.entryPrice,label:'ENTRY',color:'#38bdf8'},
       {price:record.stopLoss,label:'SL',color:'#f43f5e'},
-      {price:record.takeProfit,label:'TP',color:'#22c55e'},
+      ...(record.takeProfits ? record.takeProfits.map((price,i)=>({price,label:`TP${i+1}`,color:'#22c55e'})) : [{price:record.takeProfit,label:'TP',color:'#22c55e'}]),
       {price:record.exitOrMarkPrice,label:record.status==='ACTIVE'?'LATEST MARK':'EXIT / MARK',color:'#eab308'},
     ];
     return {candles,lo,hi,y,x,barWidth,width,height,left,right,top,bottom,lines,eventIndex};
@@ -111,6 +111,11 @@ export function SignalInspectChart({ record, onClose }: {
               <p className="mt-1 font-mono font-bold">{formatCryptoPrice(Number(value))}</p>
             </div>)}
           </div>
+          {record.takeProfits && <div className="mt-2 flex flex-wrap gap-2 text-xs">
+            {record.takeProfits.map((value,i)=><span key={i} className="rounded border border-emerald-600/50 bg-emerald-950/20 px-3 py-1.5 text-emerald-300">
+              TP{i+1}: ${formatCryptoPrice(value)}
+            </span>)}
+          </div>}
           <div className="mt-3 rounded-xl border border-slate-700 bg-[#080f1d] p-2">
             {loading?<p className="p-8 text-sm text-slate-300">Loading historical candles...</p>
               :plot?
@@ -148,6 +153,7 @@ export function SignalInspectChart({ record, onClose }: {
             <div><dt className="text-slate-400">Signal timestamp</dt><dd>{record.timestamp}</dd></div>
             <div><dt className="text-slate-400">Timeframe</dt><dd>{record.timeframe}</dd></div>
             <div><dt className="text-slate-400">Status</dt><dd>{record.status} · {record.origin}</dd></div>
+            <div className="sm:col-span-2"><dt className="text-slate-400">Setup / strategy context</dt><dd>{record.retestStatus ?? 'Not recorded'} · {record.skepticVerdict ?? 'No independent risk verdict recorded'}</dd></div>
           </dl>
         </div>
       </div>
