@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main, master]
   push:
-    branches: [feature/ai-studio-source-migration]
+    branches: [feature/ai-studio-source-migration, integration/studio-react-stability-2026-11-27]
   workflow_dispatch:
 
 concurrency:
