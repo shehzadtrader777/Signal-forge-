@@ -3,6 +3,9 @@
 # on real Node.js 22 (the Bun image aliases 'node' to its own runtime).
 FROM oven/bun:latest AS bun_toolchain
 FROM node:22-bookworm-slim AS builder
+# Hybrid verification includes Python bridge subprocesses.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=bun_toolchain /usr/local/bin/bun /usr/local/bin/bun
 COPY package.json bun.lock ./
