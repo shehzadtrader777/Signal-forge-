@@ -81,13 +81,15 @@ service cloud.firestore {
     }
 
     function isValidUserProfile(data, userId) {
-      return data.keys().hasAll(['uid', 'email', 'displayName', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'email', 'displayName', 'createdAt', 'updatedAt'])
+      return data.keys().hasAll(['uid', 'publicId', 'email', 'displayName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'publicId', 'email', 'displayName', 'createdAt', 'updatedAt'])
         && data.uid is string
         && data.uid.size() >= 1
         && data.uid.size() <= 128
         && data.uid == userId
         && data.uid == request.auth.uid
+        && data.publicId is string
+        && data.publicId == 'SF-' + userId
         && data.email is string
         && data.email.size() >= 3
         && data.email.size() <= 254
@@ -337,7 +339,8 @@ service cloud.firestore {
         && incoming().uid == existing().uid
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'updatedAt']);
+        && (!('publicId' in existing()) || incoming().publicId == existing().publicId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['publicId', 'displayName', 'email', 'updatedAt']);
       allow delete: if false;
 
       match /watchlist/{coinId} {
