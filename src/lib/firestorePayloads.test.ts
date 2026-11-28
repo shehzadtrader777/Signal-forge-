@@ -169,8 +169,6 @@ test('Firestore upserts use atomic runTransaction with path locking and single-f
   for (const fnName of [
     'syncUserProfile',
     'saveWorkspaceControlConfig',
-    'saveDailyPnlRecordToFirestore',
-    'saveVaultLockerSnapshotToFirestore',
   ]) {
     const start = firebaseSrc.indexOf(`export async function ${fnName}`);
     assert.ok(start >= 0, `${fnName} must exist`);
@@ -186,113 +184,40 @@ test('Firestore upserts use atomic runTransaction with path locking and single-f
     );
   }
 
-  const vaultPanelSrc = fs.readFileSync(
-    path.join(rootDir, 'src/components/ProfitVaultAndDailyPnlPanel.tsx'),
-    'utf8'
-  );
-  assert.ok(vaultPanelSrc.includes('vaultSyncSignature'), 'Panel must gate sync by content signature');
-  assert.ok(vaultPanelSrc.includes('syncInFlightRef'), 'Panel must enforce single-flight cloud sync');
 });
 
-test('failed financial Firestore writes must reject so UI cannot falsely mark cloud sync successful', async () => {
+// The previous browser cloud-sync regression tests are intentionally replaced:
+// client financial persistence is now forbidden, not retried.
+test('financial client compatibility writers fail closed without Firestore mutation', async () => {
   const fs = await import('node:fs');
   const path = await import('node:path');
   const root = path.resolve(import.meta.dirname, '..', '..');
-  const src = fs.readFileSync(path.join(root, 'src/lib/firebase.ts'), 'utf8');
-  const functions = [
-    'saveDailyPnlRecordToFirestore',
-    'saveVaultLockerSnapshotToFirestore',
-  ];
-  for (const name of functions) {
-    const start = src.indexOf(`export async function ${name}(`);
-    assert.ok(start >= 0, `Missing financial cloud sync function: ${name}`);
-    const remainder = src.slice(start);
-    const nextExport = remainder.indexOf('\nexport ', 10);
-    const body = nextExport === -1 ? remainder : remainder.slice(0, nextExport);
-    assert.match(body, /throw new Error\([^)]*verified matching user/, `${name} must reject auth failures`);
-    assert.match(body, /catch \(error\) \{[\s\S]*?handleFirestoreError\(error, OperationType\.WRITE, path\);\s*throw error;/,
-      `${name} must rethrow write errors after reporting them`);
+  const code = fs.readFileSync(path.join(root, 'src/lib/firebase.ts'), 'utf8');
+  for (const name of ['saveDailyPnlRecordToFirestore', 'saveVaultLockerSnapshotToFirestore']) {
+    const start = code.indexOf('export async function ' + name + '(');
+    assert.ok(start >= 0);
+    const next = code.indexOf('\nexport ', start + 10);
+    const body = code.slice(start, next < 0 ? undefined : next);
+    assert.ok(body.includes("throw new Error('FINANCIAL_CLIENT_WRITE_DISABLED')"));
+    assert.doesNotMatch(body, /runTransaction|setDoc|updateDoc|deleteDoc|withDocumentWriteLock/);
   }
-  const dailyStart = src.indexOf('export async function saveDailyPnlRecordToFirestore(');
-  const vaultStart = src.indexOf('export async function saveVaultLockerSnapshotToFirestore(');
-  const daily = src.slice(dailyStart, vaultStart);
-  assert.match(daily, /if \(!sanitized\) throw new Error/, 'Invalid daily PnL records must reject instead of silently succeeding');
-  const panel = fs.readFileSync(path.join(root, 'src/components/ProfitVaultAndDailyPnlPanel.tsx'), 'utf8');
-  assert.ok(panel.includes('await saveVaultLockerSnapshotToFirestore('));
-  assert.ok(panel.includes('await saveDailyPnlRecordToFirestore('));
 });
 
-test('financial cloud sync status does not claim success after rejected save', async () => {
+test('research vault never imports legacy cloud balances or publishes personal financial snapshots', async () => {
   const fs = await import('node:fs');
   const path = await import('node:path');
   const root = path.resolve(import.meta.dirname, '..', '..');
   const panel = fs.readFileSync(path.join(root, 'src/components/ProfitVaultAndDailyPnlPanel.tsx'), 'utf8');
-  assert.ok(panel.includes('const [cloudSyncFailed, setCloudSyncFailed] = useState(false)'), 'Panel must track failed cloud writes');
-  assert.ok(panel.includes('setCloudSyncFailed(true)'), 'Panel must flag failed cloud writes');
-  assert.ok(panel.includes('setCloudSyncedAtIso(null)'), 'Panel must clear stale success timestamp on failure');
-  assert.ok(panel.includes("'Local Only · Cloud Sync Failed'"), 'Panel must display failed cloud sync status');
-  assert.ok(panel.includes("'Local + Firestore Pending'"), 'Panel must not promise successful sync before a confirmed write');
-  assert.ok(panel.includes("tone: cloudSyncFailed ? 'WARNING' : 'INFO'"), 'Panel must warn users on failed persistence');
-});
-
-test('vault-only Firestore writes acknowledge confirmed cloud persistence', async () => {
-  const fs = await import('node:fs');
-  const path = await import('node:path');
-  const panel = fs.readFileSync(
-    path.resolve(import.meta.dirname, '..', 'components', 'ProfitVaultAndDailyPnlPanel.tsx'),
-    'utf8'
-  );
-  const vaultSave = panel.indexOf('await saveVaultLockerSnapshotToFirestore(');
-  const persistedVault = panel.indexOf('lastSyncedVaultVersionRef.current = currentVault.stateVersion', vaultSave);
-  const dailySave = panel.indexOf('await saveDailyPnlRecordToFirestore(', persistedVault);
-  const acknowledged = panel.indexOf('setCloudSyncedAtIso(new Date().toISOString())', dailySave);
-  assert.ok(vaultSave > 0 && persistedVault > vaultSave && dailySave > persistedVault);
-  assert.ok(acknowledged > dailySave, 'Confirm cloud badge only after pending writes finish');
-  const fromVaultToDaily = panel.slice(persistedVault, dailySave);
-  assert.ok(fromVaultToDaily.includes('syncedAny = true'), 'Vault-only successful writes must count as synced');
-  const block = panel.slice(panel.indexOf('const currentVault = latestVaultRef.current;', vaultSave - 1500), dailySave);
-  assert.ok(block.includes('let syncedAny = false'), 'Reset the sync accumulator for each drain pass');
-});
-
-test('failed Firestore persistence retries with bounded backoff and timer cleanup', async () => {
-  const fs = await import('node:fs');
-  const path = await import('node:path');
-  const panel = fs.readFileSync(
-    path.resolve(import.meta.dirname, '..', 'components', 'ProfitVaultAndDailyPnlPanel.tsx'),
-    'utf8'
-  );
-  assert.ok(panel.includes('cloudSyncRetryAttemptRef.current += 1'), 'Repeated errors must advance backoff');
-  assert.ok(panel.includes('Math.min(120_000, 15_000 * 2 ** Math.min(cloudSyncRetryAttemptRef.current, 3))'),
-    'Retries must start at 15 s and be capped at 120 s');
-  assert.ok(panel.includes('window.setTimeout(() => {'), 'Failed writes must schedule a later attempt');
-  assert.ok(panel.includes('setCloudSyncRetryTick((tick) => tick + 1)'), 'A timeout must rerun the sync effect');
-  assert.ok(panel.includes('window.clearTimeout(retryTimer)'), 'Unmount or account change must cancel retry timer');
-  assert.ok(panel.includes('[verifiedUid, vaultSyncSignature, cloudSyncRetryTick]'),
-    'Retry trigger must be an effect dependency');
-  assert.ok(panel.includes('cloudSyncRetryAttemptRef.current = 0'), 'Success/account change must reset the backoff');
-});
-
-test('overlapping cloud sync requests replay when prior effect settles', async () => {
-  const fs = await import('node:fs');
-  const path = await import('node:path');
-  const panel = fs.readFileSync(
-    path.resolve(import.meta.dirname, '..', 'components', 'ProfitVaultAndDailyPnlPanel.tsx'),
-    'utf8'
-  );
-  assert.ok(panel.includes('syncInFlightPromiseRef = useRef<Promise<void> | null>(null)'),
-    'Overlapping writers need a shared completion promise');
-  assert.ok(panel.includes('const previous = syncInFlightPromiseRef.current;'),
-    'New effect must observe the active writer');
-  assert.ok(panel.includes('void previous.finally(() => {'),
-    'New effect must resume after prior writer finishes');
-  assert.ok(panel.includes('if (!cancelled) setCloudSyncRetryTick((tick) => tick + 1)'),
-    'Only a still-mounted effect can schedule the deferred sync');
-  assert.ok(panel.includes('syncInFlightPromiseRef.current = running'),
-    'Writer completion must be tracked');
-  assert.ok(panel.includes('if (syncInFlightPromiseRef.current === running) syncInFlightPromiseRef.current = null'),
-    'Completion must release its own promise without clobbering a successor');
-  assert.ok(panel.includes('if (cancelled) break;\n            lastSyncedVaultVersionRef.current'),
-    'Cancelled writer must not mark a vault version for the next account');
-  assert.ok(panel.includes('if (cancelled) break;\n            lastSyncedDailyHashRef.current'),
-    'Cancelled writer must not mark daily hashes for the next account');
+  assert.doesNotMatch(panel, /saveDailyPnlRecordToFirestore|saveVaultLockerSnapshotToFirestore|subscribeDailyPnlRecords|cloudDailyRecords|cloudSyncRetryTick/);
+  assert.ok(panel.includes('Financial cloud writes disabled'));
+  assert.ok(panel.includes('UNVERIFIED_RESEARCH_SIMULATION'));
+  assert.ok(panel.includes("activeVaultUidRef.current !== verifiedUid"));
+  assert.ok(panel.includes('signal-forge-research-only-pnl-'));
+  const server = fs.readFileSync(path.join(root, 'server.ts'), 'utf8');
+  const start = server.indexOf("app.get('/api/vault/state', requireOperatorAuth, requireMasterControlOwner,");
+  assert.ok(start >= 0);
+  const route = server.slice(start, start + 700);
+  assert.ok(route.includes("res.setHeader('Cache-Control', 'no-store')"));
+  assert.ok(route.includes('settlementVerified: false'));
+  assert.ok(route.includes('personalLedger: false'));
 });

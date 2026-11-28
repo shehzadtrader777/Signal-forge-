@@ -432,56 +432,20 @@ service cloud.firestore {
       match /dailyPnlRecords/{dateKey} {
         allow get: if isOwner(userId) && isValidId(userId) && isValidDateKey(dateKey);
         allow list: if isOwner(userId) && isValidId(userId) && resource.data.userId == request.auth.uid;
-        allow create: if isVerified()
-          && isOwner(userId)
-          && isValidId(userId)
-          && isValidDateKey(dateKey)
-          && isValidDailyPnlRecord(incoming(), userId, dateKey)
-          && incoming().createdAt == request.time
-          && incoming().updatedAt == request.time
-          && exists(/databases/$(database)/documents/users/$(userId));
-        allow update: if isVerified()
-          && isOwner(userId)
-          && isValidId(userId)
-          && isValidDateKey(dateKey)
-          && isValidDailyPnlRecord(incoming(), userId, dateKey)
-          && incoming().dateKey == existing().dateKey
-          && incoming().userId == existing().userId
-          && incoming().createdAt == existing().createdAt
-          && incoming().updatedAt == request.time
-          && incoming().diff(existing()).affectedKeys().hasOnly([
-            'startingEquityUsd', 'endingEquityUsd', 'realizedPnlUsd', 'returnPct',
-            'scoopedToVaultUsd', 'manualReleasedUsd', 'tradeCount', 'winningTrades',
-            'losingTrades', 'winRatePct', 'recordHash', 'updatedAt'
-          ]);
+        // Legacy browser-authored financial data is not a settlement ledger.
+        // Only a future trusted server migration may write; deny ALL client mutations.
+        allow create: if false;
+        allow update: if false;
         allow delete: if false;
       }
 
       match /vaultLocker/{vaultId} {
         allow get: if isOwner(userId) && isValidId(userId) && isValidId(vaultId);
         allow list: if isOwner(userId) && isValidId(userId) && resource.data.userId == request.auth.uid;
-        allow create: if isVerified()
-          && isOwner(userId)
-          && isValidId(userId)
-          && isValidId(vaultId)
-          && isValidVaultLockerState(incoming(), userId, vaultId)
-          && incoming().createdAt == request.time
-          && incoming().updatedAt == request.time
-          && exists(/databases/$(database)/documents/users/$(userId));
-        allow update: if isVerified()
-          && isOwner(userId)
-          && isValidId(userId)
-          && isValidId(vaultId)
-          && isValidVaultLockerState(incoming(), userId, vaultId)
-          && incoming().id == existing().id
-          && incoming().userId == existing().userId
-          && incoming().createdAt == existing().createdAt
-          && incoming().updatedAt == request.time
-          && incoming().diff(existing()).affectedKeys().hasOnly([
-            'thresholdMode', 'profitThresholdUsd', 'profitThresholdPct',
-            'scoopExcessRatioPct', 'enabled', 'lockedVaultBalanceUsd',
-            'totalScoopedLifetimeUsd', 'stateVersion', 'updatedAt'
-          ]);
+        // Legacy browser-authored financial data is not a settlement ledger.
+        // Only a future trusted server migration may write; deny ALL client mutations.
+        allow create: if false;
+        allow update: if false;
         allow delete: if false;
       }
     }

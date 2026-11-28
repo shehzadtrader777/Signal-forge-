@@ -9392,8 +9392,12 @@ async function startServer() {
   // --- High-Frequency Profit Scooping, Immutable Locker Vault & Daily PnL Tracking ---
   // The current vault engine is process-global, not user-partitioned: owner-only until migrated.
   app.get('/api/vault/state', requireOperatorAuth, requireMasterControlOwner, (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
     return res.json({
       ok: true,
+      provenance: 'UNVERIFIED_RESEARCH_SIMULATION',
+      settlementVerified: false,
+      personalLedger: false,
       vault: profitVaultEngine.getSnapshot(),
       engineHealth: profitVaultEngine.healthCheck(),
     });

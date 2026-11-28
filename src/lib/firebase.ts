@@ -37,13 +37,11 @@ import { isRetryableAuthNetworkError } from './firebaseAuthErrors';
 import {
   normalizeToggleMapForFirestore,
   sanitizeChecksum,
-  sanitizeDailyPnlFields,
   sanitizeErrorAuditFields,
   sanitizeFirestoreId,
   sanitizeFirestoreSymbol,
   sanitizePriceAlertFields,
   sanitizeUserProfileFields,
-  sanitizeVaultLockerFields,
   sanitizeWatchlistFields,
 } from './firestorePayloads';
 
@@ -743,83 +741,18 @@ export function subscribeVaultLockerState(
   );
 }
 
+// Retained compatibility exports deliberately fail closed. Browser-provided data
+// cannot establish financial settlement provenance, even for a verified owner.
 export async function saveDailyPnlRecordToFirestore(
-  userId: string,
-  record: Omit<PersistedDailyPnlRecord, 'userId'>
+  _userId: string,
+  _record: Omit<PersistedDailyPnlRecord, 'userId'>
 ): Promise<void> {
-  const sanitized = sanitizeDailyPnlFields({ ...record, userId });
-  if (!sanitized) throw new Error('Daily PnL Firestore sync rejected invalid record');
-  const { dateKey, userId: cleanUserId, ...mutableFields } = sanitized;
-  if (!auth.currentUser || !auth.currentUser.emailVerified || auth.currentUser.uid !== cleanUserId) {
-    throw new Error('Daily PnL Firestore sync requires verified matching user');
-  }
-  const path = `users/${cleanUserId}/dailyPnlRecords/${dateKey}`;
-  const ref = doc(db, 'users', cleanUserId, 'dailyPnlRecords', dateKey);
-  try {
-    await ensureUserProfileReady(cleanUserId);
-    await withDocumentWriteLock(path, async () => {
-      await runTransaction(db, async (tx) => {
-        const snap = await tx.get(ref);
-        if (!snap.exists()) {
-          tx.set(ref, {
-            dateKey,
-            userId: cleanUserId,
-            ...mutableFields,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-        } else {
-          tx.update(ref, {
-            ...mutableFields,
-            updatedAt: serverTimestamp(),
-          });
-        }
-      });
-    });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, path);
-    throw error;
-  }
+  throw new Error('FINANCIAL_CLIENT_WRITE_DISABLED');
 }
 
 export async function saveVaultLockerSnapshotToFirestore(
-  userId: string,
-  state: Omit<PersistedVaultLockerState, 'id' | 'userId'>
+  _userId: string,
+  _state: Omit<PersistedVaultLockerState, 'id' | 'userId'>
 ): Promise<void> {
-  const sanitized = sanitizeVaultLockerFields({
-    ...state,
-    vaultId: 'primaryVault',
-    userId,
-  });
-  const { id, userId: cleanUserId, ...mutableFields } = sanitized;
-  if (!auth.currentUser || !auth.currentUser.emailVerified || auth.currentUser.uid !== cleanUserId) {
-    throw new Error('Vault Firestore sync requires verified matching user');
-  }
-  const path = `users/${cleanUserId}/vaultLocker/${id}`;
-  const ref = doc(db, 'users', cleanUserId, 'vaultLocker', id);
-  try {
-    await ensureUserProfileReady(cleanUserId);
-    await withDocumentWriteLock(path, async () => {
-      await runTransaction(db, async (tx) => {
-        const snap = await tx.get(ref);
-        if (!snap.exists()) {
-          tx.set(ref, {
-            id,
-            userId: cleanUserId,
-            ...mutableFields,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-        } else {
-          tx.update(ref, {
-            ...mutableFields,
-            updatedAt: serverTimestamp(),
-          });
-        }
-      });
-    });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, path);
-    throw error;
-  }
+  throw new Error('FINANCIAL_CLIENT_WRITE_DISABLED');
 }

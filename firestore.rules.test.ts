@@ -115,6 +115,7 @@ test('Dirty Dozen security invariants hold across all 8 Firestore collections', 
   const subCreates = [...rulesText.matchAll(/allow create:\s*([\s\S]*?);/g)].map((m) => m[1]);
   assert.equal(subCreates.length, 8);
   for (const createExpr of subCreates) {
+    if (createExpr.trim() === 'if false') continue; // Financial collections are client read-only.
     const verifiedIdx = createExpr.indexOf('isVerified()');
     const ownerIdx = createExpr.indexOf('isOwner(userId)');
     const validIdx = createExpr.indexOf('isValid');
@@ -145,4 +146,18 @@ test('reconciled user profile publicId supports legacy migration without arbitra
   const firebaseSource = fs.readFileSync(path.resolve(ROOT_DIR, 'src/lib/firebase.ts'), 'utf8');
   assert.ok(firebaseSource.includes('publicId: getSignalForgePublicId(user.uid)'),
     'Both new profiles and legacy updates must write the matching deterministic public ID');
+});
+
+
+test('legacy financial collections deny all browser writes, including owners', () => {
+  for (const name of ['dailyPnlRecords/{dateKey}', 'vaultLocker/{vaultId}']) {
+    const start = rulesText.indexOf('match /' + name + ' {');
+    assert.ok(start >= 0);
+    const block = rulesText.slice(start, rulesText.indexOf('\n      }', start));
+    for (const action of ['create', 'update', 'delete']) {
+      assert.ok(block.includes('allow ' + action + ': if false;'));
+    }
+    assert.ok(!/allow\s+(?:write|read,\s*write)\s*:/.test(block));
+    assert.ok(block.includes('allow get: if isOwner(userId)'));
+  }
 });

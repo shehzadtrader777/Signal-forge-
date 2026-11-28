@@ -24,12 +24,6 @@ import {
 import { useApp } from '../context/AppContext';
 import { apiFetch } from '../lib/apiClient';
 import {
-  saveDailyPnlRecordToFirestore,
-  saveVaultLockerSnapshotToFirestore,
-  subscribeDailyPnlRecords,
-  type PersistedDailyPnlRecord,
-} from '../lib/firebase';
-import {
   USER_OVERRIDE_CONFIRMATION_PHRASES,
   type DailyPnlHistoryRecord,
   type ProfitScoopConfig,
@@ -113,7 +107,6 @@ function formatCsvValue(v: string | number): string {
 export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlPanel() {
   const { appLiveEnabled, user, selectedSymbol } = useApp();
   const [vault, setVault] = useState<ProfitVaultSnapshot | null>(null);
-  const [cloudDailyRecords, setCloudDailyRecords] = useState<readonly PersistedDailyPnlRecord[]>([]);
   const [activeTab, setActiveTab] = useState<VaultPanelTab>('VAULT_OVERRIDE');
 
   // Threshold form state
@@ -142,19 +135,6 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     readonly tone: 'NOMINAL' | 'CRITICAL' | 'INFO';
     readonly text: string;
   } | null>(null);
-  const [cloudSyncedAtIso, setCloudSyncedAtIso] = useState<string | null>(null);
-  const [cloudSyncFailed, setCloudSyncFailed] = useState(false);
-  const [cloudSyncRetryTick, setCloudSyncRetryTick] = useState(0);
-  const cloudSyncRetryAttemptRef = useRef(0);
-
-  const lastSyncedDailyHashRef = useRef<Map<string, string>>(new Map());
-  const lastSyncedVaultVersionRef = useRef<number>(0);
-  const syncInFlightRef = useRef<boolean>(false);
-  const syncInFlightPromiseRef = useRef<Promise<void> | null>(null);
-  const resyncRequestedRef = useRef<boolean>(false);
-  const latestVaultRef = useRef<ProfitVaultSnapshot | null>(vault);
-  latestVaultRef.current = vault;
-
   const verifiedUid = user && user.emailVerified ? user.uid : null;
   const activeVaultUidRef = useRef<string | null>(verifiedUid);
   activeVaultUidRef.current = verifiedUid;
@@ -173,15 +153,6 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     }
   }, []);
 
-
-  const vaultSyncSignature = useMemo(() => {
-    if (!vault) return '';
-    const historySig = vault.dailyHistory
-      .slice(-14)
-      .map((d) => `${d.dateKey}:${d.recordHash}`)
-      .join('|');
-    return `${vault.stateVersion}::${historySig}`;
-  }, [vault]);
 
   const syncDraftsFromConfig = useCallback((cfg: ProfitScoopConfig) => {
     setEnabledDraft(cfg.enabled);
@@ -208,6 +179,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
         ok?: boolean;
         vault?: ProfitVaultSnapshot;
       };
+      if (activeVaultUidRef.current !== verifiedUid) return;
       if (data?.ok && data.vault) {
         setVault(data.vault);
         if (!configDirtyRef.current) {
@@ -238,137 +210,11 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     }
   }, [selectedSymbol]);
 
-  // Subscribe to verified user's cloud Daily PnL history in Firestore
-  useEffect(() => {
-    if (!verifiedUid) {
-      setCloudDailyRecords([]);
-      return;
-    }
-    const unsub = subscribeDailyPnlRecords(
-      verifiedUid,
-      (records) => {
-        setCloudDailyRecords(records);
-      },
-      () => {
-        // Firestore read error is logged by firebase.ts helper
-      }
-    );
-    return () => unsub();
-  }, [verifiedUid]);
-
-  // Reset per-account cloud sync watermarks when signed-in user changes
-  useEffect(() => {
-    lastSyncedVaultVersionRef.current = 0;
-    lastSyncedDailyHashRef.current.clear();
-    setCloudSyncedAtIso(null);
-    setCloudSyncFailed(false);
-    cloudSyncRetryAttemptRef.current = 0;
-  }, [verifiedUid]);
-
-  // Auto-persist high-precision Daily PnL records & Vault Locker state to Firestore when signed in
-  // Single-flight serialized drain prevents overlapping polling passes from racing on Firestore writes.
-  useEffect(() => {
-    if (!verifiedUid || !vaultSyncSignature) return;
-
-    let cancelled = false;
-    let retryTimer: number | null = null;
-
-    const drainCloudSync = async () => {
-      if (syncInFlightRef.current) {
-        resyncRequestedRef.current = true;
-        // This effect can replace an old effect while its Firestore write is still pending.
-        // Wake the current effect after that write finishes instead of losing its sync request.
-        const previous = syncInFlightPromiseRef.current;
-        if (previous) {
-          void previous.finally(() => {
-            if (!cancelled) setCloudSyncRetryTick((tick) => tick + 1);
-          });
-        }
-        return;
-      }
-      syncInFlightRef.current = true;
-      try {
-        do {
-          resyncRequestedRef.current = false;
-          const currentVault = latestVaultRef.current;
-          if (!currentVault || cancelled) break;
-          let syncedAny = false;
-
-          if (currentVault.stateVersion > lastSyncedVaultVersionRef.current) {
-            await saveVaultLockerSnapshotToFirestore(verifiedUid, {
-              thresholdMode: currentVault.config.thresholdMode,
-              profitThresholdUsd: currentVault.config.profitThresholdUsd,
-              profitThresholdPct: currentVault.config.profitThresholdPct,
-              scoopExcessRatioPct: currentVault.config.scoopExcessRatioPct,
-              enabled: currentVault.config.enabled,
-              lockedVaultBalanceUsd: currentVault.lockedVaultBalanceUsd,
-              totalScoopedLifetimeUsd: currentVault.totalScoopedLifetimeUsd,
-              stateVersion: currentVault.stateVersion,
-            });
-            if (cancelled) break;
-            lastSyncedVaultVersionRef.current = currentVault.stateVersion;
-            syncedAny = true;
-          }
-
-          const recentDays = currentVault.dailyHistory.slice(-14);
-          for (const day of recentDays) {
-            if (cancelled) break;
-            if (lastSyncedDailyHashRef.current.get(day.dateKey) === day.recordHash) continue;
-            await saveDailyPnlRecordToFirestore(verifiedUid, {
-              dateKey: day.dateKey,
-              startingEquityUsd: day.startingEquityUsd,
-              endingEquityUsd: day.endingEquityUsd,
-              realizedPnlUsd: day.realizedPnlUsd,
-              returnPct: day.returnPct,
-              scoopedToVaultUsd: day.scoopedToVaultUsd,
-              manualReleasedUsd: day.manualReleasedUsd,
-              tradeCount: day.tradeCount,
-              winningTrades: day.winningTrades,
-              losingTrades: day.losingTrades,
-              winRatePct: day.winRatePct,
-              recordHash: day.recordHash,
-            });
-            if (cancelled) break;
-            lastSyncedDailyHashRef.current.set(day.dateKey, day.recordHash);
-            syncedAny = true;
-          }
-          if (syncedAny && !cancelled) {
-            setCloudSyncedAtIso(new Date().toISOString());
-          }
-        } while (resyncRequestedRef.current && !cancelled);
-        if (!cancelled) {
-          setCloudSyncFailed(false);
-          cloudSyncRetryAttemptRef.current = 0;
-        }
-      } catch {
-        // Do not claim successful Firestore persistence after a failed cloud write.
-        if (!cancelled) {
-          setCloudSyncFailed(true);
-          setCloudSyncedAtIso(null);
-          // Bounded exponential retry for transient network/offline failures; do not retry tight loops.
-          const retryMs = Math.min(120_000, 15_000 * 2 ** Math.min(cloudSyncRetryAttemptRef.current, 3));
-          cloudSyncRetryAttemptRef.current += 1;
-          retryTimer = window.setTimeout(() => {
-            if (!cancelled) setCloudSyncRetryTick((tick) => tick + 1);
-          }, retryMs);
-        }
-      } finally {
-        syncInFlightRef.current = false;
-      }
-    };
-
-    const running = drainCloudSync();
-    syncInFlightPromiseRef.current = running;
-    void running.finally(() => {
-      if (syncInFlightPromiseRef.current === running) syncInFlightPromiseRef.current = null;
-    });
-    return () => {
-      cancelled = true;
-      if (retryTimer !== null) window.clearTimeout(retryTimer);
-    };
-  }, [verifiedUid, vaultSyncSignature, cloudSyncRetryTick]);
+  // The shared simulation snapshot must never enter a personal financial ledger.
+  // Legacy browser-authored records are deliberately not read into the dashboard.
 
   const handleSaveConfig = useCallback(async () => {
+    if (!verifiedUid) return;
     setSavingConfig(true);
     setFeedback(null);
     try {
@@ -388,6 +234,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
         vault?: ProfitVaultSnapshot;
         error?: string;
       };
+      if (activeVaultUidRef.current !== verifiedUid) return;
       if (!res.ok || !data?.ok || !data.vault) {
         setFeedback({
           tone: 'CRITICAL',
@@ -415,9 +262,11 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     thresholdPctDraft,
     scoopRatioDraft,
     syncDraftsFromConfig,
+    verifiedUid,
   ]);
 
   const handleRecordRealizedGain = useCallback(async () => {
+    if (!verifiedUid) return;
     const parsedUsd = Number(gainUsdInput);
     if (!Number.isFinite(parsedUsd) || parsedUsd === 0) {
       setFeedback({
@@ -448,6 +297,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
         };
         error?: string;
       };
+      if (activeVaultUidRef.current !== verifiedUid) return;
       if (!res.ok || !data?.ok || !data.vault) {
         setFeedback({
           tone: 'CRITICAL',
@@ -476,9 +326,10 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     } finally {
       setRecordingGain(false);
     }
-  }, [gainSymbol, gainUsdInput, gainAgentInput]);
+  }, [gainSymbol, gainUsdInput, gainAgentInput, verifiedUid]);
 
   const handleExecuteManualOverride = useCallback(async () => {
+    if (!verifiedUid) return;
     const parsedAmount = Number(overrideAmountInput);
     if (!Number.isFinite(parsedAmount) || parsedAmount < 1) {
       setFeedback({ tone: 'CRITICAL', text: 'Override amount must be at least $1.00 USD.' });
@@ -505,6 +356,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
         error?: string;
         vault?: ProfitVaultSnapshot;
       };
+      if (activeVaultUidRef.current !== verifiedUid) return;
       if (!res.ok || !data?.ok || !data.vault) {
         setFeedback({
           tone: 'CRITICAL',
@@ -523,40 +375,17 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     } finally {
       setSubmittingOverride(false);
     }
-  }, [overrideAction, overrideAmountInput, confirmationPhraseInput, overrideReasonInput]);
+  }, [overrideAction, overrideAmountInput, confirmationPhraseInput, overrideReasonInput, verifiedUid]);
 
-  const mergedDailyHistory: readonly DailyPnlHistoryRecord[] = useMemo(() => {
-    const map = new Map<string, DailyPnlHistoryRecord>();
-    for (const cloud of cloudDailyRecords) {
-      map.set(cloud.dateKey, {
-        dateKey: cloud.dateKey,
-        startingEquityUsd: cloud.startingEquityUsd,
-        endingEquityUsd: cloud.endingEquityUsd,
-        realizedPnlUsd: cloud.realizedPnlUsd,
-        returnPct: cloud.returnPct,
-        scoopedToVaultUsd: cloud.scoopedToVaultUsd,
-        manualReleasedUsd: cloud.manualReleasedUsd,
-        tradeCount: cloud.tradeCount,
-        winningTrades: cloud.winningTrades,
-        losingTrades: cloud.losingTrades,
-        winRatePct: cloud.winRatePct,
-        largestWinUsd: 0,
-        largestLossUsd: 0,
-        recordHash: cloud.recordHash,
-        updatedAtIso: new Date().toISOString(),
-      });
-    }
-    if (vault) {
-      for (const local of vault.dailyHistory) {
-        map.set(local.dateKey, local);
-      }
-    }
-    return Array.from(map.values()).sort((a, b) => a.dateKey.localeCompare(b.dateKey));
-  }, [vault, cloudDailyRecords]);
+  const mergedDailyHistory: readonly DailyPnlHistoryRecord[] = useMemo(
+    () => vault ? [...vault.dailyHistory].sort((a, b) => a.dateKey.localeCompare(b.dateKey)) : [],
+    [vault]
+  );
 
   const handleExportDailyPnlCsv = useCallback(() => {
     if (mergedDailyHistory.length === 0) return;
     const headers = [
+      'provenance',
       'date_utc',
       'starting_equity_usd',
       'ending_equity_usd',
@@ -572,6 +401,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     ];
     const rows = mergedDailyHistory.map((d) =>
       [
+        'UNVERIFIED_RESEARCH_SIMULATION',
         d.dateKey,
         d.startingEquityUsd.toFixed(4),
         d.endingEquityUsd.toFixed(4),
@@ -593,7 +423,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `signal-forge-daily-pnl-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `signal-forge-research-only-pnl-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -606,7 +436,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     if (!vault) {
       return [
         { id: 'locked-vault', label: 'Immutable Locker Vault', value: '$0.00', subtext: 'Initializing...', tone: 'INFO' },
-        { id: 'active-trading', label: 'Active Trading Capital', value: '$25,000.00', subtext: 'Isolated from vault', tone: 'NOMINAL' },
+        { id: 'active-trading', label: 'Active Trading Capital', value: '—', subtext: 'Awaiting research snapshot', tone: 'NOMINAL' },
         { id: 'today-pnl', label: 'Today Realized Return', value: '+0.0000%', subtext: '$0.0000 realized', tone: 'INFO' },
         { id: 'audit-drift', label: 'Accounting Drift', value: '$0.0000', subtext: 'Hash chain pending', tone: 'NOMINAL' },
       ];
@@ -696,14 +526,8 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
         {
           id: 'persistence-mode',
           label: 'Persistence',
-          value: verifiedUid
-            ? cloudSyncFailed
-              ? 'Local Only · Cloud Sync Failed'
-              : cloudSyncedAtIso
-                ? 'Local + Firestore Synced'
-                : 'Local + Firestore Pending'
-            : 'Local Cache Active',
-          tone: cloudSyncFailed ? 'WARNING' : 'INFO',
+          value: 'Research only · Financial cloud writes disabled',
+          tone: 'WARNING',
         },
       ]}
       actions={
@@ -718,7 +542,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     >
       <div className="space-y-5">
         <p className="text-xs text-slate-400">
-          Continuously sweeps realized profits exceeding your threshold into an agent-isolated Locker Vault with User-Only Manual Override and 4-decimal Daily PnL persistence.
+          Shared owner-only research simulation. Balances, PnL and hash chains are not verified exchange settlements or personal funds. Financial cloud writes are disabled until a trusted per-user ledger is available.
         </p>
         <ForgeMetricStrip items={metrics} />
 
