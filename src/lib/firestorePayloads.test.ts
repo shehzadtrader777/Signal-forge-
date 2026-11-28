@@ -221,3 +221,16 @@ test('failed financial Firestore writes must reject so UI cannot falsely mark cl
   assert.ok(panel.includes('await saveVaultLockerSnapshotToFirestore('));
   assert.ok(panel.includes('await saveDailyPnlRecordToFirestore('));
 });
+
+test('financial cloud sync status does not claim success after rejected save', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const root = path.resolve(import.meta.dirname, '..', '..');
+  const panel = fs.readFileSync(path.join(root, 'src/components/ProfitVaultAndDailyPnlPanel.tsx'), 'utf8');
+  assert.ok(panel.includes('const [cloudSyncFailed, setCloudSyncFailed] = useState(false)'), 'Panel must track failed cloud writes');
+  assert.ok(panel.includes('setCloudSyncFailed(true)'), 'Panel must flag failed cloud writes');
+  assert.ok(panel.includes('setCloudSyncedAtIso(null)'), 'Panel must clear stale success timestamp on failure');
+  assert.ok(panel.includes("'Local Only · Cloud Sync Failed'"), 'Panel must display failed cloud sync status');
+  assert.ok(panel.includes("'Local + Firestore Pending'"), 'Panel must not promise successful sync before a confirmed write');
+  assert.ok(panel.includes("tone: cloudSyncFailed ? 'WARNING' : 'INFO'"), 'Panel must warn users on failed persistence');
+});
