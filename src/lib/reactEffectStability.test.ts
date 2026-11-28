@@ -160,3 +160,15 @@ test('App.tsx passes memoized side menu handlers to prevent SideMenuDrawer effec
     'SideMenuDrawer must receive memoized handleCloseSideMenu'
   );
 });
+
+test('AgentLoopTelemetryPanel does not poll when disabled or when browser tab is hidden', () => {
+  const src = readSrc('src/components/AgentLoopTelemetryPanel.tsx');
+  assert.ok(src.includes('if (!appLiveEnabled) return;'), 'Telemetry must not poll when live app activity is disabled');
+  assert.ok(
+    src.includes("typeof document !== 'undefined' && document.hidden"),
+    'Telemetry timer must skip polling in hidden tabs'
+  );
+  assert.ok(src.includes('window.clearInterval(id)'), 'Telemetry timer must be cleaned up');
+  assert.ok(src.includes('void fetchTelemetry()'), 'Timer must explicitly handle an ignored async refresh');
+  assert.ok(src.includes('const REFRESH_BTN_TAP ='), 'Motion tap props must remain stable across renders');
+});
