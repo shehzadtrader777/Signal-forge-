@@ -115,3 +115,16 @@ Reviewed the owner-held active 27 November 04:59 ZIP against exact baseline GitH
 No Studio-only functionality was found in the reviewed differences for these five files. Kept existing implementation; new **source-level** regression guards in `src/lib/studioReactReconciliation.test.ts` commit `39b128b8` complement existing execution and IPC tests. Fresh CI must verify the new head.
 
 **Remaining original semantic-review paths:** `server.ts`, `src/context/AppContext.tsx`, `src/lib/firebase.ts`, `src/pages/Backtesting.tsx`, and `src/pages/Dashboard.tsx`. The separate authoritative financial ledger, deployed Firebase rules, credential investigation, and isolated staging/approval gates remain open. Do not mistake completion of source-difference reviews for production readiness. No merge, Studio sync, deployment, or live execution.
+
+### Firebase client source preservation — exact head b43e9c9
+
+Reviewed the owner-held active 04:59 Studio ZIP against `src/lib/firebase.ts` at GitHub head `b43e9c9af961b500bcba4f09b1e107afdcf78290`. Sequential 16-line FNV-1a 32-bit fingerprints matched 45 full blocks (720 of 820 Studio split-lines); all unmatched blocks on both sides were directly inspected. Fingerprints are comparison aids, not cryptographic attestations.
+
+- Retain GitHub's deterministic `getSignalForgePublicId` and profile creation/upsert alignment with Firestore rules. Firebase UID remains the authentication identity.
+- Studio silently returned on invalid PnL input or unverified/mismatched auth, and both financial save functions caught write errors without rethrowing. GitHub rejects these cases and propagates write failures. Preserve truthful Cloud Sync failure handling.
+- Both versions retain document-write serialization, transactions, subscriptions and profile readiness logic. No Studio-only behavior was identified in the inspected differences.
+- This resolves the Firebase client source preservation decision only. Firestore still allows verified owners to create/update `dailyPnlRecords` and `vaultLocker`, including financial fields. Server-authoritative ledger, restrictive rules, migration and emulator tests remain mandatory.
+
+**Exact baseline CI:** both returned workflows passed at `b43e9c9`: [Five-Phase Hardening](https://github.com/shehzadtrader777/Signal-forge-/actions/runs/46123396702) and [Hybrid Runtime](https://github.com/shehzadtrader777/Signal-forge-/actions/runs/46123396690), all six returned jobs successful. New commits require independent verification.
+
+**Remaining original semantic-review paths:** `server.ts`, `src/context/AppContext.tsx`, `src/pages/Backtesting.tsx`, `src/pages/Dashboard.tsx`. Separate ledger, credential triage, cloud restrictions, isolated staging and independent approval remain open. Keep PR Draft; no merge, deployment, AI Studio overwrite or live execution.
