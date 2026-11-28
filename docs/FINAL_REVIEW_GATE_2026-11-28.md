@@ -37,3 +37,8 @@ GitHub's main branch endpoint reported `protected: false`. Ruleset coverage coul
 ## Safe handoff
 
 Keep all changes on the reconciliation branch. Do not make the PR ready, merge main, modify the original AI Studio project, or activate LIVE trading on the strength of these checks alone. Use the review evidence and blockers above to make the next decision. No credentials, private keys, provider data, or backup archives are included in this document.
+
+
+### Advisory gate finding — release remains HOLD
+
+Exact baseline `ff408ce` passed the existing four workflows but the new dependency gate failed with one high advisory: GHSA-m9gg-hp2v-232j in locked `@grpc/grpc-js@1.9.16`; the advisory reports a patch at 1.13.6. The observed Firestore package declares `~1.9.0`, so the patched version is outside its declared range. Added a temporary read-only candidate workflow to generate a real Bun lockfile with a narrowly pinned override in a disposable runner, install frozen and rerun the audit. Its public manifest/lockfile diff is emitted only after successful candidate audit. No automatic push, no credential use, no production deployment. The override requires review and full application, emulator, IPC and browser regression tests before it can be accepted. The existing blocking dependency gate remains intact; the actual fix has not yet been committed. Prefer a compatible upstream Firestore release when available and independently verified.
