@@ -253,3 +253,21 @@ test('vault-only Firestore writes acknowledge confirmed cloud persistence', asyn
   const block = panel.slice(panel.indexOf('const currentVault = latestVaultRef.current;', vaultSave - 1500), dailySave);
   assert.ok(block.includes('let syncedAny = false'), 'Reset the sync accumulator for each drain pass');
 });
+
+test('failed Firestore persistence retries with bounded backoff and timer cleanup', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const panel = fs.readFileSync(
+    path.resolve(import.meta.dirname, '..', 'components', 'ProfitVaultAndDailyPnlPanel.tsx'),
+    'utf8'
+  );
+  assert.ok(panel.includes('cloudSyncRetryAttemptRef.current += 1'), 'Repeated errors must advance backoff');
+  assert.ok(panel.includes('Math.min(120_000, 15_000 * 2 ** Math.min(cloudSyncRetryAttemptRef.current, 3))'),
+    'Retries must start at 15 s and be capped at 120 s');
+  assert.ok(panel.includes('window.setTimeout(() => {'), 'Failed writes must schedule a later attempt');
+  assert.ok(panel.includes('setCloudSyncRetryTick((tick) => tick + 1)'), 'A timeout must rerun the sync effect');
+  assert.ok(panel.includes('window.clearTimeout(retryTimer)'), 'Unmount or account change must cancel retry timer');
+  assert.ok(panel.includes('[verifiedUid, vaultSyncSignature, cloudSyncRetryTick]'),
+    'Retry trigger must be an effect dependency');
+  assert.ok(panel.includes('cloudSyncRetryAttemptRef.current = 0'), 'Success/account change must reset the backoff');
+});
