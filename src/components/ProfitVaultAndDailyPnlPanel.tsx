@@ -72,39 +72,6 @@ const VAULT_TOOLTIP_STYLE = {
 
 type VaultPanelTab = 'VAULT_OVERRIDE' | 'DAILY_PNL' | 'IMMUTABLE_LEDGER';
 
-interface LocalPersistedVaultCache {
-  readonly savedAtIso: string;
-  readonly snapshot: ProfitVaultSnapshot;
-}
-
-function loadCachedVaultSnapshot(): ProfitVaultSnapshot | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<LocalPersistedVaultCache>;
-    if (parsed && parsed.snapshot && Array.isArray(parsed.snapshot.dailyHistory)) {
-      return parsed.snapshot;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function saveCachedVaultSnapshot(snapshot: ProfitVaultSnapshot): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const payload: LocalPersistedVaultCache = {
-      savedAtIso: new Date().toISOString(),
-      snapshot,
-    };
-    window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(payload));
-  } catch {
-    // ignore storage quota errors
-  }
-}
-
 function formatUsdSigned(val: number, decimals = 2): string {
   const sign = val > 0 ? '+' : val < 0 ? '-' : '';
   return `${sign}$${Math.abs(val).toLocaleString('en-US', {
@@ -145,7 +112,7 @@ function formatCsvValue(v: string | number): string {
 
 export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlPanel() {
   const { appLiveEnabled, user, selectedSymbol } = useApp();
-  const [vault, setVault] = useState<ProfitVaultSnapshot | null>(() => loadCachedVaultSnapshot());
+  const [vault, setVault] = useState<ProfitVaultSnapshot | null>(null);
   const [cloudDailyRecords, setCloudDailyRecords] = useState<readonly PersistedDailyPnlRecord[]>([]);
   const [activeTab, setActiveTab] = useState<VaultPanelTab>('VAULT_OVERRIDE');
 
@@ -189,6 +156,21 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
   latestVaultRef.current = vault;
 
   const verifiedUid = user && user.emailVerified ? user.uid : null;
+  
+  // Sensitive financial snapshots must not survive a logout or a switch of accounts.
+  useEffect(() => {
+    setVault(null);
+  }, [verifiedUid]);
+
+  // Purge older releases' shared browser cache once; never persist vault financial state here.
+  useEffect(() => {
+    try {
+      window.localStorage.removeItem(LOCAL_STORAGE_KEY);
+    } catch {
+      // Storage access can be denied in private/incognito contexts.
+    }
+  }, []);
+
 
   const vaultSyncSignature = useMemo(() => {
     if (!vault) return '';
@@ -212,16 +194,19 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
   configDirtyRef.current = configDirty;
 
   const fetchVaultState = useCallback(async () => {
+    if (!verifiedUid) return;
     try {
       const res = await apiFetch('/api/vault/state');
-      if (!res.ok) return;
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) setVault(null);
+        return;
+      }
       const data = (await res.json()) as {
         ok?: boolean;
         vault?: ProfitVaultSnapshot;
       };
       if (data?.ok && data.vault) {
         setVault(data.vault);
-        saveCachedVaultSnapshot(data.vault);
         if (!configDirtyRef.current) {
           syncDraftsFromConfig(data.vault.config);
         }
@@ -229,7 +214,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     } catch {
       // retain cached local snapshot cleanly
     }
-  }, [syncDraftsFromConfig]);
+  }, [syncDraftsFromConfig, verifiedUid]);
 
   useEffect(() => {
     fetchVaultState();
@@ -408,7 +393,6 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
         return;
       }
       setVault(data.vault);
-      saveCachedVaultSnapshot(data.vault);
       syncDraftsFromConfig(data.vault.config);
       setFeedback({
         tone: 'NOMINAL',
@@ -469,7 +453,6 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
         return;
       }
       setVault(data.vault);
-      saveCachedVaultSnapshot(data.vault);
       if (data.outcome?.scoopedNow) {
         setFeedback({
           tone: 'NOMINAL',
@@ -527,7 +510,6 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
         return;
       }
       setVault(data.vault);
-      saveCachedVaultSnapshot(data.vault);
       setConfirmationPhraseInput('');
       setFeedback({
         tone: 'NOMINAL',
