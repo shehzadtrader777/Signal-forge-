@@ -176,6 +176,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     readonly text: string;
   } | null>(null);
   const [cloudSyncedAtIso, setCloudSyncedAtIso] = useState<string | null>(null);
+  const [cloudSyncFailed, setCloudSyncFailed] = useState(false);
 
   const lastSyncedDailyHashRef = useRef<Map<string, string>>(new Map());
   const lastSyncedVaultVersionRef = useRef<number>(0);
@@ -268,6 +269,8 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
   useEffect(() => {
     lastSyncedVaultVersionRef.current = 0;
     lastSyncedDailyHashRef.current.clear();
+    setCloudSyncedAtIso(null);
+    setCloudSyncFailed(false);
   }, [verifiedUid]);
 
   // Auto-persist high-precision Daily PnL records & Vault Locker state to Firestore when signed in
@@ -329,8 +332,13 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
             setCloudSyncedAtIso(new Date().toISOString());
           }
         } while (resyncRequestedRef.current && !cancelled);
+        if (!cancelled) setCloudSyncFailed(false);
       } catch {
-        // non-blocking cloud sync; local cache remains authoritative
+        // Do not claim successful Firestore persistence after a failed cloud write.
+        if (!cancelled) {
+          setCloudSyncFailed(true);
+          setCloudSyncedAtIso(null);
+        }
       } finally {
         syncInFlightRef.current = false;
       }
@@ -674,11 +682,13 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
           id: 'persistence-mode',
           label: 'Persistence',
           value: verifiedUid
-            ? cloudSyncedAtIso
-              ? 'Local + Firestore Synced'
-              : 'Local + Firestore Active'
+            ? cloudSyncFailed
+              ? 'Local Only · Cloud Sync Failed'
+              : cloudSyncedAtIso
+                ? 'Local + Firestore Synced'
+                : 'Local + Firestore Pending'
             : 'Local Cache Active',
-          tone: 'INFO',
+          tone: cloudSyncFailed ? 'WARNING' : 'INFO',
         },
       ]}
       actions={
