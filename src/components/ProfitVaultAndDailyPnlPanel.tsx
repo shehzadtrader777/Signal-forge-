@@ -177,6 +177,8 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
   } | null>(null);
   const [cloudSyncedAtIso, setCloudSyncedAtIso] = useState<string | null>(null);
   const [cloudSyncFailed, setCloudSyncFailed] = useState(false);
+  const [cloudSyncRetryTick, setCloudSyncRetryTick] = useState(0);
+  const cloudSyncRetryAttemptRef = useRef(0);
 
   const lastSyncedDailyHashRef = useRef<Map<string, string>>(new Map());
   const lastSyncedVaultVersionRef = useRef<number>(0);
@@ -271,6 +273,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     lastSyncedDailyHashRef.current.clear();
     setCloudSyncedAtIso(null);
     setCloudSyncFailed(false);
+    cloudSyncRetryAttemptRef.current = 0;
   }, [verifiedUid]);
 
   // Auto-persist high-precision Daily PnL records & Vault Locker state to Firestore when signed in
@@ -279,6 +282,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     if (!verifiedUid || !vaultSyncSignature) return;
 
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     const drainCloudSync = async () => {
       if (syncInFlightRef.current) {
@@ -333,12 +337,21 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
             setCloudSyncedAtIso(new Date().toISOString());
           }
         } while (resyncRequestedRef.current && !cancelled);
-        if (!cancelled) setCloudSyncFailed(false);
+        if (!cancelled) {
+          setCloudSyncFailed(false);
+          cloudSyncRetryAttemptRef.current = 0;
+        }
       } catch {
         // Do not claim successful Firestore persistence after a failed cloud write.
         if (!cancelled) {
           setCloudSyncFailed(true);
           setCloudSyncedAtIso(null);
+          // Bounded exponential retry for transient network/offline failures; do not retry tight loops.
+          const retryMs = Math.min(120_000, 15_000 * 2 ** Math.min(cloudSyncRetryAttemptRef.current, 3));
+          cloudSyncRetryAttemptRef.current += 1;
+          retryTimer = window.setTimeout(() => {
+            if (!cancelled) setCloudSyncRetryTick((tick) => tick + 1);
+          }, retryMs);
         }
       } finally {
         syncInFlightRef.current = false;
@@ -348,8 +361,9 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     void drainCloudSync();
     return () => {
       cancelled = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
-  }, [verifiedUid, vaultSyncSignature]);
+  }, [verifiedUid, vaultSyncSignature, cloudSyncRetryTick]);
 
   const handleSaveConfig = useCallback(async () => {
     setSavingConfig(true);
