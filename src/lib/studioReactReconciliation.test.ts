@@ -49,3 +49,13 @@ test('Studio app route reconciliation preserves protected landing and scroll man
   assert.ok(browserRouter >= 0 && browserRouter < scrollManager && scrollManager < appProvider,
     'Route scroll behavior should be available across all pages, including pre-login landing');
 });
+
+test('Studio backtest UI retains synthetic-scenario honesty disclosure', () => {
+  const matrix = src('src/components/ModularBacktestMatrixPanel.tsx');
+  assert.match(matrix, /data-testid="synthetic-matrix-disclosure"/);
+  assert.match(matrix, /Synthetic scenario model — not a verified historical backtest\./);
+  assert.match(matrix, /Returns, win rates and the leading agent are illustrative/);
+  assert.match(matrix, /out-of-sample checks/);
+  assert.match(matrix, /const paramsRef = useRef\(params\)/);
+  assert.match(matrix, /void runMatrix\(paramsRef\.current\)/);
+});
