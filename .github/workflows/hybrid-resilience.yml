@@ -38,10 +38,12 @@ jobs:
   production_container:
     name: Reproducible Docker image build
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Verify frozen dependency install and Node runtime image
         run: docker build --pull --tag signal-forge:staging .
       - name: Exercise the isolated container and trading locks
         run: sh scripts/smoke-container.sh signal-forge:staging
+      - name: Browser smoke in network-isolated container
+        run: sh scripts/smoke-browser.sh signal-forge:staging

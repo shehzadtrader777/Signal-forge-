@@ -45,7 +45,7 @@ const HOW_IT_WORKS_STEPS = [
     num: '04',
     title: 'Paper/Demo Isolation & OTP-Gated Live Controls',
     description:
-      'All accounts default to Paper/Testnet simulation. Live execution across Binance, Bybit, OKX, and Kraken stays locked until verified Email OTP and safety checks pass.',
+      'All accounts default to Paper/Testnet simulation. Live execution is disabled in this release, including after email OTP verification.',
   },
 ];
 
@@ -151,7 +151,7 @@ export function PublicHome() {
             Structured market signals, transparent Trade ID verification, and disciplined risk controls.
           </h1>
           <p className="max-w-2xl text-sm sm:text-base leading-relaxed text-slate-300">
-            Signal Forge connects real-time market feeds, Smart Money chart structure, multi-agent risk vetting, and Paper/Demo exchange routing inside one auditable ledger. Published signals are always separated from executed trades, and Live Trading remains strictly locked behind Email OTP verification.
+            Signal Forge connects real-time market feeds, Smart Money chart structure, multi-agent risk vetting, and Paper/Demo exchange routing inside one auditable ledger. Published signals are always separated from executed trades, and Live Trading remains disabled in this release.
           </p>
 
           <div className="flex flex-wrap items-center gap-3 pt-1">

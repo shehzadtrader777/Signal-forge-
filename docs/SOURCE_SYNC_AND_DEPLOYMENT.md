@@ -89,3 +89,10 @@ The redacted heuristic audit examined 721 unique text blobs, skipped one binary 
 Extended the existing network-isolated HTTP smoke harness to check anonymous vault denial, owner-only simulated vault provenance/no-store, manual PnL rejection without mutation, public Fable snapshot token removal, anonymous Fable mutation denial, logout cookie expiry, legacy session owner-boundary enforcement, and explicit malformed Firebase identity precedence over a synthetic valid old session. These new tests must pass on the subsequent exact head; they do not use real provider identities or funds.
 
 **Not yet verified:** real Firebase auth/rules emulator, deployed cloud settings and revocation, financial provider integration, browser UI/mobile parity, real staging environment and private secret remediation. Continue draft-only verification; no main merge, production deployment, AI Studio sync or live execution.
+
+
+### Browser integration checkpoint — 28 November 2026
+
+Exact baseline `df2f923`: all eight CI jobs across four PR workflows passed. The dedicated Firebase Rules Emulator job emitted `FIRESTORE_EMULATOR_VERIFIED_CHECKS=49` after all authorization cases and read-back assertions. Evidence: https://github.com/shehzadtrader777/Signal-forge-/actions/runs/46126744216 . This is local rules verification, not confirmation of deployed Firebase IAM or named database rules.
+
+Added a Chromium smoke gate to the existing Docker job: real production-mode application container with networking disabled, a disposable Playwright runner sharing only its isolated network namespace, external browser requests refused, desktop and mobile viewport navigation, guest console denial, unknown-route recovery, and React render error checks. Browser dependency and image tags are pinned at the top level, not by image digest or transitive lockfile. No actual sign-in, exchange or cloud test. Updated two misleading public-page descriptions to explicitly reflect the hard LIVE lock. The new exact-head browser test result is pending; no claim of full mobile, accessibility, authenticated UI, or staging parity. No deployment or merge.
