@@ -59,3 +59,29 @@ test('Studio backtest UI retains synthetic-scenario honesty disclosure', () => {
   assert.match(matrix, /const paramsRef = useRef\(params\)/);
   assert.match(matrix, /void runMatrix\(paramsRef\.current\)/);
 });
+
+test('Studio navigation and alerts preserve expanded GitHub route and symbol universe', () => {
+  const menu = src('src/components/SideMenuDrawer.tsx');
+  assert.ok(menu.includes("{ to: '/welcome', label: 'Welcome & Super Guide'"));
+  assert.ok(menu.includes("{ to: '/pricing', label: 'Plans & Roadmap'"));
+  const alerts = src('src/pages/Alerts.tsx');
+  assert.ok(alerts.includes('buildBacktestResearchUniverse(allKnownCoins, topGainers, Object.keys(tickers))'));
+  assert.ok(alerts.includes('alertUniverse.map((c) => ('));
+  assert.ok(!alerts.includes('TRACKED_COINS.map((c) => ('), 'Do not regress to the fixed legacy alert universe');
+});
+
+test('Studio runtime reconciliation preserves fail-closed Rust IPC and pre-pump safeguards', () => {
+  const runtime = src('src/lib/hybridArchitectureServer.ts');
+  assert.ok(runtime.includes("parsed.phase1_ipc?.ok === true && transport === 'RUST_UDS_IPC'"));
+  assert.ok(runtime.includes('ok: ipcVerified'), 'Fallback transport must not count as successful Rust IPC');
+  const rust = src('hybrid_core/rust_engine/src/main.rs');
+  assert.ok(rust.includes('stream.set_read_timeout(Some(Duration::from_secs(2)))'));
+  assert.ok(rust.includes('stream.set_write_timeout(Some(Duration::from_secs(2)))'));
+  assert.ok(rust.includes('!max_position_pct.is_finite()'));
+  assert.ok(rust.includes('!max_leverage.is_finite()'));
+  assert.ok(rust.includes('!hard_drawdown_pct.is_finite()'));
+  assert.ok(rust.includes('NON_FINITE_RISK_ENVELOPE'));
+  const pipeline = src('src/lib/executionPipeline.ts');
+  assert.ok(pipeline.includes('autoExecuteEligible: false,'));
+  assert.ok(pipeline.includes("verificationStatus: 'UNVERIFIED_VOLUME'"));
+});
