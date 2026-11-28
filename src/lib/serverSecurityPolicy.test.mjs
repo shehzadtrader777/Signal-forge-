@@ -60,3 +60,13 @@ test('manual PnL route enforces production-deny before importing unverified prof
   assert.ok(gateIndex >= 0 && ingestIndex > gateIndex, 'Manual ingest must be gated before financial state mutation');
   assert.ok(slice.includes("code: 'UNVERIFIED_VAULT_GAIN_DISABLED'"));
 });
+
+test('financial vault snapshot endpoint requires operator authorization', () => {
+  const server = readFileSync(new URL('../../server.ts', import.meta.url), 'utf8');
+  const panel = readFileSync(new URL('../components/ProfitVaultAndDailyPnlPanel.tsx', import.meta.url), 'utf8');
+  assert.match(server, /app\.get\('\/api\/vault\/state', requireOperatorAuth, \(_req, res\) => \{/);
+  assert.ok(panel.includes("await apiFetch('/api/vault/state')"),
+    'Vault panel must attach verified session headers before accessing financial snapshot');
+  assert.ok(!panel.includes("await fetch('/api/vault/state')"),
+    'Do not fetch protected financial snapshot anonymously');
+});
