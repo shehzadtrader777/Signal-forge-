@@ -17,3 +17,8 @@ test('verified explicit admin email remains recognized only for authenticated pr
  assert.equal(resolveRbacRoleFromPrincipal({...base,uid:'normal-uid',email:adminEmail,emailVerified:false},[adminEmail]),'TRADER');
  assert.equal(resolveRbacRoleFromPrincipal({...base,uid:'',email:adminEmail,emailVerified:true},[adminEmail]),'GUEST');
 });
+
+test('automation-looking UID cannot elevate a normal verified user',()=>{
+ assert.equal(resolveRbacRoleFromPrincipal({...base,uid:'ci-operator-automation'}),'TRADER');
+ assert.equal(resolveRbacRoleFromPrincipal({...base,uid:'ci-operator-automation',tier:'PREMIUM_INSTITUTIONAL'}),'QUANT_ANALYST');
+});
