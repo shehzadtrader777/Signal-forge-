@@ -902,10 +902,10 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
               <div className="border-t border-slate-800/80 pt-3.5 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-300">
-                    Ingest Realized Trade Settlement
+                    Manual PnL — Research Demo Only
                   </span>
                   <span className="font-mono text-[10px] text-slate-400">
-                    Auto-sweeps excess above {formatUsdPlain(vault?.effectiveThresholdUsd ?? 250)}
+                    Not exchange-verified · default disabled
                   </span>
                 </div>
                 <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
@@ -938,7 +938,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
                 <div className="flex items-center justify-end">
                   <ForgeInteractiveButton
                     intent="secondary"
-                    label={recordingGain ? 'Settling...' : 'Record Realized Gain & Evaluate Scoop'}
+                    label={recordingGain ? 'Simulating...' : 'Simulate PnL & Evaluate Scoop'}
                     disabled={recordingGain}
                     onClick={handleRecordRealizedGain}
                     icon={<ArrowDownToLine className="h-3.5 w-3.5" />}
