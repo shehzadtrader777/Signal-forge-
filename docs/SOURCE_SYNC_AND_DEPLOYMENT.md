@@ -31,3 +31,30 @@ Updated: 2026-11-27. This is a release procedure, not proof of deployment.
 - Push = AI Studio/local working tree → GitHub.
 - A GitHub PR/merge does not update an already running website unless the hosting provider is connected and successfully deploys it.
 - AI Studio usage limit resetting does not automatically synchronize the two codebases or deploy the app.
+
+## Final AI Studio sync readiness: 28 November 2026
+
+**Status: HOLD / draft PR; not yet ready for final synchronization.**
+
+- Latest Studio export (owner-held): 27 November 2026, 04:59 local snapshot. Active source tree contains 322 files; 273 matched the original reconciliation commit exactly, 49 diverged, and 80 GitHub-only protective files must be preserved. Subsequent three-way analysis classified older main-equivalent files and minor formatting differences, but substantial source conflicts and system trust boundaries remain.
+- The reviewed GitHub reconciliation PR can have green CI without being a complete AI Studio import. Passing PR checks only certifies the code on that exact GitHub SHA, not the unmerged Studio snapshot.
+- **Manual browser-submitted realized gain** is denied in production and by default in nonproduction. The only permitted temporary exception is explicitly enabling the unverified research demonstration on an isolated nonproduction host; it does not verify exchange settlement.
+- **Cloud PnL/vault records are not a verified ledger:** the Firestore rules currently permit authenticated client writes to financial data and the UI retains direct Firebase write paths. Do not present these as server-authoritative capital/settlement balances. Before release, add a trusted server/Admin SDK write path with audited settlement provenance, a migration for existing demo documents, and Firebase emulator tests proving forged but schema-valid financial writes are rejected.
+- Perform owner-controlled full-history secrets investigation and rotate any exposed credentials before a public release; GitHub ignore patterns cannot retract historical leaks.
+- Independently validate operator/role gates, Firestore production rules, market feed provenance, rollback behavior, and end-to-end smoke tests. Obtain written product/security signoff for the complete combined source commit.
+- The original AI Studio app remains linked to the older default branch. Because changes exist on both sides, **never directly click Pull or Push on the original app as a reconciliation shortcut**. Preserve a fresh Studio export, first test the reviewed reconciled source in an isolated staging import/project, and only adopt it after functional parity, explicit backups, and approval.
+- GitHub PR merge, AI Studio import/sync, hosting deployment, and live exchange execution are **four separate actions**. None should be inferred from green CI.
+
+### Completion evidence required
+
+| Gate | Proof required | Current state |
+| --- | --- | --- |
+| Studio semantic conflict reconciliation | Reviewed 3-way changes plus feature parity tests | Open |
+| Financial ledger authority | Trusted server-side settlement source + rules emulator rejection | Open |
+| Historical secret scan and rotation | Private findings triage / remediation log | Open |
+| Full merged-source CI | Exact candidate SHA + success across workflows | Open |
+| AI Studio isolated staging | Backup, staging app import and smoke tests | Not performed |
+| Main PR approval | Explicit owner approval after critical blockers close | Not granted |
+| Production launch/live execution | Independent release and trading safety approval | Not authorized |
+
+Keep PR Draft, preserve main, do not deploy, and leave LIVE trading disabled.
