@@ -1,4 +1,4 @@
-import { resolveSessionSigningKey } from './src/lib/serverSecurityPolicy.mjs';
+import { resolveSessionSigningKey, isManualVaultGainDemoEnabled } from './src/lib/serverSecurityPolicy.mjs';
 import dotenv from 'dotenv';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9430,6 +9430,14 @@ async function startServer() {
   });
 
   app.post('/api/vault/record-gain', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+    // Never accept client-supplied 'settled' profit as verified production capital.
+    if (!isManualVaultGainDemoEnabled(process.env)) {
+      return res.status(423).json({
+        ok: false,
+        code: 'UNVERIFIED_VAULT_GAIN_DISABLED',
+        error: 'Manual realized-gain entry is disabled. Only an explicitly enabled local research demo may accept unverified PnL.',
+      });
+    }
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const symbolRaw = String(body.symbol || 'BTCUSDT')
       .toUpperCase()
