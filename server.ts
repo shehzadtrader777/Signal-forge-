@@ -9390,7 +9390,7 @@ async function startServer() {
   });
 
   // --- High-Frequency Profit Scooping, Immutable Locker Vault & Daily PnL Tracking ---
-  app.get('/api/vault/state', (_req, res) => {
+  app.get('/api/vault/state', requireOperatorAuth, (_req, res) => {
     return res.json({
       ok: true,
       vault: profitVaultEngine.getSnapshot(),
