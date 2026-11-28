@@ -85,3 +85,42 @@ test('Studio runtime reconciliation preserves fail-closed Rust IPC and pre-pump 
   assert.ok(pipeline.includes('autoExecuteEligible: false,'));
   assert.ok(pipeline.includes("verificationStatus: 'UNVERIFIED_VOLUME'"));
 });
+
+test("Studio backtesting preserves expanded research universe and provenance separation", () => {
+  assert.ok(src("src/pages/Backtesting.tsx").includes("buildBacktestResearchUniverse(allKnownCoins, topGainers, Object.keys(tickers))"));
+  assert.ok(src("src/pages/Backtesting.tsx").includes("validateHistoricalCoverage({"));
+  assert.ok(src("src/pages/Backtesting.tsx").includes("includeHistoricalBenchmarks: false"));
+  assert.ok(src("src/pages/Backtesting.tsx").includes("includeCrossStrategyBenchmarks: false"));
+  assert.ok(src("src/pages/Backtesting.tsx").includes("Simulated Cross-Pair Benchmark"));
+  assert.ok(src("src/pages/Backtesting.tsx").includes("id=\"sf-backtest-advanced\""));
+  assert.ok(src("src/pages/Backtesting.tsx").includes("<Step2StrategyBacktestComparator />"));
+  assert.ok(src("src/pages/Backtesting.tsx").includes("<ModularBacktestMatrixPanel symbol={simSeed.symbol} />"));
+});
+
+test("Studio dashboard preserves premium presentation without replacing existing workspace", () => {
+  assert.ok(src("src/pages/Dashboard.tsx").includes("import { PremiumWorkspaceOverview } from '../components/PremiumWorkspaceOverview'"));
+  assert.ok(src("src/pages/Dashboard.tsx").includes("<PremiumWorkspaceOverview />"));
+  assert.ok(src("src/components/PremiumWorkspaceOverview.tsx").includes("Purely presentational user-owned dashboard shortcuts; no trading/financial mutations."));
+});
+
+test("Studio emergency stop distinguishes local containment from server acknowledgement", () => {
+  assert.ok(src("src/context/AppContext.tsx").includes("!res.ok || !data?.ok || !data?.state?.failSafe?.engaged"));
+  assert.ok(src("src/context/AppContext.tsx").includes("Emergency Stop — Server Confirmation Pending"));
+  assert.ok(src("src/context/AppContext.tsx").includes("Emergency Stop — Server Confirmed"));
+  assert.ok(src("src/context/AppContext.tsx").includes("subscription plan is not an infrastructure authorization mechanism."));
+  assert.ok(src("server.ts").includes("app.post('/api/architecture/toggle', requireOperatorAuth, requireMasterControlOwner,"));
+  assert.ok(src("server.ts").includes("app.post('/api/forge-capital/failsafe/engage', requireOperatorAuth, standardWriteRateLimit, (req, res)"));
+});
+
+test("Studio backend preservation retains owner boundary, live lock and truthful data", () => {
+  assert.ok(src("server.ts").includes("const SESSION_SIGNING_KEY = resolveSessionSigningKey();"));
+  assert.ok(src("server.ts").includes("function realMoneyExecutionAllowed(): boolean {\n  return false;\n}"));
+  assert.ok(src("server.ts").includes("app.get('/api/vault/state', requireOperatorAuth, requireMasterControlOwner,"));
+  assert.ok(src("server.ts").includes("if (!isManualVaultGainDemoEnabled(process.env))"));
+  assert.ok(src("server.ts").includes("whaleFlowVerified: false"));
+  assert.ok(src("server.ts").includes("Historical exchange candles unavailable"));
+  assert.ok(src("server.ts").includes("mayExecuteLiveTrade:false"));
+  assert.ok(src("server.ts").includes("Recovery email delivery unavailable. Fail-safe remains engaged."));
+  assert.ok(src("server.ts").includes("EMERGENCY_HALT_ACTIVE"));
+  assert.ok(src("server.ts").includes("MAX_MONITOR_SSE_BACKPRESSURE_BYTES"));
+});
