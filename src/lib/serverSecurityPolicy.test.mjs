@@ -32,11 +32,11 @@ test('Studio source-sync safety exclusions protect backups and credentials', () 
   const ignore = readFileSync(new URL('../../.gitignore', import.meta.url), 'utf8');
   const dockerIgnore = readFileSync(new URL('../../.dockerignore', import.meta.url), 'utf8');
   for (const rule of ['.aistudio/', '.backups/', '*.zip', '*.pem']) {
-    assert.ok(ignore.split(/\\r?\\n/).includes(rule), `Missing Git exclusion for ${rule}`);
+    assert.ok(ignore.split(/\r?\n/).includes(rule), `Missing Git exclusion for ${rule}`);
   }
   for (const rule of ['.aistudio', '.backups', '*.zip', '*.pem']) {
-    assert.ok(dockerIgnore.split(/\\r?\\n/).includes(rule), `Missing Docker exclusion for ${rule}`);
+    assert.ok(dockerIgnore.split(/\r?\n/).includes(rule), `Missing Docker exclusion for ${rule}`);
   }
-  assert.match(ignore, /^\\.env\\*$/m);
-  assert.match(ignore, /^\\*service-account\\*\\.json$/m);
+  assert.match(ignore, /^\.env\*$/m);
+  assert.match(ignore, /^\*service-account\*\.json$/m);
 });
