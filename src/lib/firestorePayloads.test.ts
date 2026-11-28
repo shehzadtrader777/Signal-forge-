@@ -234,3 +234,22 @@ test('financial cloud sync status does not claim success after rejected save', a
   assert.ok(panel.includes("'Local + Firestore Pending'"), 'Panel must not promise successful sync before a confirmed write');
   assert.ok(panel.includes("tone: cloudSyncFailed ? 'WARNING' : 'INFO'"), 'Panel must warn users on failed persistence');
 });
+
+test('vault-only Firestore writes acknowledge confirmed cloud persistence', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const panel = fs.readFileSync(
+    path.resolve(import.meta.dirname, '..', 'components', 'ProfitVaultAndDailyPnlPanel.tsx'),
+    'utf8'
+  );
+  const vaultSave = panel.indexOf('await saveVaultLockerSnapshotToFirestore(');
+  const persistedVault = panel.indexOf('lastSyncedVaultVersionRef.current = currentVault.stateVersion', vaultSave);
+  const dailySave = panel.indexOf('await saveDailyPnlRecordToFirestore(', persistedVault);
+  const acknowledged = panel.indexOf('setCloudSyncedAtIso(new Date().toISOString())', dailySave);
+  assert.ok(vaultSave > 0 && persistedVault > vaultSave && dailySave > persistedVault);
+  assert.ok(acknowledged > dailySave, 'Confirm cloud badge only after pending writes finish');
+  const fromVaultToDaily = panel.slice(persistedVault, dailySave);
+  assert.ok(fromVaultToDaily.includes('syncedAny = true'), 'Vault-only successful writes must count as synced');
+  const block = panel.slice(panel.indexOf('const currentVault = latestVaultRef.current;', vaultSave - 1500), dailySave);
+  assert.ok(block.includes('let syncedAny = false'), 'Reset the sync accumulator for each drain pass');
+});
