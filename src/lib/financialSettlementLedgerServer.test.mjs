@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import os from 'node:os';
 import path from 'node:path';
 import { FinancialSettlementLedger } from './financialSettlementLedgerServer.mjs';
 
 const base = Object.freeze({
-  uid: 'tenant-a', venue: 'BINANCE', accountRef: 'opaque-account-a',
+  environment: 'TESTNET', uid: 'tenant-a', venue: 'BINANCE', accountRef: 'opaque-account-a',
   settlementId: 'fill-001', currency: 'USD', realizedPnlMicroUsd: 1250000,
   settledAtMs: 1700000000000, provenance: 'VERIFIED_EXCHANGE_SETTLEMENT',
 });
@@ -30,7 +31,7 @@ test('settlement ledger denies unverified and malformed inputs before writing', 
     await assert.rejects(ledger.ingest('forged'), /UNVERIFIED_SETTLEMENT/);
     await assert.rejects(ledger.ingest('badAmount'), /INVALID_SETTLEMENT_AMOUNT/);
     await assert.rejects(ledger.ingest({ ...base }), /UNVERIFIED_SETTLEMENT/);
-    assert.deepEqual(ledger.readRealizedPnl('tenant-a'), { settlementCount: 0, realizedPnlMicroUsd: '0' });
+    assert.deepEqual(ledger.readRealizedPnl('tenant-a', 'TESTNET'), { settlementCount: 0, realizedPnlMicroUsd: '0' });
   } finally { ledger.close(); }
 });
 test('settlement ledger isolates accounts, rejects conflicts and performs exact fixed-point aggregation', async () => {
@@ -42,10 +43,10 @@ test('settlement ledger isolates accounts, rejects conflicts and performs exact 
     await assert.rejects(ledger.ingest('reassigned'), /SETTLEMENT_ACCOUNT_OWNER_CONFLICT/);
     await ledger.ingest('loss');
     await ledger.ingest('other');
-    assert.deepEqual(ledger.readRealizedPnl('tenant-a'), { settlementCount: 2, realizedPnlMicroUsd: '750000' });
-    assert.deepEqual(ledger.readRealizedPnl('tenant-b'), { settlementCount: 1, realizedPnlMicroUsd: '1250000' });
-    assert.deepEqual(ledger.readRealizedPnl('unknown'), { settlementCount: 0, realizedPnlMicroUsd: '0' });
-    assert.throws(() => ledger.readRealizedPnl("' OR 1=1"), /INVALID_OWNER/);
+    assert.deepEqual(ledger.readRealizedPnl('tenant-a', 'TESTNET'), { settlementCount: 2, realizedPnlMicroUsd: '750000' });
+    assert.deepEqual(ledger.readRealizedPnl('tenant-b', 'TESTNET'), { settlementCount: 1, realizedPnlMicroUsd: '1250000' });
+    assert.deepEqual(ledger.readRealizedPnl('unknown', 'TESTNET'), { settlementCount: 0, realizedPnlMicroUsd: '0' });
+    assert.throws(() => ledger.readRealizedPnl("' OR 1=1", 'TESTNET'), /INVALID_OWNER/);
   } finally { ledger.close(); }
 });
 test('settlement idempotency persists after close and reopen', async () => {
@@ -58,11 +59,42 @@ test('settlement idempotency persists after close and reopen', async () => {
     ledger.close(); ledger = undefined;
     ledger = new FinancialSettlementLedger(file, verifyFixture);
     assert.deepEqual(await ledger.ingest('valid'), { inserted: false });
-    assert.deepEqual(ledger.readRealizedPnl('tenant-a'), { settlementCount: 1, realizedPnlMicroUsd: '1250000' });
+    assert.deepEqual(ledger.readRealizedPnl('tenant-a', 'TESTNET'), { settlementCount: 1, realizedPnlMicroUsd: '1250000' });
   } finally { ledger?.close(); fs.rmSync(folder, { recursive: true, force: true }); }
 });
 test('no active server or browser import of settlement writer before provider approval', () => {
   const server = fs.readFileSync(new URL('../../server.ts', import.meta.url), 'utf8');
   const panel = fs.readFileSync(new URL('../components/ProfitVaultAndDailyPnlPanel.tsx', import.meta.url), 'utf8');
   for (const source of [server, panel]) assert.doesNotMatch(source, /financialSettlementLedgerServer|FinancialSettlementLedger/);
+});
+
+test('missing or LIVE settlement scope is denied; reads require explicit TESTNET', async () => {
+  const ledger = new FinancialSettlementLedger(':memory:', async key => ({ ...base, environment: key }));
+  try {
+    await assert.rejects(ledger.ingest('LIVE'), /SETTLEMENT_ENVIRONMENT_NOT_ALLOWED/);
+    await assert.rejects(ledger.ingest(undefined), /SETTLEMENT_ENVIRONMENT_NOT_ALLOWED/);
+    assert.throws(() => ledger.readRealizedPnl('tenant-a', 'LIVE'), /SETTLEMENT_ENVIRONMENT_NOT_ALLOWED/);
+    assert.throws(() => ledger.readRealizedPnl('tenant-a'), /SETTLEMENT_ENVIRONMENT_NOT_ALLOWED/);
+    assert.deepEqual(ledger.readRealizedPnl('tenant-a', 'TESTNET'), { settlementCount:0, realizedPnlMicroUsd:'0' });
+  } finally { ledger.close(); }
+});
+test('totals beyond signed 64-bit range aggregate without overflow', async () => {
+  const ledger = new FinancialSettlementLedger(':memory:', async id => ({ ...base, settlementId: 'bulk-' + id, realizedPnlMicroUsd: 1000000000000000 }));
+  try {
+    for (let i=0;i<9300;i++) await ledger.ingest(i);
+    assert.deepEqual(ledger.readRealizedPnl('tenant-a', 'TESTNET'), { settlementCount:9300, realizedPnlMicroUsd:'9300000000000000000' });
+  } finally { ledger.close(); }
+});
+test('unscoped legacy database is rejected rather than silently classified', () => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-ledger-unscoped-'));
+  const file = path.join(folder, 'ledger.sqlite');
+  try {
+    const db = new DatabaseSync(file);
+    db.exec('CREATE TABLE settlement_accounts (owner_uid TEXT); INSERT INTO settlement_accounts VALUES (\'legacy-owner\');');
+    db.close();
+    assert.throws(() => new FinancialSettlementLedger(file, verifyFixture), /UNSCOPED_LEDGER_MIGRATION_REQUIRED/);
+    const check = new DatabaseSync(file);
+    try { assert.equal(check.prepare('SELECT COUNT(*) AS count FROM settlement_accounts').get().count,1); }
+    finally { check.close(); }
+  } finally { fs.rmSync(folder, { recursive: true, force: true }); }
 });
