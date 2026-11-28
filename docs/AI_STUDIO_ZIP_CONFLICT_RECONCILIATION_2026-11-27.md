@@ -128,3 +128,28 @@ Reviewed the owner-held active 04:59 Studio ZIP against `src/lib/firebase.ts` at
 **Exact baseline CI:** both returned workflows passed at `b43e9c9`: [Five-Phase Hardening](https://github.com/shehzadtrader777/Signal-forge-/actions/runs/46123396702) and [Hybrid Runtime](https://github.com/shehzadtrader777/Signal-forge-/actions/runs/46123396690), all six returned jobs successful. New commits require independent verification.
 
 **Remaining original semantic-review paths:** `server.ts`, `src/context/AppContext.tsx`, `src/pages/Backtesting.tsx`, `src/pages/Dashboard.tsx`. Separate ledger, credential triage, cloud restrictions, isolated staging and independent approval remain open. Keep PR Draft; no merge, deployment, AI Studio overwrite or live execution.
+
+### Remaining four semantic-review paths — source decisions completed for the recorded Studio snapshot
+
+Baseline `b1b6556fd78da0fb1365d2166d77c9068ab7068f`; same owner-held active 27 November 04:59 Studio ZIP. Baseline PR-triggered runs [Five-Phase Hardening](https://github.com/shehzadtrader777/Signal-forge-/actions/runs/46123992307) and [Hybrid Runtime](https://github.com/shehzadtrader777/Signal-forge-/actions/runs/46123992311) both succeeded. These do not attest subsequent commits.
+
+| Reviewed path | Comparison and preservation decision |
+| --- | --- |
+| `src/pages/Backtesting.tsx` | 741 of 997 Studio split-lines matched ordered 16-line fingerprints. Inspect differences: retain expanded searchable market universe, coverage validation, separation of observed vs generated benchmark records, guide and chart styling, and independent advanced-matrix accordion. Both original strategy comparator and matrix remain available. |
+| `src/pages/Dashboard.tsx` | 873 of 905 Studio split-lines matched ordered 16-line fingerprints. Differences add import and rendering of PremiumWorkspaceOverview; inspected its device-local theme and tile-order behavior. Preserve it, with original dashboard modules intact. |
+| `src/context/AppContext.tsx` | 6,133 of 6,261 Studio split-lines matched ordered 64-line fingerprints. Retain the server-owner authorization boundary for global toggles, rather than client subscription eligibility, and emergency-stop acknowledgment checks plus local fail-closed containment. Checked matching server routes. |
+| `server.ts` | 13,952 of 16,192 Studio split-lines matched ordered 64-line fingerprints; refined remaining ranges into 8-line blocks and inspected divergent code on both sides. Preserve the hardened GitHub backend rather than restoring older Studio behavior. |
+
+The FNV-1a 32-bit fingerprints used here are comparison aids, not cryptographic proof or a compiler/integration test. The compared archive is the recorded snapshot, not a live Studio export. No Studio-only functional additions requiring import were identified in the reviewed differences of these four paths.
+
+Server preservation decisions:
+- Keep production session-signing policy and hard-disabled real-money execution, including execution-mode, Fable and Freqtrade guards.
+- Keep server-verified owner authorization for global microservice, maintenance, admin-business and process-global vault operations. A premium plan does not grant infrastructure ownership.
+- Keep the emergency halt entry independent of premium entitlement, authenticated halt-status endpoint, entry/switch/bypass 423 guard, mandatory one-time recovery challenge bound to the current seal, and fail-closed email delivery. Do not restore the legacy static recovery-secret shortcut or recovery-code logging. Halt status remains a snapshot; restart durability and cross-instance behavior require testing.
+- Keep truthful unavailable whale/flow response, rather than fabricated transactions or CMC-volume-derived wallet transfers. Preserve verified historical candle request handling (503 on unavailable historical data), explicitly simulated non-executable chart fallback, and read-only early-volume research.
+- Keep bounded SSE capacity/backpressure, authenticated trading-architecture registration/audit writes and maintenance order gate.
+- Keep owner-only access to the currently process-global vault, and production denial of browser-submitted manual gain. This is containment, not a trusted per-user ledger.
+
+Added four source-level regression tests containing 27 preflight-validated source assertions in commit `87faa0a3`. Full test suite and workflow results must be verified against the subsequent exact head.
+
+**Original recorded semantic-review queue: zero paths remaining for this snapshot.** This is completion of the documented source-preservation decisions, not a claim of exhaustive security review, runtime equivalence, or deployability. Next stage: financial ledger security (tenant isolation, server-authoritative settlement, client-write restriction, migration, idempotency and emulator tests). Historical/current credential triage, deployed cloud controls, browser/integration testing and isolated staging remain separate mandatory gates. No production deployment, merge, original Studio import, or LIVE trading activation. Keep PR Draft.
