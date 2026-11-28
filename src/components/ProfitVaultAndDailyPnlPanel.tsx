@@ -282,7 +282,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     if (!verifiedUid || !vaultSyncSignature) return;
 
     let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let retryTimer: number | null = null;
 
     const drainCloudSync = async () => {
       if (syncInFlightRef.current) {
