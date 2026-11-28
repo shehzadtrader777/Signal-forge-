@@ -15085,7 +15085,7 @@ async function startServer() {
     });
   });
 
-  app.post('/api/fable/evolve', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+  app.post('/api/fable/evolve', requireOperatorAuth, requireMasterControlOwner, standardWriteRateLimit, (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const paramRaw = String(body.parameterToMutate || 'stopAtrMult');
     const parameterToMutate =
@@ -15107,7 +15107,7 @@ async function startServer() {
     return res.json(result);
   });
 
-  app.post('/api/fable/risk/evaluate', standardWriteRateLimit, (req, res) => {
+  app.post('/api/fable/risk/evaluate', requireOperatorAuth, requireMasterControlOwner, standardWriteRateLimit, (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const familyRaw = String(body.family || 'MOMENTUM').toUpperCase();
     const family =
@@ -15138,7 +15138,7 @@ async function startServer() {
     return res.json(result);
   });
 
-  app.post('/api/fable/options/price', standardWriteRateLimit, (req, res) => {
+  app.post('/api/fable/options/price', requireOperatorAuth, requireMasterControlOwner, standardWriteRateLimit, (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const optionType = String(body.optionType || 'PUT').toUpperCase() === 'CALL' ? 'CALL' : 'PUT';
     const spotPrice = Number(body.spotPrice) || 91_400;
@@ -15163,17 +15163,8 @@ async function startServer() {
     return res.json(result);
   });
 
-  app.post('/api/fable/deployment/approve-live', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
-    if (!realMoneyExecutionAllowed()) {
-      return res.status(423).json({ ok: false, code: 'LIVE_TRADING_DISABLED' });
-    }
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const result = fableOrchestrator.approveLiveDeployment({
-      versionId: String(body.versionId || '').trim(),
-      approvalToken: String(body.approvalToken || '').trim(),
-      operatorName: String(body.operatorName || 'Lead Operator').trim(),
-    });
-    return res.status(result.statusCode).json(result);
+  app.post('/api/fable/deployment/approve-live', requireOperatorAuth, standardWriteRateLimit, (_req, res) => {
+    return res.status(423).json({ ok: false, code: 'LIVE_TRADING_DISABLED' });
   });
 
   app.get('/api/fable/python-source', (req, res) => {

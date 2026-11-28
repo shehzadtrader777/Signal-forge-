@@ -31,7 +31,6 @@ import {
 export interface FableDeploymentTicket {
   readonly versionId: string;
   readonly stage: FableDeploymentStage;
-  readonly approvalToken: string;
   readonly stagedAtIso: string;
   readonly approvedAtIso: string | null;
   readonly approvedBy: string | null;
@@ -80,13 +79,6 @@ const ALLOWLISTED_PYTHON_MODULES: readonly {
     layerSummary: 'Layer 8 Strategic Memory SQLite, Streamlit UI & Discord Reporter',
   },
 ]);
-
-function safeTokenCompare(a: string, b: string): boolean {
-  const bufA = Buffer.from(String(a || ''), 'utf8');
-  const bufB = Buffer.from(String(b || ''), 'utf8');
-  if (bufA.length === 0 || bufA.length !== bufB.length) return false;
-  return crypto.timingSafeEqual(bufA, bufB);
-}
 
 /**
  * Stateful Server Runtime for Signal Forge Fable 5.2 8-Layer Self-Improving Orchestrator.
@@ -191,7 +183,6 @@ export class FableOrchestratorRuntime {
     return {
       versionId,
       stage: 'PAPER_TRADING',
-      approvalToken: crypto.randomBytes(16).toString('hex'),
       stagedAtIso: new Date().toISOString(),
       approvedAtIso: null,
       approvedBy: null,
@@ -375,59 +366,9 @@ export class FableOrchestratorRuntime {
     return { ok: true, valuation, ivSurface, snapshot: this.getSnapshot() };
   }
 
-  approveLiveDeployment(input: {
-    readonly versionId: string;
-    readonly approvalToken: string;
-    readonly operatorName: string;
-  }): {
-    readonly ok: boolean;
-    readonly statusCode: number;
-    readonly error?: string;
-    readonly snapshot: FableOrchestratorSnapshot;
-  } {
-    if (this.deploymentTicket.versionId !== input.versionId) {
-      return {
-        ok: false,
-        statusCode: 404,
-        error: `No Paper Trading deployment ticket found for version '${input.versionId}'.`,
-        snapshot: this.getSnapshot(),
-      };
-    }
-    if (this.deploymentTicket.stage === 'LIVE_APPROVED') {
-      return {
-        ok: false,
-        statusCode: 409,
-        error: `Version '${input.versionId}' is already approved for Live deployment.`,
-        snapshot: this.getSnapshot(),
-      };
-    }
-    if (!safeTokenCompare(this.deploymentTicket.approvalToken, input.approvalToken)) {
-      return {
-        ok: false,
-        statusCode: 403,
-        error: 'Mandatory human approval rejected: invalid confirmation token.',
-        snapshot: this.getSnapshot(),
-      };
-    }
-
-    const operator = String(input.operatorName || 'Lead Operator').trim().slice(0, 64) || 'Lead Operator';
-    this.deploymentTicket = {
-      ...this.deploymentTicket,
-      stage: 'LIVE_APPROVED',
-      approvedAtIso: new Date().toISOString(),
-      approvedBy: operator,
-    };
-
-    this.recordMemory({
-      layer: 'LAYER_7_DEPLOYMENT',
-      eventType: 'LIVE_APPROVED',
-      versionId: this.deploymentTicket.versionId,
-      oosSharpe: this.validationHistory[0]?.v2Oos.sharpeRatio ?? this.families[2].oosSharpe,
-      oosMaxDrawdownPct: this.validationHistory[0]?.v2Oos.maxDrawdownPct ?? 0.032,
-      summary: `Human operator '${operator}' explicitly approved ${this.deploymentTicket.versionId} for Live Deployment.`,
-    });
-
-    return { ok: true, statusCode: 200, snapshot: this.getSnapshot() };
+  // Live approval is deliberately unavailable in this research runtime.
+  approveLiveDeployment(): { readonly ok: false; readonly statusCode: 423; readonly error: string; readonly snapshot: FableOrchestratorSnapshot } {
+    return { ok: false, statusCode: 423, error: 'LIVE_TRADING_DISABLED', snapshot: this.getSnapshot() };
   }
 
   readAllowlistedPythonFile(fileId: string): {

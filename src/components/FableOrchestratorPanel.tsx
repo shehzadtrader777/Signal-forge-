@@ -40,7 +40,6 @@ import {
 interface FableDeploymentTicketView {
   readonly versionId: string;
   readonly stage: 'PAPER_TRADING' | 'LIVE_APPROVED';
-  readonly approvalToken: string;
   readonly stagedAtIso: string;
   readonly approvedAtIso: string | null;
   readonly approvedBy: string | null;
@@ -205,37 +204,6 @@ export const FableOrchestratorPanel = memo(function FableOrchestratorPanel() {
     }
   }, [evolveRegime, mutateParam, mutateValue]);
 
-  const handleApproveLive = useCallback(async () => {
-    if (!snapshot) return;
-    setBusyAction('approve-live');
-    setNotice(null);
-    try {
-      const res = await apiFetch('/api/fable/deployment/approve-live', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          versionId: snapshot.deploymentTicket.versionId,
-          approvalToken: snapshot.deploymentTicket.approvalToken,
-          operatorName: 'Amir Shehzad · Lead Operator',
-        }),
-      });
-      const data = (await res.json()) as FableApiResponse;
-      if (data.snapshot) setSnapshot(data.snapshot);
-      if (data.ok) {
-        setNotice({
-          tone: 'success',
-          text: `Layer 7 Human Approval verified — ${snapshot.deploymentTicket.versionId} cleared for Live Deployment.`,
-        });
-      } else {
-        setNotice({ tone: 'error', text: data.error ?? 'Live approval failed.' });
-      }
-    } catch {
-      setNotice({ tone: 'error', text: 'Network error approving live deployment.' });
-    } finally {
-      setBusyAction(null);
-    }
-  }, [snapshot]);
-
   const handleEvaluateRisk = useCallback(async () => {
     const sharpe = Number(riskSharpe);
     const spreadBps = Number(riskSpreadBps);
@@ -249,7 +217,7 @@ export const FableOrchestratorPanel = memo(function FableOrchestratorPanel() {
     setBusyAction('risk');
     setNotice(null);
     try {
-      const res = await fetch('/api/fable/risk/evaluate', {
+      const res = await apiFetch('/api/fable/risk/evaluate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -293,7 +261,7 @@ export const FableOrchestratorPanel = memo(function FableOrchestratorPanel() {
     setBusyAction('options');
     setNotice(null);
     try {
-      const res = await fetch('/api/fable/options/price', {
+      const res = await apiFetch('/api/fable/options/price', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -596,7 +564,7 @@ export const FableOrchestratorPanel = memo(function FableOrchestratorPanel() {
                   </div>
 
                   <p className="text-xs text-slate-400 leading-relaxed">
-                    Every validated version stages in Paper Trading first. Live deployment cannot execute autonomously and requires explicit human sign-off verified by constant-time token matching.
+                    Every validated version stages in Paper Trading first. Live approval is disabled in this research release; a separate independently reviewed approval system is required.
                   </p>
 
                   <div className="rounded-md border border-slate-800 bg-[#080f1f] p-3 space-y-1 font-mono text-[11px]">
@@ -604,12 +572,7 @@ export const FableOrchestratorPanel = memo(function FableOrchestratorPanel() {
                       <span className="text-slate-400">Staged Version</span>
                       <span className="text-white">{snapshot.deploymentTicket.versionId}</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Approval Token</span>
-                      <span className="text-cyan-400">
-                        {snapshot.deploymentTicket.approvalToken.slice(0, 12)}...
-                      </span>
-                    </div>
+                    <div className="flex justify-between"><span className="text-slate-400">Live approval</span><span className="text-amber-300">LOCKED</span></div>
                     {snapshot.deploymentTicket.approvedBy && (
                       <div className="flex justify-between">
                         <span className="text-slate-400">Approved By</span>
@@ -621,22 +584,7 @@ export const FableOrchestratorPanel = memo(function FableOrchestratorPanel() {
                   </div>
                 </div>
 
-                <ForgeInteractiveButton
-                  label={
-                    snapshot.deploymentTicket.stage === 'LIVE_APPROVED'
-                      ? 'Live Deployment Approved'
-                      : busyAction === 'approve-live'
-                      ? 'Verifying Sign-Off...'
-                      : 'Human Sign-Off: Approve Live'
-                  }
-                  icon={<Check className="h-3.5 w-3.5" />}
-                  intent="primary"
-                  disabled={
-                    snapshot.deploymentTicket.stage === 'LIVE_APPROVED' || busyAction !== null
-                  }
-                  onClick={() => void handleApproveLive()}
-                  testId="fable-approve-live-btn"
-                />
+                <p data-testid="fable-approve-live-btn" role="status" className="text-xs text-amber-300">Live deployment locked — Paper Trading only.</p>
               </div>
             </div>
           </div>
