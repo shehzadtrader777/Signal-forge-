@@ -99,3 +99,19 @@ The Studio export's `isValidUserProfile` allows only `uid`, `email`, `displayNam
 Direct active-source comparison of the Studio ZIP and reconciled `src/components/ModularBacktestMatrixPanel.tsx` confirms both retain the stable `paramsRef`-based `runMatrix` effect, the matrix/optimization request handlers, and the same principal controls. GitHub adds the prominent `synthetic-matrix-disclosure` banner explaining that the matrix uses deterministic simulated trades and illustrative strategy probabilities, **not** verified historical performance, and recommending matched historical data, fees/slippage and out-of-sample checks. That specific disclosure was absent from the Studio export. GitHub also adds React stability commentary and positions the stable `MATRIX_BTN_TAP` constant before the horizon list.
 
 **Decision:** preserve GitHub's clearer research-only disclosure and reviewed effect behavior, not the older Studio copy. An explicit test in `src/lib/studioReactReconciliation.test.ts` guards the truthful disclosure and parameter reference. This is one UI source decision; it does not transform simulated outputs into actual validated returns.
+
+### Runtime and navigation batch: five additional source decisions
+
+Reviewed the owner-held active 27 November 04:59 ZIP against exact baseline GitHub head `7f7403b16c5d667bca42404fdf57f9df74c041ca`. For four files, compared sequential 16-line UTF-8 block fingerprints using FNV-1a 64-bit, then directly inspected both versions of every unmatched block. Rust main was reviewed directly in full. Fingerprints are comparison aids, not a cryptographic attestation.
+
+| File | Review result / preservation decision |
+| --- | --- |
+| `src/lib/executionPipeline.ts` | 490/522 Studio split-lines in matched blocks; reviewed both remaining blocks. Studio used `supportConfirmed && status === 'MONITORING_SUPPORT'` to mark pre-pump execution eligible. GitHub explicitly sets `autoExecuteEligible: false` and `verificationStatus: 'UNVERIFIED_VOLUME'`. Preserve fail-closed GitHub behavior; ticker-derived estimates cannot authorize orders. |
+| `src/lib/hybridArchitectureServer.ts` | 722/738 Studio split-lines matched; the remaining block requires a successful handshake **and** exact `RUST_UDS_IPC` transport in GitHub. Studio accepted any truthy IPC ok, including fallback. Preserve explicit failed state and error for unverified transport. |
+| `hybrid_core/rust_engine/src/main.rs` | Preserve GitHub 2-second socket read/write timeouts, finite-risk-envelope guard, and explicit u64-to-u128 conversion in timestamp arithmetic. Studio lacked these hardening changes. This remains the paper/simulation daemon. |
+| `src/components/SideMenuDrawer.tsx` | 418/434 Studio split-lines matched; GitHub adds Welcome & Super Guide and Plans & Roadmap menu entries consistent with the already reviewed App routes. Preserve both. |
+| `src/pages/Alerts.tsx` | 397/461 Studio split-lines matched; GitHub builds the symbol selector from known coins, top gainers and ticker keys through `buildBacktestResearchUniverse`, rather than static `TRACKED_COINS`, and uses a neutral recipient placeholder. Preserve GitHub expanded selector. |
+
+No Studio-only functionality was found in the reviewed differences for these five files. Kept existing implementation; new **source-level** regression guards in `src/lib/studioReactReconciliation.test.ts` commit `39b128b8` complement existing execution and IPC tests. Fresh CI must verify the new head.
+
+**Remaining original semantic-review paths:** `server.ts`, `src/context/AppContext.tsx`, `src/lib/firebase.ts`, `src/pages/Backtesting.tsx`, and `src/pages/Dashboard.tsx`. The separate authoritative financial ledger, deployed Firebase rules, credential investigation, and isolated staging/approval gates remain open. Do not mistake completion of source-difference reviews for production readiness. No merge, Studio sync, deployment, or live execution.
