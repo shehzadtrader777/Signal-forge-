@@ -291,6 +291,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
           resyncRequestedRef.current = false;
           const currentVault = latestVaultRef.current;
           if (!currentVault || cancelled) break;
+          let syncedAny = false;
 
           if (currentVault.stateVersion > lastSyncedVaultVersionRef.current) {
             await saveVaultLockerSnapshotToFirestore(verifiedUid, {
@@ -304,10 +305,10 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
               stateVersion: currentVault.stateVersion,
             });
             lastSyncedVaultVersionRef.current = currentVault.stateVersion;
+            syncedAny = true;
           }
 
           const recentDays = currentVault.dailyHistory.slice(-14);
-          let syncedAny = false;
           for (const day of recentDays) {
             if (cancelled) break;
             if (lastSyncedDailyHashRef.current.get(day.dateKey) === day.recordHash) continue;
