@@ -39,7 +39,7 @@ Updated: 2026-11-27. This is a release procedure, not proof of deployment.
 - Latest Studio export (owner-held): 27 November 2026, 04:59 local snapshot. Active source tree contains 322 files; 273 matched the original reconciliation commit exactly, 49 diverged, and 80 GitHub-only protective files must be preserved. Subsequent three-way analysis classified older main-equivalent files and minor formatting differences, but substantial source conflicts and system trust boundaries remain.
 - The reviewed GitHub reconciliation PR can have green CI without being a complete AI Studio import. Passing PR checks only certifies the code on that exact GitHub SHA, not the unmerged Studio snapshot.
 - **Manual browser-submitted realized gain** is denied in production and by default in nonproduction. The only permitted temporary exception is explicitly enabling the unverified research demonstration on an isolated nonproduction host; it does not verify exchange settlement.
-- **Cloud PnL/vault records are not a verified ledger:** the Firestore rules currently permit authenticated client writes to financial data and the UI retains direct Firebase write paths. Do not present these as server-authoritative capital/settlement balances. Before release, add a trusted server/Admin SDK write path with audited settlement provenance, a migration for existing demo documents, and Firebase emulator tests proving forged but schema-valid financial writes are rejected.
+- **Cloud PnL/vault records are not a verified ledger:** the earlier Firestore rules permitted authenticated client writes and the UI retained direct Firebase write paths; commit 4786f228 now denies these writes in source and removes those UI paths. The deployed rules are not verified. Do not present these as server-authoritative capital/settlement balances. Before release, add a trusted server/Admin SDK write path with audited settlement provenance, a migration for existing demo documents, and Firebase emulator tests proving forged but schema-valid financial writes are rejected.
 - Perform owner-controlled full-history secrets investigation and rotate any exposed credentials before a public release; GitHub ignore patterns cannot retract historical leaks.
 - Independently validate operator/role gates, Firestore production rules, market feed provenance, rollback behavior, and end-to-end smoke tests. Obtain written product/security signoff for the complete combined source commit.
 - The original AI Studio app remains linked to the older default branch. Because changes exist on both sides, **never directly click Pull or Push on the original app as a reconciliation shortcut**. Preserve a fresh Studio export, first test the reviewed reconciled source in an isolated staging import/project, and only adopt it after functional parity, explicit backups, and approval.
@@ -49,7 +49,7 @@ Updated: 2026-11-27. This is a release procedure, not proof of deployment.
 
 | Gate | Proof required | Current state |
 | --- | --- | --- |
-| Studio semantic conflict reconciliation | Reviewed 3-way changes plus feature parity tests | Open |
+| Studio semantic conflict reconciliation | Reviewed 3-way changes plus feature parity tests | Recorded source-review queue closed; staging parity open |
 | Financial ledger authority | Trusted server-side settlement source + rules emulator rejection | Open |
 | Historical secret scan and rotation | Private findings triage / remediation log | Open |
 | Full merged-source CI | Exact candidate SHA + success across workflows | Open |
@@ -69,3 +69,12 @@ Until vault/PnL data has a verified **per-user, server-authoritative settlement 
 - `POST /api/vault/manual-override`
 
 This intentionally means non-owner operators will not be able to use the legacy shared Vault UI/API, instead of being allowed to view or mutate a global financial snapshot. Before restoring multi-user access, design explicit `userId` partitioning and server-authenticated ledger write/read authorization, migrate data safely, and test cross-user isolation, replay and financial invariants in an emulator or staging runtime. **Green repository CI does not attest to deployed Firebase rules or production financial provenance.**
+
+
+### Phase 2 financial ledger containment and isolated foundation
+
+Commit `4786f228` removes active browser PnL/vault writes and legacy-record mixing from the dashboard, denies all client create/update/delete operations in both legacy financial Firestore rule blocks, and marks the shared owner-only simulation and CSV export as unverified research. Existing legacy documents are not deleted or promoted into the new ledger. This is a deliberate temporary reduction in cloud persistence, not a regression to unsafe writes.
+
+The server-only `financialSettlementLedgerServer.mjs` foundation uses SQLite transactions, exact integer micro-USD amounts, owner/account binding, durable unique settlement identities, conflict rejection and tenant-scoped aggregate reads. It requires an independently supplied verifier, has no default verifier, and is **not imported by the running application or exposed through an HTTP write/read route**. Fixture tests cover malformed/unverified inputs, duplicate and conflicting replay, account reassignment, cross-tenant isolation and restart persistence. Test fixtures do not prove real exchange settlement provenance.
+
+**Financial release gate remains OPEN:** implement and independently verify exchange fill/settlement adapters, immutable exchange-account-to-Firebase UID enrollment, server-authenticated read access with no caller-selected tenant, persistent storage durability and backup/recovery, safe legacy data quarantine/migration (never promote legacy balances), Firebase emulator rule tests, and deployed account-level controls. Do not claim the foundation is integrated or authoritative for user money. No live credentials, trading, or financial migrations are performed. Keep the draft PR and main isolation intact.
