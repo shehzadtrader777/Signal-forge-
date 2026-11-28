@@ -487,7 +487,8 @@ export async function getCurrentFirebaseIdToken(forceRefresh = false): Promise<s
   try {
     const user = auth.currentUser;
     if (!user) return null;
-    return await user.getIdToken(forceRefresh);
+    const token = await user.getIdToken(forceRefresh);
+    return auth.currentUser === user ? token : null;
   } catch {
     return null;
   }
