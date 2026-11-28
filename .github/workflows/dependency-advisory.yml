@@ -1,0 +1,20 @@
+name: Locked Dependency Advisory Gate
+on:
+  push:
+    branches: [reconciliation/studio-2026-11-27]
+  pull_request:
+    branches: [main, master]
+permissions:
+  contents: read
+jobs:
+  js_advisories:
+    name: JavaScript lockfile advisory scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+      - name: Check locked JavaScript dependencies for high and critical advisories
+        run: bun audit --audit-level=high
