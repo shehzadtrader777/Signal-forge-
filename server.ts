@@ -1076,6 +1076,13 @@ async function requireOperatorAuth(
     return next();
   }
 
+  // Explicit Firebase credentials take precedence over older cookie/header sessions.
+  if (extractFirebaseIdTokenFromRequest(req)) {
+    const principal = await resolveCallerPrincipal(req);
+    const identity = buildRbacIdentity(principal, extraAdminEmailsFromEnv);
+    if (identity.authenticated && isPrivilegedOperatorRole(identity.role)) return next();
+    return res.status(identity.authenticated ? 403 : 401).json({ ok: false, code: 'CURRENT_IDENTITY_NOT_OPERATOR' });
+  }
   const headerClaims = verifyOperatorSessionToken(req.headers['x-signal-session']);
   if (headerClaims) {
     return next();
@@ -1129,6 +1136,11 @@ async function requireOperatorAuth(
 async function isRequestAuthenticatedOwnerOrOperator(req: express.Request): Promise<boolean> {
   if (hasConfiguredOperatorToken(req)) {
     return true;
+  }
+  if (extractFirebaseIdTokenFromRequest(req)) {
+    const principal = await resolveCallerPrincipal(req);
+    const identity = buildRbacIdentity(principal, extraAdminEmailsFromEnv);
+    return Boolean(identity.authenticated && isPrivilegedOperatorRole(identity.role));
   }
   if (verifyOperatorSessionToken(req.headers['x-signal-session'])) {
     return true;
@@ -4913,6 +4925,7 @@ async function startServer() {
     const identity = buildRbacIdentity(principal, extraAdminEmailsFromEnv);
     const grant = evaluateOperatorSessionGrant(identity);
     if (!grant.allowed || !identity.uid || !isPrivilegedOperatorRole(identity.role)) {
+      res.setHeader('Set-Cookie', 'sf_session=; HttpOnly; Secure; SameSite=None; Partitioned; Path=/api; Max-Age=0');
       return res.status(grant.httpStatus).json({
         ok: false,
         code: grant.code,
@@ -4926,6 +4939,13 @@ async function startServer() {
       `sf_session=${encodeURIComponent(token)}; HttpOnly; Secure; SameSite=None; Partitioned; Path=/api; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
     );
     return res.json({ ok: true, token, expiresAtMs, role: identity.role });
+  });
+
+  // Clear the legacy browser cookie on logout; this does not revoke copied bearer tokens.
+  app.post('/api/auth/session/logout', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Set-Cookie', 'sf_session=; HttpOnly; Secure; SameSite=None; Partitioned; Path=/api; Max-Age=0');
+    return res.json({ ok: true });
   });
 
   // Strict Subscription Gatekeeper Endpoints

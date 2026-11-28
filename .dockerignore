@@ -16,3 +16,10 @@ dist
 *.zip
 *.pem
 *.key
+*.p12
+*.pfx
+*service-account*.json
+*serviceAccount*.json
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

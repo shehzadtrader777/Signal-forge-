@@ -324,6 +324,11 @@ export async function signUpWithEmail(
 export async function signOutUser(): Promise<void> {
   ensuredProfileInFlight.clear();
   await signOut(auth);
+  const { clearCachedOperatorSession } = await import('./apiClient');
+  clearCachedOperatorSession();
+  try {
+    await fetch('/api/auth/session/logout', { method: 'POST', credentials: 'same-origin', redirect: 'error', headers: { 'X-Requested-With': 'XMLHttpRequest' }, signal: AbortSignal.timeout(3000) });
+  } catch { /* Local Firebase logout remains complete; server cookie expiry is bounded. */ }
 }
 
 export function subscribeAuth(callback: (user: User | null) => void): Unsubscribe {

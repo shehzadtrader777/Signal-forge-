@@ -100,7 +100,7 @@ export async function apiFetch(input: string, init: RequestInit = {}): Promise<R
   let fbToken = await getFirebaseIdTokenLazy(false);
   let token = await ensureOperatorSessionToken(false, fbToken);
   if (fbToken && fbToken !== await getFirebaseIdTokenLazy(false)) throw new Error('AUTH_IDENTITY_CHANGED');
-  let res = await fetch(input, { ...init, credentials: 'same-origin', redirect: 'error', headers: makeHeaders(token, fbToken) });
+  let res = await fetch(input, { ...init, credentials: fbToken ? 'same-origin' : 'omit', redirect: 'error', headers: makeHeaders(token, fbToken) });
   if (res.status === 401 && fbToken && !isMutating) {
     clearCachedOperatorSession();
     fbToken = await getFirebaseIdTokenLazy(true);
