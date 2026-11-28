@@ -271,3 +271,28 @@ test('failed Firestore persistence retries with bounded backoff and timer cleanu
     'Retry trigger must be an effect dependency');
   assert.ok(panel.includes('cloudSyncRetryAttemptRef.current = 0'), 'Success/account change must reset the backoff');
 });
+
+test('overlapping cloud sync requests replay when prior effect settles', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const panel = fs.readFileSync(
+    path.resolve(import.meta.dirname, '..', 'components', 'ProfitVaultAndDailyPnlPanel.tsx'),
+    'utf8'
+  );
+  assert.ok(panel.includes('syncInFlightPromiseRef = useRef<Promise<void> | null>(null)'),
+    'Overlapping writers need a shared completion promise');
+  assert.ok(panel.includes('const previous = syncInFlightPromiseRef.current;'),
+    'New effect must observe the active writer');
+  assert.ok(panel.includes('void previous.finally(() => {'),
+    'New effect must resume after prior writer finishes');
+  assert.ok(panel.includes('if (!cancelled) setCloudSyncRetryTick((tick) => tick + 1)'),
+    'Only a still-mounted effect can schedule the deferred sync');
+  assert.ok(panel.includes('syncInFlightPromiseRef.current = running'),
+    'Writer completion must be tracked');
+  assert.ok(panel.includes('if (syncInFlightPromiseRef.current === running) syncInFlightPromiseRef.current = null'),
+    'Completion must release its own promise without clobbering a successor');
+  assert.ok(panel.includes('if (cancelled) break;\n            lastSyncedVaultVersionRef.current'),
+    'Cancelled writer must not mark a vault version for the next account');
+  assert.ok(panel.includes('if (cancelled) break;\n            lastSyncedDailyHashRef.current'),
+    'Cancelled writer must not mark daily hashes for the next account');
+});
