@@ -193,3 +193,31 @@ test('Firestore upserts use atomic runTransaction with path locking and single-f
   assert.ok(vaultPanelSrc.includes('vaultSyncSignature'), 'Panel must gate sync by content signature');
   assert.ok(vaultPanelSrc.includes('syncInFlightRef'), 'Panel must enforce single-flight cloud sync');
 });
+
+test('failed financial Firestore writes must reject so UI cannot falsely mark cloud sync successful', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const root = path.resolve(import.meta.dirname, '..', '..');
+  const src = fs.readFileSync(path.join(root, 'src/lib/firebase.ts'), 'utf8');
+  const functions = [
+    'saveDailyPnlRecordToFirestore',
+    'saveVaultLockerSnapshotToFirestore',
+  ];
+  for (const name of functions) {
+    const start = src.indexOf(`export async function ${name}(`);
+    assert.ok(start >= 0, `Missing financial cloud sync function: ${name}`);
+    const remainder = src.slice(start);
+    const nextExport = remainder.indexOf('\nexport ', 10);
+    const body = nextExport === -1 ? remainder : remainder.slice(0, nextExport);
+    assert.match(body, /throw new Error\([^)]*verified matching user/, `${name} must reject auth failures`);
+    assert.match(body, /catch \(error\) \{[\s\S]*?handleFirestoreError\(error, OperationType\.WRITE, path\);\s*throw error;/,
+      `${name} must rethrow write errors after reporting them`);
+  }
+  const dailyStart = src.indexOf('export async function saveDailyPnlRecordToFirestore(');
+  const vaultStart = src.indexOf('export async function saveVaultLockerSnapshotToFirestore(');
+  const daily = src.slice(dailyStart, vaultStart);
+  assert.match(daily, /if \(!sanitized\) throw new Error/, 'Invalid daily PnL records must reject instead of silently succeeding');
+  const panel = fs.readFileSync(path.join(root, 'src/components/ProfitVaultAndDailyPnlPanel.tsx'), 'utf8');
+  assert.ok(panel.includes('await saveVaultLockerSnapshotToFirestore('));
+  assert.ok(panel.includes('await saveDailyPnlRecordToFirestore('));
+});
