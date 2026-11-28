@@ -57,3 +57,10 @@ At `e0ce8c6`, the application, hybrid, emulator and history workflows succeeded;
 ### Registry-generated patch accepted for exact-head regression
 
 At `07efbef`, four existing workflows passed, and the original advisory remained red. The disposable patch job succeeded (run 46129238571, job 140930625070), with frozen install and Bun audit reporting no vulnerabilities found across 494 packages. Reviewed and applied the exact emitted five-hunk diff to the two tracked files using strict context checks. Changes are limited to the 1.13.6 gRPC override, regenerated gRPC entry and integrity, its ordered-map transitive dependency, and lockfile alignment of the existing pinned Zustand manifest version. The override is outside Firestore's declared gRPC range. Full exact-head compatibility verification, including genuine authenticated staging against the actual application Firebase SDK, remains required. The isolated emulator harness uses its own test SDK and does not alone prove application SDK compatibility. No merge or release authorization.
+
+
+### Committed advisory remediation and locked SDK compatibility gate
+
+Exact baseline `29c14bc`: all five workflows succeeded, including the committed dependency scan (run 46129668884, job 140931843469), reporting no vulnerabilities found across 494 packages at the high audit threshold. The temporary patch-generation job was correctly skipped because the original audit passed. The application, browser/container, Firebase rules and history workflows also passed.
+
+Extended the Firestore emulator workflow to install the actual application lockfile in a separate disposable subdirectory with a frozen install and disabled lifecycle scripts. A second test script checks the installed Firebase 13.3.0 SDK and Firestore-resolved gRPC 1.13.6, exercises reads, updates and explicit permission-denied errors with synthetic owner/other/guest identities against the same local demo emulator. No real Firebase Auth, production settings, or external provider credentials are used. New exact-head test results pending. This remains a local SDK compatibility check, not authenticated production staging clearance.
