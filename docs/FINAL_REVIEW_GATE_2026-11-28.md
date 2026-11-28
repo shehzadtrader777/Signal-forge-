@@ -52,3 +52,8 @@ At `cd5cbde`, existing application, Firebase, history audit and hybrid workflows
 ### Candidate job trigger correction
 
 At `e0ce8c6`, the application, hybrid, emulator and history workflows succeeded; the advisory job failed and the candidate job was skipped (run 46128847416). Removed the additional event/ref predicate that could exclude the pull-request run. The candidate job now executes following a failed advisory job on either existing workflow trigger. It still has read-only contents permission, checkout credential persistence disabled, install scripts disabled, and no push, deployment, secret access or release approval. The original audit remains blocking, and no application dependency has yet been upgraded. The exact new run must be inspected before accepting any generated patch.
+
+
+### Registry-generated patch accepted for exact-head regression
+
+At `07efbef`, four existing workflows passed, and the original advisory remained red. The disposable patch job succeeded (run 46129238571, job 140930625070), with frozen install and Bun audit reporting no vulnerabilities found across 494 packages. Reviewed and applied the exact emitted five-hunk diff to the two tracked files using strict context checks. Changes are limited to the 1.13.6 gRPC override, regenerated gRPC entry and integrity, its ordered-map transitive dependency, and lockfile alignment of the existing pinned Zustand manifest version. The override is outside Firestore's declared gRPC range. Full exact-head compatibility verification, including genuine authenticated staging against the actual application Firebase SDK, remains required. The isolated emulator harness uses its own test SDK and does not alone prove application SDK compatibility. No merge or release authorization.
