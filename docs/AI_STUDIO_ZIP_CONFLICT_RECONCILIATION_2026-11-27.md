@@ -56,3 +56,14 @@ These checks are not a TypeScript compiler run, full integration test, dependenc
 The Studio ZIP's `README.md` is the generic “Run and deploy your AI Studio app” starter README, while the reconciliation branch's `README.md` documents Signal Forge project scope, authentication/security boundaries, dev commands, research/paper-only limits, ownership/license caveats, and workflow verification. **Decision: retain the reconciliation branch's README**; no functional behavior is changed by this decision.
 
 This removes one documentation-only discrepancy from the outstanding semantic-review queue. **18 substantive source discrepancies remain**, plus independent credential, deployed Firebase and financial-authorization review. This decision **does not** authorize merge, production deploy or AI Studio sync.
+
+### Security conflict decision: reject Studio UID-only administrator elevation
+
+Studio's older `src/lib/rbac.ts` directly assigned `SUPER_ADMIN` for the user-controllable-looking UIDs `operator-cli-token` and `ci-operator-automation`. The reconciled GitHub implementation explicitly **does not** infer admin permissions from these UID strings and instead requires separately verified, server-controlled authorization. **Preserve the reconciled version**; never restore the Studio UID bypass. The existing `src/lib/rbacSecurity.test.ts` checked the first UID; an additional negative test for the second UID was committed as `63fae9d982d61cd7f251d869a8f36c341ba22dae`. This is a security-specific preservation decision; deployment-level RBAC hardening still needs independent review.
+
+### UI conflict decisions: preserve previously reconciled stability fixes
+
+- `src/components/AgentLoopTelemetryPanel.tsx` — the reconciled code retains stable `REFRESH_BTN_TAP` and pauses polling when the page is hidden, plus explicitly discards the ignored async polling promise with `void`; do not revert.
+- `src/components/MultiScreenWorkspaceBar.tsx` — both source versions use stable top-level `PRESET_BTN_TAP` and `PANEL_BTN_TAP` constants. Preserve the reviewed reconciliation component and avoid unrelated UI rewrites pending visual QA.
+
+These decisions reduce the source paths requiring *further* comparison, but **do not prove whole-app behavioral equivalence**. The major backend/Firestore/financial/trading/UI routing conflicts and secret-scan findings still block main merge and Google AI Studio synchronization.
