@@ -18,3 +18,32 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - name: Check locked JavaScript dependencies for high and critical advisories
         run: bun audit --audit-level=high
+
+  candidate:
+    needs: js_advisories
+    if: ${{ always() && needs.js_advisories.result == 'failure' && github.event_name == 'push' && github.ref == 'refs/heads/reconciliation/studio-2026-11-27' }}
+    name: Generate and verify a disposable patched lockfile
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+      - name: Resolve a narrowly scoped gRPC override
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module -e 'import fs from "node:fs";const p=JSON.parse(fs.readFileSync("package.json","utf8"));p.overrides={...p.overrides,"@grpc/grpc-js":"1.13.6"};fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n")'
+          bun install --lockfile-only --ignore-scripts
+          bun install --frozen-lockfile --ignore-scripts
+          bun audit --audit-level=high
+      - name: Emit public dependency manifest and lockfile patch for review
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check -- package.json bun.lock
+          git diff --stat -- package.json bun.lock
+          echo 'BEGIN_GRPC_CANDIDATE_PATCH'
+          git -c color.ui=never diff --no-ext-diff -- package.json bun.lock
+          echo 'END_GRPC_CANDIDATE_PATCH'
