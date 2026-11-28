@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { resolveSessionSigningKey } from './serverSecurityPolicy.mjs';
+import { resolveSessionSigningKey, isManualVaultGainDemoEnabled } from './serverSecurityPolicy.mjs';
 
 test('production fails closed without signing key', () => {
   assert.throws(() => resolveSessionSigningKey({NODE_ENV:'production'}), /mandatory/);
@@ -39,4 +39,24 @@ test('Studio source-sync safety exclusions protect backups and credentials', () 
   }
   assert.match(ignore, /^\.env\*$/m);
   assert.match(ignore, /^\*service-account\*\.json$/m);
+});
+
+test('unverified manual vault gain is off by default and cannot run in production', () => {
+  assert.equal(isManualVaultGainDemoEnabled({}), false);
+  assert.equal(isManualVaultGainDemoEnabled({NODE_ENV: 'development'}), false);
+  assert.equal(isManualVaultGainDemoEnabled({NODE_ENV: 'production', ALLOW_UNVERIFIED_VAULT_GAIN_DEMO: 'true'}), false);
+  assert.equal(isManualVaultGainDemoEnabled({NODE_ENV: 'development', ALLOW_UNVERIFIED_VAULT_GAIN_DEMO: 'true'}), true);
+  assert.equal(isManualVaultGainDemoEnabled({NODE_ENV: 'test', ALLOW_UNVERIFIED_VAULT_GAIN_DEMO: 'TRUE'}), false);
+});
+
+test('manual PnL route enforces production-deny before importing unverified profit', () => {
+  const server = readFileSync(new URL('../../server.ts', import.meta.url), 'utf8');
+  const marker = "app.post('/api/vault/record-gain'";
+  const start = server.indexOf(marker);
+  assert.ok(start > 0);
+  const slice = server.slice(start, start + 2300);
+  const gateIndex = slice.indexOf('if (!isManualVaultGainDemoEnabled(process.env))');
+  const ingestIndex = slice.indexOf('profitVaultEngine.ingestRealizedTrade(');
+  assert.ok(gateIndex >= 0 && ingestIndex > gateIndex, 'Manual ingest must be gated before financial state mutation');
+  assert.ok(slice.includes("code: 'UNVERIFIED_VAULT_GAIN_DISABLED'"));
 });
