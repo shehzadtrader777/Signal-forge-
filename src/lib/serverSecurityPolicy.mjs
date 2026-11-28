@@ -15,3 +15,12 @@ export function resolveSessionSigningKey(env = process.env, generate = () => ran
   }
   return generate();
 }
+
+/**
+ * Browser-submitted realized PnL has no verified exchange settlement provenance.
+ * Keep this legacy manual-entry endpoint unavailable in production, even if an
+ * operator mistakenly enables the local demo switch.
+ */
+export function isManualVaultGainDemoEnabled(env = process.env) {
+  return env.NODE_ENV !== 'production' && env.ALLOW_UNVERIFIED_VAULT_GAIN_DEMO === 'true';
+}
