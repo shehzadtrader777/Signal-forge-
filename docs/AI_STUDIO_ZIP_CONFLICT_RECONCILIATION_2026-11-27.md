@@ -50,3 +50,9 @@ These are **preservation decisions**, not merges of new Studio logic. **45 other
 These checks are not a TypeScript compiler run, full integration test, dependency install, or CI pass for any combined source revision. Current/historical secret findings and Firebase cloud restrictions remain unresolved.
 
 **Merge gate: NOT CLEARED.** Keep PR Draft. No bulk overwrite, direct Studio Pull/Push, production deploy or LIVE trading activation. Resolve the remaining 45 conflicts, run CI/security checks on the exact merged candidate, and obtain independent approval before merge.
+
+### Additional low-risk conflict decision: preserve Signal Forge README
+
+The Studio ZIP's `README.md` is the generic “Run and deploy your AI Studio app” starter README, while the reconciliation branch's `README.md` documents Signal Forge project scope, authentication/security boundaries, dev commands, research/paper-only limits, ownership/license caveats, and workflow verification. **Decision: retain the reconciliation branch's README**; no functional behavior is changed by this decision.
+
+This removes one documentation-only discrepancy from the outstanding semantic-review queue. **18 substantive source discrepancies remain**, plus independent credential, deployed Firebase and financial-authorization review. This decision **does not** authorize merge, production deploy or AI Studio sync.
