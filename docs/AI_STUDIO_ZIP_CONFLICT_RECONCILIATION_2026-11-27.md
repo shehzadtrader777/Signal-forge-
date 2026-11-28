@@ -79,3 +79,9 @@ Reviewed the Studio ZIP's `src/components/AgentLoopTelemetryPanel.tsx` against t
 ### Multi-monitor workspace bar: stable motion constants preserved
 
 Compared the Studio ZIP with `src/components/MultiScreenWorkspaceBar.tsx` in the reconciled branch. Both use the same stable module-level `PRESET_BTN_TAP` and `PANEL_BTN_TAP` constants, and the same preset/reset/panel visibility button flow. GitHub adds explanatory safety commentary about keeping motion prop identities stable under high-frequency rerenders. **Decision: preserve reconciled GitHub version** with its regression coverage; do not replace it with the slightly older Studio export.
+
+### App.tsx route reconciliation: retain premium pages and global scroll manager
+
+Compared the **active** `src/App.tsx` from the owner-supplied 27 November 2026 04:59 Studio ZIP against the current reconciliation branch. The Studio export lacked `PremiumLanding` and `PlansPreview` imports and the `/welcome` and `/pricing` early page exits; the GitHub branch preserves those pages. Studio rendered `<RouteScrollManager />` inside `AppShell` after `SideMenuDrawer`, while the GitHub branch places one scroll manager directly inside `<BrowserRouter>` before `<AppProvider>`, covering the pre-login public pages as well. The protected Test Console routing and ordinary dashboard/navigation route map remain otherwise aligned in the reviewed section.
+
+**Decision:** preserve the newer GitHub route configuration and the globally mounted single scroll manager. A test in `src/lib/studioReactReconciliation.test.ts` now guards both premium pages, the route-manager instance count and placement. This decision resolves only the `src/App.tsx` reconciliation review; other UI and financial/Firestore conflicts remain.
