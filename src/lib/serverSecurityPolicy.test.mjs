@@ -64,7 +64,7 @@ test('manual PnL route enforces production-deny before importing unverified prof
 test('financial vault snapshot endpoint requires operator authorization', () => {
   const server = readFileSync(new URL('../../server.ts', import.meta.url), 'utf8');
   const panel = readFileSync(new URL('../components/ProfitVaultAndDailyPnlPanel.tsx', import.meta.url), 'utf8');
-  assert.match(server, /app\.get\('\/api\/vault\/state', requireOperatorAuth, \(_req, res\) => \{/);
+  assert.match(server, /app\.get\('\/api\/vault\/state', requireOperatorAuth, requireMasterControlOwner, \(_req, res\) => \{/);
   assert.ok(panel.includes("await apiFetch('/api/vault/state')"),
     'Vault panel must attach verified session headers before accessing financial snapshot');
   assert.ok(!panel.includes("await fetch('/api/vault/state')"),
@@ -83,4 +83,21 @@ test('financial vault client never persists shared snapshots or shows stale acco
     'Unauthorized snapshot must clear previously displayed balances');
   assert.ok(panel.includes('setVault(null);\n  }, [verifiedUid]'),
     'Account changes must clear in-memory vault state');
+});
+
+test('process-global vault endpoints require verified owner clearance until tenancy migration', () => {
+  const src = readFileSync(new URL('../../server.ts', import.meta.url), 'utf8');
+  const restrictedRoutes = [
+    "app.get('/api/vault/state'",
+    "app.post('/api/vault/config'",
+    "app.post('/api/vault/record-gain'",
+    "app.post('/api/vault/manual-override'",
+  ];
+  for (const marker of restrictedRoutes) {
+    const start = src.indexOf(marker);
+    assert.ok(start > 0, `Missing vault route: ${marker}`);
+    const header = src.slice(start, start + 200).split('\n')[0];
+    assert.ok(header.includes('requireOperatorAuth'), `Missing authentication: ${marker}`);
+    assert.ok(header.includes('requireMasterControlOwner'), `Shared vault lacks owner clearance: ${marker}`);
+  }
 });
