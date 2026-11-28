@@ -9390,7 +9390,8 @@ async function startServer() {
   });
 
   // --- High-Frequency Profit Scooping, Immutable Locker Vault & Daily PnL Tracking ---
-  app.get('/api/vault/state', requireOperatorAuth, (_req, res) => {
+  // The current vault engine is process-global, not user-partitioned: owner-only until migrated.
+  app.get('/api/vault/state', requireOperatorAuth, requireMasterControlOwner, (_req, res) => {
     return res.json({
       ok: true,
       vault: profitVaultEngine.getSnapshot(),
@@ -9398,7 +9399,7 @@ async function startServer() {
     });
   });
 
-  app.post('/api/vault/config', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+  app.post('/api/vault/config', requireOperatorAuth, requireMasterControlOwner, standardWriteRateLimit, async (req, res) => {
     const principal = await resolveCallerPrincipal(req);
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const modeRaw = typeof body.thresholdMode === 'string' ? body.thresholdMode.toUpperCase() : undefined;
@@ -9429,7 +9430,7 @@ async function startServer() {
     });
   });
 
-  app.post('/api/vault/record-gain', requireOperatorAuth, standardWriteRateLimit, (req, res) => {
+  app.post('/api/vault/record-gain', requireOperatorAuth, requireMasterControlOwner, standardWriteRateLimit, (req, res) => {
     // Never accept client-supplied 'settled' profit as verified production capital.
     if (!isManualVaultGainDemoEnabled(process.env)) {
       return res.status(423).json({
@@ -9476,7 +9477,7 @@ async function startServer() {
     });
   });
 
-  app.post('/api/vault/manual-override', requireOperatorAuth, standardWriteRateLimit, async (req, res) => {
+  app.post('/api/vault/manual-override', requireOperatorAuth, requireMasterControlOwner, standardWriteRateLimit, async (req, res) => {
     const principal = await resolveCallerPrincipal(req);
     const body = req.body && typeof req.body === 'object' ? req.body : {};
 
