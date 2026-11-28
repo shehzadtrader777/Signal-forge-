@@ -34,3 +34,16 @@ Security-first review for GitHub public documentation, Google AI Studio migratio
 - The operator approval-token exposure requires a code fix, not just a security policy.
 - CoinMarketCap client-side credential routing requires a code fix before it can be called secret-safe.
 - No production release, license approval or Claude OSS program approval has been verified.
+
+
+## Phase 3 source hardening — 28 November 2026
+
+Baseline `35de09e`: both PR-triggered CI workflows passed. Reviewed 404 tracked paths for populated environment/private-key/credential-archive/database filename patterns; none matched. This is filename hygiene, not content or history clearance.
+
+- `c0587d7`: remove Fable approval token from runtime/public snapshots and UI, explicitly lock live approval in runtime and HTTP route, require verified owner for global Fable mutations. Authorized research functionality remains; non-owner mutation access is deliberately restricted.
+- `4299d86`: strict Firebase token claim structure, project/time checks, boolean verified-email semantics, recognized certificate keys, fail-closed expired certificate cache. Provider revocation is not implemented by these changes.
+- `9bd7b5f`: first-party API path allowlist, redirect rejection, per-Firebase-token session cache, stale asynchronous response rejection, no automatic mutation retries on 401.
+- `0968eaf`: explicit current Firebase credentials take precedence over legacy sessions, logout cookie clearing, omit guest API cookies and expanded private-key/database ignore patterns. Copied tokens and older cookie-only endpoints still require independent revocation/CSRF review.
+- New redacted Git-history heuristic audit workflow scans fetched reachable Git objects, reports counts only, skips binary/oversize blobs, and explicitly does not certify release safety. Its result is not yet verified. It supplements, not replaces, the historical Gitleaks triage.
+
+**Release gate remains OPEN.** Prior 13 current-tree and 9 historical potential Gitleaks findings require private review and provider-side revocation/rotation as necessary. Firebase deployed rules, App Check/IAM, live provider restrictions, dependency advisories, durable token revocation, distributed rate limiting, exchange settlement integration, emulator and staging tests remain outstanding. No public secret values, private keys or backup files added; no production deployment, main merge, AI Studio sync or live execution. Verify exact-head CI before any next release decision.
