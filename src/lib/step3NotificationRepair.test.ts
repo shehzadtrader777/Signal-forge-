@@ -22,7 +22,8 @@ import {
 import { extractTradingAlertParams } from './signalProcessor';
 
 const TEST_BOT_TOKEN = '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890';
-const LEGACY_BAD_TOKEN = '999999999:LEGACY_EXPIRED_TOKEN_12345678901234';
+// Deliberately synthetic fixture; never reuse a historical provider credential.
+const LEGACY_BAD_TOKEN = '111111111:' + 'Z'.repeat(35);
 const TEST_MAKE_URL = 'https://hook.us2.make.com/abc123def456ghi789jkl012mno345pq';
 const TEST_DISCORD_URL =
   'https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123456';

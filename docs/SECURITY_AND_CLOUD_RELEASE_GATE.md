@@ -47,3 +47,12 @@ Baseline `35de09e`: both PR-triggered CI workflows passed. Reviewed 404 tracked 
 - New redacted Git-history heuristic audit workflow scans fetched reachable Git objects, reports counts only, skips binary/oversize blobs, and explicitly does not certify release safety. Its result is not yet verified. It supplements, not replaces, the historical Gitleaks triage.
 
 **Release gate remains OPEN.** Prior 13 current-tree and 9 historical potential Gitleaks findings require private review and provider-side revocation/rotation as necessary. Firebase deployed rules, App Check/IAM, live provider restrictions, dependency advisories, durable token revocation, distributed rate limiting, exchange settlement integration, emulator and staging tests remain outstanding. No public secret values, private keys or backup files added; no production deployment, main merge, AI Studio sync or live execution. Verify exact-head CI before any next release decision.
+
+
+### Targeted current-tree credential triage — 28 November 2026
+
+The completed redacted audit at `d679ad5` scanned 721 unique text blobs (one binary skipped), with current-tree matching blob counts Google-shaped 3, Discord-shaped 2, Telegram-shaped 2. These are pattern counts, not confirmed active credentials or an exhaustive security scan.
+
+Reviewed nine selected notification/config/server paths. Found one Firebase client configuration API-key-shaped literal (client configuration alone does not establish a private secret; provider restrictions still need verification), one obviously synthetic Discord test fixture, and two distinct Telegram-shaped literals in notification/masking tests whose provenance could not be established. Replaced both ambiguous Telegram test literals with explicitly synthetic values while retaining the canonical precedence and masking assertions. No provider calls or credential values were disclosed. Other matches and prior scanner findings remain unclassified.
+
+**Mandatory owner-side follow-up:** review historical Telegram credentials privately and revoke/rotate any that were ever real; replacing a test literal does not remove it from Git history. Verify Firebase API-key restrictions, Discord/webhook restrictions and prior findings separately. No history rewrite, production credential change, or security clearance granted.

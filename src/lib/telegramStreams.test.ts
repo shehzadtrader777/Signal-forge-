@@ -167,6 +167,6 @@ test('parseTelegramWebhookUpdate extracts private commands and masks sensitive s
   assert.equal(parsed.command, '/audit');
   assert.equal(parsed.senderLabel, '@dev_ops');
 
-  assert.equal(maskTelegramToken('9234683930:AAHXMxACmvVzeHtpQWxeNDRR1CCHuq4cWzA'), '923468...cWzA');
+  assert.equal(maskTelegramToken('222222222:' + 'X'.repeat(35)), '222222...XXXX');
   assert.equal(maskChatId('-1008928895086'), '-100***086');
 });
