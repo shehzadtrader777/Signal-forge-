@@ -156,6 +156,8 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
   latestVaultRef.current = vault;
 
   const verifiedUid = user && user.emailVerified ? user.uid : null;
+  const activeVaultUidRef = useRef<string | null>(verifiedUid);
+  activeVaultUidRef.current = verifiedUid;
   
   // Sensitive financial snapshots must not survive a logout or a switch of accounts.
   useEffect(() => {
@@ -197,6 +199,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     if (!verifiedUid) return;
     try {
       const res = await apiFetch('/api/vault/state');
+      if (activeVaultUidRef.current !== verifiedUid) return;
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) setVault(null);
         return;
@@ -212,7 +215,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
         }
       }
     } catch {
-      // retain cached local snapshot cleanly
+      // Keep the last in-memory snapshot; never expose it through persistent browser storage.
     }
   }, [syncDraftsFromConfig, verifiedUid]);
 
