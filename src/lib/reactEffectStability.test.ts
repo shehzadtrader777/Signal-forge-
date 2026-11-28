@@ -65,8 +65,8 @@ test('ProfitVaultAndDailyPnlPanel fetchVaultState uses configDirtyRef instead of
   const slice = src.slice(start, start + 900);
   assert.ok(slice.includes('configDirtyRef.current'), 'Expected configDirtyRef.current inside fetchVaultState');
   assert.ok(
-    slice.includes('[syncDraftsFromConfig]'),
-    'fetchVaultState must not depend on configDirty state'
+    slice.includes('[syncDraftsFromConfig, verifiedUid]'),
+    'fetchVaultState must depend on verified account identity but not configDirty state'
   );
 });
 
