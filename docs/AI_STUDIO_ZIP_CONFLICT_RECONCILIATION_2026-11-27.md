@@ -75,3 +75,7 @@ Reviewed the actual 27 November Studio ZIP and branch `src/lib/liveFeedValidator
 ### Agent-loop telemetry: retain async timer guard
 
 Reviewed the Studio ZIP's `src/components/AgentLoopTelemetryPanel.tsx` against the reconciled source, line by line in the polling effect. Both versions preserve the `REFRESH_BTN_TAP` stable animation constant, the 12-second timer, hidden-tab suppression and interval cleanup. Reconciliation adds an explicit comment about polling safety and changes the ignored promise from `fetchTelemetry()` to `void fetchTelemetry()`. **Decision: preserve the GitHub version.** No Studio-only functionality is lost in that reviewed effect; a separate regression test covers this behavior.
+
+### Multi-monitor workspace bar: stable motion constants preserved
+
+Compared the Studio ZIP with `src/components/MultiScreenWorkspaceBar.tsx` in the reconciled branch. Both use the same stable module-level `PRESET_BTN_TAP` and `PANEL_BTN_TAP` constants, and the same preset/reset/panel visibility button flow. GitHub adds explanatory safety commentary about keeping motion prop identities stable under high-frequency rerenders. **Decision: preserve reconciled GitHub version** with its regression coverage; do not replace it with the slightly older Studio export.
