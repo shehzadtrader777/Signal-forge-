@@ -34,3 +34,18 @@ test('Studio motion props and navigation callbacks avoid unstable inline identit
   assert.match(app, /handleOpenSideMenu = useCallback/);
   assert.match(app, /handleCloseSideMenu = useCallback/);
 });
+
+test('Studio app route reconciliation preserves protected landing and scroll manager', () => {
+  const app = src('src/App.tsx');
+  assert.match(app, /import \{ PremiumLanding \} from '\.\/pages\/PremiumLanding'/);
+  assert.match(app, /import \{ PlansPreview \} from '\.\/pages\/PlansPreview'/);
+  assert.match(app, /location\.pathname === '\/welcome'\) return <PremiumLanding \/>/);
+  assert.match(app, /location\.pathname === '\/pricing'\) return <PlansPreview \/>/);
+  assert.equal((app.match(/<RouteScrollManager \/>/g) || []).length, 1,
+    'Route scroll manager must mount once, under BrowserRouter');
+  const browserRouter = app.indexOf('<BrowserRouter>');
+  const scrollManager = app.indexOf('<RouteScrollManager />');
+  const appProvider = app.indexOf('<AppProvider>');
+  assert.ok(browserRouter >= 0 && browserRouter < scrollManager && scrollManager < appProvider,
+    'Route scroll behavior should be available across all pages, including pre-login landing');
+});
