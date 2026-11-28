@@ -183,6 +183,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
   const lastSyncedDailyHashRef = useRef<Map<string, string>>(new Map());
   const lastSyncedVaultVersionRef = useRef<number>(0);
   const syncInFlightRef = useRef<boolean>(false);
+  const syncInFlightPromiseRef = useRef<Promise<void> | null>(null);
   const resyncRequestedRef = useRef<boolean>(false);
   const latestVaultRef = useRef<ProfitVaultSnapshot | null>(vault);
   latestVaultRef.current = vault;
@@ -287,6 +288,14 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     const drainCloudSync = async () => {
       if (syncInFlightRef.current) {
         resyncRequestedRef.current = true;
+        // This effect can replace an old effect while its Firestore write is still pending.
+        // Wake the current effect after that write finishes instead of losing its sync request.
+        const previous = syncInFlightPromiseRef.current;
+        if (previous) {
+          void previous.finally(() => {
+            if (!cancelled) setCloudSyncRetryTick((tick) => tick + 1);
+          });
+        }
         return;
       }
       syncInFlightRef.current = true;
@@ -308,6 +317,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
               totalScoopedLifetimeUsd: currentVault.totalScoopedLifetimeUsd,
               stateVersion: currentVault.stateVersion,
             });
+            if (cancelled) break;
             lastSyncedVaultVersionRef.current = currentVault.stateVersion;
             syncedAny = true;
           }
@@ -330,6 +340,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
               winRatePct: day.winRatePct,
               recordHash: day.recordHash,
             });
+            if (cancelled) break;
             lastSyncedDailyHashRef.current.set(day.dateKey, day.recordHash);
             syncedAny = true;
           }
@@ -358,7 +369,11 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
       }
     };
 
-    void drainCloudSync();
+    const running = drainCloudSync();
+    syncInFlightPromiseRef.current = running;
+    void running.finally(() => {
+      if (syncInFlightPromiseRef.current === running) syncInFlightPromiseRef.current = null;
+    });
     return () => {
       cancelled = true;
       if (retryTimer !== null) window.clearTimeout(retryTimer);
