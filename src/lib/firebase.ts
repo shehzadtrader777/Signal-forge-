@@ -748,10 +748,10 @@ export async function saveDailyPnlRecordToFirestore(
   record: Omit<PersistedDailyPnlRecord, 'userId'>
 ): Promise<void> {
   const sanitized = sanitizeDailyPnlFields({ ...record, userId });
-  if (!sanitized) return;
+  if (!sanitized) throw new Error('Daily PnL Firestore sync rejected invalid record');
   const { dateKey, userId: cleanUserId, ...mutableFields } = sanitized;
   if (!auth.currentUser || !auth.currentUser.emailVerified || auth.currentUser.uid !== cleanUserId) {
-    return;
+    throw new Error('Daily PnL Firestore sync requires verified matching user');
   }
   const path = `users/${cleanUserId}/dailyPnlRecords/${dateKey}`;
   const ref = doc(db, 'users', cleanUserId, 'dailyPnlRecords', dateKey);
@@ -778,6 +778,7 @@ export async function saveDailyPnlRecordToFirestore(
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+    throw error;
   }
 }
 
@@ -792,7 +793,7 @@ export async function saveVaultLockerSnapshotToFirestore(
   });
   const { id, userId: cleanUserId, ...mutableFields } = sanitized;
   if (!auth.currentUser || !auth.currentUser.emailVerified || auth.currentUser.uid !== cleanUserId) {
-    return;
+    throw new Error('Vault Firestore sync requires verified matching user');
   }
   const path = `users/${cleanUserId}/vaultLocker/${id}`;
   const ref = doc(db, 'users', cleanUserId, 'vaultLocker', id);
@@ -819,5 +820,6 @@ export async function saveVaultLockerSnapshotToFirestore(
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+    throw error;
   }
 }
