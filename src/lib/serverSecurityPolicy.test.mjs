@@ -70,3 +70,17 @@ test('financial vault snapshot endpoint requires operator authorization', () => 
   assert.ok(!panel.includes("await fetch('/api/vault/state')"),
     'Do not fetch protected financial snapshot anonymously');
 });
+
+test('financial vault client never persists shared snapshots or shows stale account responses', () => {
+  const panel = readFileSync(new URL('../components/ProfitVaultAndDailyPnlPanel.tsx', import.meta.url), 'utf8');
+  assert.ok(panel.includes('useState<ProfitVaultSnapshot | null>(null)'));
+  assert.doesNotMatch(panel, /localStorage\.setItem\(/);
+  assert.ok(panel.includes('window.localStorage.removeItem(LOCAL_STORAGE_KEY)'),
+    'Old shared financial snapshots must be purged on mount');
+  assert.ok(panel.includes('activeVaultUidRef.current !== verifiedUid'),
+    'In-flight snapshot response must be discarded after an account switch');
+  assert.ok(panel.includes('if (res.status === 401 || res.status === 403) setVault(null)'),
+    'Unauthorized snapshot must clear previously displayed balances');
+  assert.ok(panel.includes('setVault(null);\n  }, [verifiedUid]'),
+    'Account changes must clear in-memory vault state');
+});
