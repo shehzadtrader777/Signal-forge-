@@ -58,3 +58,14 @@ Updated: 2026-11-27. This is a release procedure, not proof of deployment.
 | Production launch/live execution | Independent release and trading safety approval | Not authorized |
 
 Keep PR Draft, preserve main, do not deploy, and leave LIVE trading disabled.
+
+### Interim process-global vault ownership control
+
+Until vault/PnL data has a verified **per-user, server-authoritative settlement ledger**, the existing in-process `profitVaultEngine` is shared across sessions. **Do not treat it as a tenant-isolated user vault.** As an interim containment measure, all four relevant endpoints are restricted to independently verified owner-level access in the reconciliation branch:
+
+- `GET /api/vault/state`
+- `POST /api/vault/config`
+- `POST /api/vault/record-gain` (also nonproduction-demo-only)
+- `POST /api/vault/manual-override`
+
+This intentionally means non-owner operators will not be able to use the legacy shared Vault UI/API, instead of being allowed to view or mutate a global financial snapshot. Before restoring multi-user access, design explicit `userId` partitioning and server-authenticated ledger write/read authorization, migrate data safely, and test cross-user isolation, replay and financial invariants in an emulator or staging runtime. **Green repository CI does not attest to deployed Firebase rules or production financial provenance.**
