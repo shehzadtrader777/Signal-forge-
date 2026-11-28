@@ -21,7 +21,8 @@ jobs:
 
   candidate:
     needs: js_advisories
-    if: ${{ always() && needs.js_advisories.result == 'failure' && github.event_name == 'push' && github.ref == 'refs/heads/reconciliation/studio-2026-11-27' }}
+    # Both push and pull_request runs may report the blocking advisory failure.
+    if: ${{ always() && needs.js_advisories.result == 'failure' }}
     name: Generate and verify a disposable patched lockfile
     runs-on: ubuntu-latest
     timeout-minutes: 15

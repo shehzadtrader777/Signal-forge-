@@ -47,3 +47,8 @@ Exact baseline `ff408ce` passed the existing four workflows but the new dependen
 ### Candidate execution recovery
 
 At `cd5cbde`, existing application, Firebase, history audit and hybrid workflows passed; the dependency advisory remained red. The standalone gRPC candidate workflow was present in source but no corresponding run was returned by the available GitHub connector. The local environment has neither Bun nor DNS access to the package registry. To avoid fabricating integrity hashes or modifying an unresolved lockfile, moved the candidate generation into the already-running dependency advisory workflow as an independent, failure-triggered read-only job restricted to pushes on the reconciliation branch. The original advisory job remains unchanged and blocking. The candidate job does not turn a failed scan green, auto-push a patch, or modify the running application. The reviewed registry-generated patch and exact-head regression results remain required.
+
+
+### Candidate job trigger correction
+
+At `e0ce8c6`, the application, hybrid, emulator and history workflows succeeded; the advisory job failed and the candidate job was skipped (run 46128847416). Removed the additional event/ref predicate that could exclude the pull-request run. The candidate job now executes following a failed advisory job on either existing workflow trigger. It still has read-only contents permission, checkout credential persistence disabled, install scripts disabled, and no push, deployment, secret access or release approval. The original audit remains blocking, and no application dependency has yet been upgraded. The exact new run must be inspected before accepting any generated patch.
