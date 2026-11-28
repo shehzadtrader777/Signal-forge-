@@ -13,7 +13,6 @@ import {
 } from 'recharts';
 import { ArrowDownRight, ArrowUpRight, CheckCircle2, Play, RefreshCw, ShieldCheck } from 'lucide-react';
 import {
-  TRACKED_COINS,
   fetchCoinCandles,
   formatCryptoPrice,
   type Candle,
@@ -33,13 +32,17 @@ import { useRbacIdentity } from '../hooks/useRbacIdentity';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { TrustConsolePanel } from '../components/TrustConsolePanel';
 import { ModularBacktestMatrixPanel } from '../components/ModularBacktestMatrixPanel';
+import { buildBacktestResearchUniverse, validateHistoricalCoverage } from '../lib/backtestUniverse';
+import { buildUnifiedSignalHistory } from '../lib/signalHistory';
+import '../styles/forgeBacktesting.css';
+import { Step2StrategyBacktestComparator } from '../components/Step2StrategyBacktestComparator';
 
 const BAR_RADIUS: [number, number, number, number] = [6, 6, 0, 0];
 const AREA_CHART_MARGIN = { top: 8, right: 12, left: 4, bottom: 0 };
 const BAR_CHART_MARGIN = { top: 8, right: 12, left: 0, bottom: 0 };
 const RECHARTS_TOOLTIP_STYLE = {
-  backgroundColor: '#0d1323',
-  borderColor: '#334155',
+  backgroundColor: '#1B1E21',
+  borderColor: '#8F704B',
   borderRadius: '8px',
   fontSize: '12px',
   color: '#f8fafc',
@@ -108,8 +111,8 @@ const BacktestCharts = memo(function BacktestCharts({
               <AreaChart data={equityCurve} margin={AREA_CHART_MARGIN}>
                 <defs>
                   <linearGradient id="sfEquityGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.35} />
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                    <stop offset="5%" stopColor="#D2A66A" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="#D2A66A" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -131,7 +134,7 @@ const BacktestCharts = memo(function BacktestCharts({
                 <Area
                   type="monotone"
                   dataKey="equity"
-                  stroke="#3b82f6"
+                  stroke="#D2A66A"
                   strokeWidth={2}
                   fillOpacity={1}
                   fill="url(#sfEquityGrad)"
@@ -208,7 +211,8 @@ function SparklineSnapshot({ points, isWin }: { points: number[]; isWin: boolean
 }
 
 export function Backtesting() {
-  const { tickers, futuresTelemetry, futuresFeedSource, wsConnected } = useApp();
+  const { tickers, futuresTelemetry, futuresFeedSource, wsConnected, allKnownCoins, topGainers, pinnedSignals, executionState } = useApp();
+  const researchUniverse = useMemo(() => buildBacktestResearchUniverse(allKnownCoins, topGainers, Object.keys(tickers)), [allKnownCoins, topGainers, tickers]);
   const [selectedSymbol, setSelectedSymbol] = useState<string>('BTCUSDT');
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('15m');
   const [selectedStrategy, setSelectedStrategy] = useState<BacktestStrategy>('AUTONOMOUS_MASTER');
@@ -226,6 +230,8 @@ export function Backtesting() {
   const [feedSourceLabel, setFeedSourceLabel] = useState<'binance_futures' | 'cache'>('cache');
   const [syncingFeed, setSyncingFeed] = useState(false);
   const [historySource, setHistorySource] = useState<'SIMULATED' | 'GLOBAL'>('SIMULATED');
+  const [coinSearch, setCoinSearch] = useState('');
+  const filteredResearchUniverse = useMemo(() => researchUniverse.filter(c => `${c.symbol} ${c.name}`.toLowerCase().includes(coinSearch.trim().toLowerCase())), [researchUniverse, coinSearch]);
   const [showAllTrades, setShowAllTrades] = useState(false);
 
   const tickersRef = useRef(tickers);
@@ -261,12 +267,41 @@ export function Backtesting() {
     []
   );
 
+  const [anchoredBacktestPrice, setAnchoredBacktestPrice] = useState<number | undefined>(() =>
+    tickers[simSeed.symbol]?.price ?? futuresTelemetry[simSeed.symbol]?.markPrice
+  );
+
   useEffect(() => {
     syncLiveFeedAndCandles(simSeed.symbol, simSeed.timeframe);
+    const snap =
+      tickersRef.current[simSeed.symbol]?.price ??
+      futuresTelemetryRef.current[simSeed.symbol]?.markPrice;
+    if (snap && Number.isFinite(snap)) {
+      setAnchoredBacktestPrice(snap);
+    }
   }, [simSeed.symbol, simSeed.timeframe, syncLiveFeedAndCandles]);
+
+  const historyCoverage = useMemo(() => validateHistoricalCoverage({
+    symbol: simSeed.symbol,
+    bars: liveCandles ?? [],
+    windowDays: activeWindowDays,
+    timeframeMinutes: ({'15m':15,'1h':60,'4h':240,'1d':1440} as const)[simSeed.timeframe],
+    source: feedSourceLabel === 'binance_futures' ? 'binance' : 'cache',
+  }), [simSeed.symbol, simSeed.timeframe, liveCandles, activeWindowDays, feedSourceLabel]);
 
   const liveWsPrice =
     tickers[simSeed.symbol]?.price ?? futuresTelemetry[simSeed.symbol]?.markPrice;
+
+  // Capture initial live WS price once per symbol if mounted before WS hydration
+  useEffect(() => {
+    if (
+      anchoredBacktestPrice === undefined &&
+      liveWsPrice !== undefined &&
+      Number.isFinite(liveWsPrice)
+    ) {
+      setAnchoredBacktestPrice(liveWsPrice);
+    }
+  }, [anchoredBacktestPrice, liveWsPrice]);
 
   // Comparative 30 / 60 / 90-Day Optimization Protocol Report (strictly 300–500 trades/window, 5% Max SL, 5x ATR Trail TP)
   const comparativeReport = useMemo(
@@ -276,9 +311,9 @@ export function Backtesting() {
         timeframe: simSeed.timeframe,
         strategy: simSeed.strategy,
         providedCandles: liveCandles,
-        liveWsPrice,
+        liveWsPrice: anchoredBacktestPrice,
       }),
-    [simSeed, liveCandles, liveWsPrice]
+    [simSeed, liveCandles, anchoredBacktestPrice]
   );
 
   const [wfInSampleBars, setWfInSampleBars] = useState<number>(85);
@@ -304,6 +339,13 @@ export function Backtesting() {
     [simSeed.symbol, simSeed.timeframe, liveCandles, wfInSampleBars, wfOutOfSampleBars]
   );
 
+  const observedSignalAudit = useMemo(() => buildUnifiedSignalHistory({
+    pinnedSignals,
+    positions: executionState.positions,
+    tickers,
+    includeHistoricalBenchmarks: false,
+    includeCrossStrategyBenchmarks: false,
+  }), [pinnedSignals, executionState.positions, tickers]);
   const globalPastSignals = useMemo(() => getGlobalPastSignalsHistory(), []);
   const activeRows = historySource === 'SIMULATED' ? simulation.trades : globalPastSignals;
   const visibleRows = showAllTrades ? activeRows : activeRows.slice(0, 30);
@@ -324,9 +366,29 @@ export function Backtesting() {
     liveWsPrice ?? simulation.latestMarkPrice ?? 0;
 
   return (
-    <div className="mx-auto max-w-[1440px] px-4 py-8 sm:px-6 lg:px-8 space-y-8">
-      {/* Decoupled Parameterized 1,000-Trade Multi-Horizon Simulation Matrix & Auto-Optimizer */}
-      <ModularBacktestMatrixPanel symbol={simSeed.symbol} />
+    <div className="forge-backtesting mx-auto max-w-[1440px] px-4 py-8 sm:px-6 lg:px-8 space-y-8">
+      <section aria-label="Backtesting guide" className="rounded-2xl border border-[#8f704b]/40 bg-[#171a1d] p-5 sm:p-6">
+        <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#d9b77f]">SIGNAL FORGE · RESEARCH LAB</p>
+        <h2 className="mt-2 font-display text-xl font-bold text-white">Understand every test before comparing results.</h2>
+        <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-300">A backtest replays a strategy on historical or simulated market conditions; it does not place an order. Use the 30, 60 and 90-day views to compare periods. Paper trading is a separate simulated trading workflow, not another name for a backtest.</p>
+        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          <a href="#sf-backtest-comparison" className="rounded-xl border border-white/10 bg-white/5 p-4 hover:border-[#d9b77f]/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#d9b77f]">
+            <strong className="block text-sm text-white">01 · Compare periods</strong>
+            <span className="mt-1 block text-xs leading-5 text-slate-400">Review 30 / 60 / 90-day returns, risk and win rate.</span>
+          </a>
+          <a href="#sf-backtest-charts" className="rounded-xl border border-white/10 bg-white/5 p-4 hover:border-[#d9b77f]/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#d9b77f]">
+            <strong className="block text-sm text-white">02 · Read the charts</strong>
+            <span className="mt-1 block text-xs leading-5 text-slate-400">Inspect simulated equity and trade outcomes.</span>
+          </a>
+          <a href="#sf-backtest-advanced" className="rounded-xl border border-white/10 bg-white/5 p-4 hover:border-[#d9b77f]/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#d9b77f]">
+            <strong className="block text-sm text-white">03 · Advanced tests</strong>
+            <span className="mt-1 block text-xs leading-5 text-slate-400">Open the independent 1,000-trade module when needed.</span>
+          </a>
+        </div>
+        <p className="mt-4 text-xs leading-5 text-slate-400">Displayed results are model outputs, not guaranteed outcomes. Verify historical candle coverage and data provenance before relying on a date-window label.</p>
+      </section>
+
+      <Step2StrategyBacktestComparator />
 
       {/* Page Header & Backtest Runner */}
       <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between border-b border-slate-800/80 pb-6">
@@ -376,15 +438,23 @@ export function Backtesting() {
             >
               Coin Pair
             </label>
+            <input
+              type="search"
+              aria-label="Search all discovered market pairs"
+              value={coinSearch}
+              onChange={(e) => setCoinSearch(e.target.value)}
+              placeholder="Search available market pairs"
+              className="mb-1 w-full rounded-lg border border-slate-700 bg-[#0a0e1a] px-2 py-1.5 text-xs text-white"
+            />
             <select
               id="bt-coin-select"
               value={selectedSymbol}
               onChange={(e) => setSelectedSymbol(e.target.value)}
               className="rounded-lg border border-slate-700 bg-[#0a0e1a] px-3 py-2 text-xs font-medium text-white focus:border-[#3b82f6] focus:outline-none"
             >
-              {TRACKED_COINS.map((c) => (
+              {filteredResearchUniverse.map((c) => (
                 <option key={c.symbol} value={c.symbol}>
-                  {c.name} ({c.symbol})
+                  {c.name} ({c.symbol}){c.origin === 'LIVE_MARKET' ? ' · live-discovered' : ''}
                 </option>
               ))}
             </select>
@@ -425,8 +495,16 @@ export function Backtesting() {
         </form>
       </div>
 
+      <aside role="status" className="rounded-xl border border-amber-500/40 bg-amber-950/25 px-4 py-3 text-xs text-amber-100">
+        <strong>Market universe: {researchUniverse.length} currently discovered pairs.</strong> Backtest availability depends on historical candle coverage, not the watchlist limit.
+        {' '}For {simSeed.symbol} / {activeWindowDays} days: {historyCoverage.observedBars}/{historyCoverage.expectedBars} candles in the fetched window.
+        {' '}<strong>{historyCoverage.verified ? 'Historical candle coverage verified (source and continuity)' : 'Insufficient independently verified coverage — comparative results may use simulated protocol candles.'}</strong>
+        {' '}The Global History view is a generated benchmark sample, not a complete live signal audit.
+      </aside>
+
       {/* Comparative 30 / 60 / 90-Day Protocol Matrix */}
       <section
+        id="sf-backtest-comparison"
         aria-label="30 60 90 Day Comparative Backtest Matrix"
         className="rounded-xl border border-slate-800/90 bg-[#111827] overflow-hidden"
       >
@@ -802,6 +880,7 @@ export function Backtesting() {
       </div>
 
       {/* Recharts Visualizations (Memoized & Fixed-Axis Dimensions) */}
+      <div id="sf-backtest-charts" className="scroll-mt-8">
       <BacktestCharts
         equityCurve={simulation.equityCurve}
         outcomeBreakdown={simulation.outcomeBreakdown}
@@ -813,6 +892,46 @@ export function Backtesting() {
         riskRewardRatio={simulation.riskRewardRatio}
         sessionFilter={simulation.sessionFilter}
       />
+      </div>
+
+      {/* Advanced matrix remains independent of the 30/60/90-day comparative suite. */}
+      <details id="sf-backtest-advanced" className="group rounded-2xl border border-[#8f704b]/30 bg-[#111827] scroll-mt-8">
+        <summary className="cursor-pointer list-none rounded-2xl px-5 py-4 font-semibold text-[#e2c59b] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#d9b77f]">
+          Advanced · 1,000-Trade Multi-Horizon Matrix <span className="ml-2 text-xs font-normal text-slate-400">Select to expand</span>
+        </summary>
+        <div className="px-2 pb-4 sm:px-4">
+          <p className="mb-3 px-2 text-xs leading-5 text-slate-400">Independent advanced strategy/optimizer research. Its assumptions and totals should not be mixed with the 30/60/90-day comparative suite.</p>
+          <ModularBacktestMatrixPanel symbol={simSeed.symbol} />
+        </div>
+      </details>
+
+      <section aria-label="Observed signal audit (not simulated)" className="rounded-xl border border-[#8f704b]/35 bg-[#111827] p-4 sm:p-5">
+        <h2 className="font-display text-lg font-bold text-white">Observed Signal Audit · Pinned Signals &amp; Orders</h2>
+        <p className="mt-1 text-xs text-slate-400">
+          {observedSignalAudit.length} locally retained observed records, excluding generated benchmark results.
+          This is not yet a complete server-persisted all-market archive; missing emitted signals cannot be reconstructed.
+        </p>
+        <div className="mt-3 max-h-64 overflow-auto">
+          {observedSignalAudit.length === 0 ? (
+            <p className="rounded-lg border border-slate-700 px-3 py-3 text-xs text-amber-200">No observed records in the current application state. Simulated backtest history is shown separately below.</p>
+          ) : (
+            <table className="w-full min-w-[540px] text-left text-xs">
+              <thead><tr className="border-b border-slate-700 text-slate-400">
+                <th className="py-2">Time</th><th>Pair</th><th>Source</th><th>Status</th><th className="text-right">Entry</th>
+              </tr></thead>
+              <tbody>{observedSignalAudit.map(record => (
+                <tr key={record.id} className="border-b border-slate-800 text-slate-200">
+                  <td className="py-2 font-mono">{record.timestamp}</td>
+                  <td className="font-semibold">{record.symbol}</td>
+                  <td>{record.origin === 'LIVE_PINNED' ? 'Pinned Signal' : 'Execution Record'}</td>
+                  <td>{record.status}</td>
+                  <td className="text-right font-mono">${formatCryptoPrice(record.entryPrice)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          )}
+        </div>
+      </section>
 
       {/* Past Signals History Table */}
       <section
@@ -856,7 +975,7 @@ export function Backtesting() {
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              Cross-Pair Feed ({globalPastSignals.length})
+              Simulated Cross-Pair Benchmark ({globalPastSignals.length})
             </button>
           </div>
         </div>

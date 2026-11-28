@@ -1,4 +1,4 @@
-"""Phase 2: Multi-Agent Orchestration & Unbounded Horizontal Clone Scaling.
+"""Phase 2: Multi-Agent Orchestration & Bounded Horizontal Clone Planning.
 
 Central coordination engine that dynamically spawns autonomous AI worker clones
 based on live market volatility and available compute capacity to run parallel
@@ -38,10 +38,12 @@ class HorizontalScalePlan:
 
 
 class MultiAgentOrchestrator:
-    """Dynamically provisions autonomous AI worker clones with unbounded horizontal scaling."""
+    """Produces bounded research worker scale plans; no order-routing authority."""
 
-    def __init__(self, base_clones_per_node: int = 32) -> None:
-        self.base_clones_per_node = max(4, base_clones_per_node)
+    def __init__(self, base_clones_per_node: int = 32, max_nodes: int = 16, max_clones_per_node: int = 256) -> None:
+        self.max_nodes = max(1, min(64, int(max_nodes)))
+        self.max_clones_per_node = max(4, min(512, int(max_clones_per_node)))
+        self.base_clones_per_node = max(4, min(int(base_clones_per_node), self.max_clones_per_node))
 
     def compute_scale_plan(
         self,
@@ -49,10 +51,12 @@ class MultiAgentOrchestrator:
         compute_nodes: int,
         stream_partitions: List[str],
     ) -> HorizontalScalePlan:
+        if not math.isfinite(float(market_volatility_pct)):
+            raise ValueError("Market volatility must be finite")
         vol = max(0.25, min(100.0, float(market_volatility_pct)))
-        nodes = max(1, int(compute_nodes))
+        nodes = max(1, min(self.max_nodes, int(compute_nodes)))
         volatility_multiplier = 1.0 + (vol / 12.5) ** 1.35
-        clones_per_node = int(math.ceil(self.base_clones_per_node * volatility_multiplier))
+        clones_per_node = min(self.max_clones_per_node, int(math.ceil(self.base_clones_per_node * volatility_multiplier)))
         total_clones = nodes * clones_per_node
 
         partitions = stream_partitions or [

@@ -13,6 +13,14 @@ import {
 } from '../../lib/designSystem';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 
+const WIDGET_FRAME_INITIAL = { opacity: 0, y: 6 } as const;
+const WIDGET_FRAME_ANIMATE = { opacity: 1, y: 0 } as const;
+const FORGE_TAP_97 = { scale: 0.97 } as const;
+const DRAWER_INITIAL = { opacity: 0, y: -8, scaleY: 0.96 } as const;
+const DRAWER_ANIMATE = { opacity: 1, y: 0, scaleY: 1 } as const;
+const DRAWER_EXIT = { opacity: 0, y: -6, scaleY: 0.97 } as const;
+const DRAWER_STYLE = { transformOrigin: 'top center' } as const;
+
 interface ForgeWidgetFrameProps {
   readonly layout: WidgetLayoutContract;
   readonly title: string;
@@ -53,8 +61,8 @@ export const ForgeWidgetFrame = memo(function ForgeWidgetFrame({
 
   return (
     <motion.section
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
+      initial={WIDGET_FRAME_INITIAL}
+      animate={WIDGET_FRAME_ANIMATE}
       transition={MOTION_120HZ_SPRINGS.compositorFast}
       aria-label={layout.ariaLabel}
       data-testid={testId ?? `widget-${layout.widgetId}`}
@@ -146,7 +154,7 @@ function ForgeSegmentedControlInner<T extends string>({
         return (
           <motion.button
             key={opt.value}
-            whileTap={{ scale: 0.97 }}
+            whileTap={FORGE_TAP_97}
             type="button"
             role="tab"
             aria-selected={selected}
@@ -255,7 +263,7 @@ export const ForgeInteractiveButton = memo(function ForgeInteractiveButton({
 
   return (
     <motion.button
-      whileTap={disabled ? undefined : { scale: 0.97 }}
+      whileTap={disabled ? undefined : FORGE_TAP_97}
       transition={MOTION_120HZ_SPRINGS.snappy}
       type="button"
       disabled={disabled}
@@ -292,11 +300,11 @@ export const ForgeAnimatedDrawer = memo(function ForgeAnimatedDrawer({
       {open && (
         <motion.div
           key={drawerKey}
-          initial={{ opacity: 0, y: -8, scaleY: 0.96 }}
-          animate={{ opacity: 1, y: 0, scaleY: 1 }}
-          exit={{ opacity: 0, y: -6, scaleY: 0.97 }}
+          initial={DRAWER_INITIAL}
+          animate={DRAWER_ANIMATE}
+          exit={DRAWER_EXIT}
           transition={MOTION_120HZ_SPRINGS.drawer}
-          style={{ transformOrigin: 'top center' }}
+          style={DRAWER_STYLE}
           data-testid={testId}
           className="border-t border-slate-800/90 bg-[#050914]/95 px-4 py-4 sm:px-5 space-y-4"
         >

@@ -15,6 +15,7 @@ import {
   type ProposalKind,
   type UiModificationAction,
 } from './agenticCliEngine';
+import { getSharedAiProviderVault } from './aiProviderVaultServer';
 
 interface StoredRollbackRecord {
   readonly proposalId: string;
@@ -72,15 +73,15 @@ export class AgenticCliGatewayRuntime {
   }
 
   private hasGeminiKey(): boolean {
-    const key = String(process.env.GEMINI_API_KEY || '').trim();
-    return key.length > 8 && key !== 'MY_GEMINI_API_KEY';
+    return getSharedAiProviderVault().hasEffectiveGeminiKey();
   }
 
   private getConnectors(): readonly GatewayModelConnector[] {
+    const vault = getSharedAiProviderVault();
     return buildGatewayConnectorCatalog({
-      hasGeminiKey: this.hasGeminiKey(),
-      hasOpenAiCompatKey: Boolean(String(process.env.OPENAI_COMPAT_API_KEY || '').trim()),
-      hasAnthropicKey: Boolean(String(process.env.ANTHROPIC_API_KEY || '').trim()),
+      hasGeminiKey: vault.hasEffectiveGeminiKey(),
+      hasOpenAiCompatKey: vault.hasEffectiveOpenAiKey(),
+      hasAnthropicKey: vault.hasEffectiveAnthropicKey(),
     });
   }
 
@@ -117,10 +118,11 @@ export class AgenticCliGatewayRuntime {
       };
     }
     const resolved = path.resolve(this.workspaceRoot, check.normalizedRelativePath);
-    const rootBoundary = this.workspaceRoot.endsWith(path.sep)
-      ? this.workspaceRoot
-      : `${this.workspaceRoot}${path.sep}`;
-    if (!resolved.startsWith(rootBoundary)) {
+    const rootReal = fs.existsSync(this.workspaceRoot)
+      ? fs.realpathSync(this.workspaceRoot)
+      : this.workspaceRoot;
+    const rootBoundary = rootReal.endsWith(path.sep) ? rootReal : `${rootReal}${path.sep}`;
+    if (!resolved.startsWith(this.workspaceRoot.endsWith(path.sep) ? this.workspaceRoot : `${this.workspaceRoot}${path.sep}`)) {
       return {
         ok: false,
         relativePath: check.normalizedRelativePath,
@@ -128,6 +130,32 @@ export class AgenticCliGatewayRuntime {
         error: 'Path traversal boundary check failed.',
       };
     }
+
+    // Verify symlinks cannot escape the workspace root boundary
+    try {
+      const targetToRealpath = fs.existsSync(resolved) ? resolved : path.dirname(resolved);
+      if (fs.existsSync(targetToRealpath)) {
+        const realTarget = fs.realpathSync(targetToRealpath);
+        const insideWorkspace =
+          realTarget === rootReal || realTarget.startsWith(rootBoundary);
+        if (!insideWorkspace) {
+          return {
+            ok: false,
+            relativePath: check.normalizedRelativePath,
+            absolutePath: '',
+            error: 'Symlink path traversal boundary check failed.',
+          };
+        }
+      }
+    } catch {
+      return {
+        ok: false,
+        relativePath: check.normalizedRelativePath,
+        absolutePath: '',
+        error: 'Unable to verify real filesystem path boundary.',
+      };
+    }
+
     return {
       ok: true,
       relativePath: check.normalizedRelativePath,
@@ -211,10 +239,10 @@ export class AgenticCliGatewayRuntime {
       rationale: string;
     } | null;
   }> {
-    const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
-    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+    const apiKey = getSharedAiProviderVault().resolveEffectiveGeminiKey().apiKey;
+    if (!apiKey) {
       throw new Error(
-        'GEMINI_API_KEY is not configured on the server. Add your key in Settings > Secrets or switch the Unified API Gateway to Local Deterministic Router.'
+        'Gemini API Key is not configured in Signal Forge backend storage. Configure it in Settings > Command Hub or switch the Unified API Gateway to Local Deterministic Router.'
       );
     }
 

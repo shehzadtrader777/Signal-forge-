@@ -1,34 +1,93 @@
-Signal Forge
-Signal Forge is an enterprise-grade, autonomous algorithmic trading and market intelligence ecosystem designed to bridge the gap between high-frequency execution and dynamic AI decision-making. Built for resilience, modularity, and scale, it transforms complex market data into automated, risk-managed trading strategies.
+# SIGNAL FORGE
+### Forge Your Edge · Trading research, backtesting & AI-guided analysis
 
-System Architecture & Core Modules
-The platform is engineered around a decoupled, multi-agent architecture where distinct specialized modules oversee specific lifecycle domains of algorithmic trading.
+[![Development](https://img.shields.io/badge/status-active%20development-B88A50)](https://github.com/shehzadtrader777/Signal-forge-/pull/2)
+[![Research first](https://img.shields.io/badge/trading-research%20%26%20paper%20only-444444)](#safety-and-scope)
+[![Contributions](https://img.shields.io/badge/contributions-welcome-6B8E7C)](CONTRIBUTING.md)
 
-• Intelligence Core (Command Hub): The central orchestration layer driven by frontier large language models. It continuously synthesizes market sentiment, technical indicators, and macroeconomic data to formulate dynamic trading theses.
+> **Signal Forge is an evolving software project, not a production-certified trading service.** Functionality varies by branch; integrations, permissions, runtime data coverage and security must be independently validated before any real-money use.
 
-• Execution Engine: A low-latency subsystem responsible for translating high-level strategic directives into precise, atomic market orders across decentralized and centralized exchanges.
+## Overview
 
-• Risk Management & Safeguard Protocols: An autonomous oversight layer enforcing strict drawdown limits, position sizing, and automated circuit breakers to protect capital integrity.
+Signal Forge explores how to make trading research more understandable: transparent backtesting, distinct paper-trading workflows, interactive market analytics, and a cohesive premium interface. The goal is to combine beginner-friendly navigation with deeper tools for experienced researchers, **without confusing a simulation with verified live performance**.
 
-• Live Browser Verification & Auditing: Continuous headless browser verification ensuring seamless interaction with web-based terminal interfaces and real-time ledger auditing.
+**Repository:** [Source](https://github.com/shehzadtrader777/Signal-forge-) · [Development PR](https://github.com/shehzadtrader777/Signal-forge-/pull/2) · [Contribution guide](CONTRIBUTING.md) · [Security](SECURITY.md)
 
-Key Features
-• Autonomous Agent Swarms: Collaborative specialized agents handling signal generation, portfolio rebalancing, and execution monitoring.
+## Product direction
 
-• Multi-Modal Market Analysis: Processing textual financial news alongside numerical price-action data for comprehensive market awareness.
+| Area | What it is | Current caveat |
+| --- | --- | --- |
+| Backtesting Research Lab | 30/60/90-day comparisons, strategy metrics and chart organization | Date coverage and data realism require validation |
+| Advanced research | Expandable high-volume simulation and deeper analytics | Simulated outcomes are not proof of future returns |
+| Paper Trading | Separated sandbox workflow for testing ideas without live orders | Full UI refinement and integration QA pending |
+| Dark Forge / Light Forge | Premium gunmetal/bronze and clean ivory/graphite design variants | Cross-page consistency and account sync pending |
+| AI Super Guide | Read-only user education and feature guidance | Full conversational backend pending |
+| Identity & access | Firebase-linked account reference and permission controls | Emulator/security regression tests pending |
+| Market data integrations | Architecture referencing external feeds and exchange connectors | Keys, permissions, provider access and coverage are not confirmed |
 
-• Fail-Safe Circuit Breakers: Hardcoded invariant checks preventing unauthorized exposure and mitigating algorithmic drift.
+The **latest integrated source** is still being reconciled with an AI Studio export. Follow the development PR for work in progress; no production launch is implied.
 
-• Extensible Integrations: Native support for modern database layers, secure webhook telemetry, and multi-exchange API connectivity.
+## Design principles
 
-Roadmap & Future Evolution
-Signal Forge is engineered for continuous evolution. Our roadmap focuses on decentralization, institutional-grade scaling, and predictive robustness.
+- **Calm premium UI:** Manrope headings, Inter interface text, considered spacing, accessible contrast and restrained motion.
+- **One research journey:** Overview → time range / strategy → metrics → equity curve → advanced details.
+- **Separate modes:** Historical backtesting, paper trading and any future live capability are distinct.
+- **Education, not execution:** The planned AI Super Guide has no order-placement or wallet permissions.
+- **Safe defaults:** Secrets stay server-side; sensitive operations require independent authorization, auditability and tests.
 
-1. Phase 1: Foundation & Verification: Establishing core execution loops, rigorous paper-trading validation, and automated safety audits.
+## Technology
 
-2. Phase 2: Localized Intelligence: Transitioning critical inference workloads to local, privacy-preserving open-source models to eliminate external API dependencies and reduce latency.
+The current TypeScript application uses **React, Vite, Express, Firebase, Tailwind CSS, and charting components**. Some research and orchestration experiments have separate Python modules. Check the source and lockfiles for the precise implementation of each module.
 
-3. Phase 3: Swarm Consensus & Cross-Chain Execution: Implementing multi-agent consensus mechanisms for trade validation and expanding native support for decentralized perpetual exchanges.
+## Local development
 
-Open Source Philosophy
-Built on the principle of democratizing algorithmic trading infrastructure, Signal Forge provides robust, transparent tooling designed to empower developers and quantitative traders to build institutional-grade automated strategies without proprietary barriers.
+Use Node.js 22 and Bun for local development. Full verification also requires Python 3 and a stable Rust toolchain.
+
+```bash
+git clone https://github.com/shehzadtrader777/Signal-forge-.git
+cd Signal-forge-
+bun install --frozen-lockfile
+cp .env.example .env
+npm run dev
+```
+
+The example environment file is a **template, not configured credentials**. Leave live exchange variables blank in local development. Use only test or sandbox credentials when needed, and never commit a populated `.env`.
+
+### Verification
+
+On a host that supports Unix domain sockets, build the Rust engine and run the combined check against a temporary engine socket.
+
+```bash
+cargo test --locked --manifest-path hybrid_core/rust_engine/Cargo.toml --all-targets
+cargo build --locked --manifest-path hybrid_core/rust_engine/Cargo.toml
+python3 -m unittest discover -s hybrid_core/python_control_plane -p 'test_*.py' -v
+sh scripts/verify-with-rust.sh hybrid_core/rust_engine/target/debug/signal_forge_rust_engine
+```
+
+## Roadmap
+
+1. **Premium foundation:** coherent branding, landing, authentication, pricing preview, world-map concept and two theme variants.
+2. **Research clarity:** organize 30/60/90-day backtesting, distinguish paper trading, expand charts and establish trustworthy data-coverage labels.
+3. **Guided intelligence:** evolve the read-only educational Super Guide; test provider configuration and privacy boundaries.
+4. **Security & readiness:** harden operator approval tokens, test Firebase rules, safeguard secrets, complete mobile/accessibility QA and reconcile exported source.
+5. **Future exploration:** advanced research analytics and deeper modular integrations only after validation and review.
+
+These are development goals, **not commitments that features are currently delivered**.
+
+## Open collaboration
+
+Suggestions, documentation corrections, accessibility feedback and reproducible bug reports are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+
+**License notice:** A repository-wide open-source LICENSE has not yet been selected. Public visibility does not automatically grant reuse rights. Until a license is published, do not assume rights to copy, modify or redistribute repository content beyond those granted by applicable law and GitHub's terms. Licensing is a project-owner decision.
+
+## Safety and scope
+
+- No trading strategy or simulation guarantees profit; financial loss is possible.
+- Do not treat example charts, sample metrics or deterministic test data as validated market performance.
+- Never post passwords, API keys, exchange secrets, Firebase service credentials or personal data in issues/PRs.
+- Keep real-money execution disabled unless separately authorized and independently validated.
+- Report suspected vulnerabilities using the instructions in [SECURITY.md](SECURITY.md).
+
+---
+
+**Build deliberately. Measure honestly. Forge responsibly.**

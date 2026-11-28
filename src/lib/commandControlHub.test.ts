@@ -112,3 +112,12 @@ test('Operational presets, dock preferences, search filtering, and backend matri
   assert.equal(hydrated.dock.showDockLabels, false);
   assert.equal(hydrated.domainOverrides.EXECUTION_ROUTER, 'FORCE_OFF');
 });
+
+test('tampered command state versions and invalid timestamps are normalized', () => {
+  const defaults = createDefaultCommandControlState(DEFAULT_CONTROL_MATRIX,'2026-11-27T00:00:00Z');
+  for (const invalidVersion of [Infinity,NaN,-3,1.2,Number.MAX_SAFE_INTEGER+100]) {
+    const sanitized=sanitizeCommandControlState({...defaults,stateVersion:invalidVersion,updatedAtIso:'invalid-date'});
+    assert.equal(sanitized.stateVersion,1);
+    assert.ok(Number.isFinite(Date.parse(sanitized.updatedAtIso)));
+  }
+});

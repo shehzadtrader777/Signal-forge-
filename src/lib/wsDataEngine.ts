@@ -29,6 +29,12 @@ import {
   type WsBufferedTickerFrame,
   stepDeterministicFallbackTickers,
 } from './telemetrySync';
+import {
+  computeBoundedExponentialBackoffMs,
+  evaluateTimestampFreshness,
+  type DataFreshnessStatus,
+  type WsConnectionHealth,
+} from './marketPriceModel';
 
 export const DEFAULT_DRIFT_THRESHOLD_PCT = 0.5;
 export const DEFAULT_SIGNAL_CARD_DRIFT_THRESHOLD_PCT = 0.5;
@@ -43,6 +49,8 @@ export const SPOT_WS_HOSTS = [
 export interface RawWsTickInput {
   symbol: string;
   price: number;
+  bidPrice?: number;
+  askPrice?: number;
   change24hPercent?: number;
   high24h?: number;
   low24h?: number;
@@ -54,6 +62,8 @@ export interface RawWsTickInput {
 export interface ValidatedWsTick {
   symbol: string;
   price: number;
+  bidPrice?: number;
+  askPrice?: number;
   change24hPercent: number;
   high24h: number;
   low24h: number;
@@ -107,12 +117,23 @@ export interface ReconciliationAuditEvent {
 export interface ReconciliationTelemetrySnapshot {
   validatedTicksCount: number;
   rejectedTicksCount: number;
+  duplicateTicksDroppedCount: number;
+  outOfOrderTicksDroppedCount: number;
+  failedUpdatesCount: number;
   lastRejectionReason: string | null;
   driftsResolvedCount: number;
   lastReconciledSymbol: string | null;
   lastDiscrepancyPct: number;
   lastReconciledAt: string | null;
   wsConnected: boolean;
+  connectionHealth: WsConnectionHealth;
+  dataFreshness: DataFreshnessStatus;
+  lastFrameAtIso: string | null;
+  lastDisconnectAtIso: string | null;
+  lastReconnectAtIso: string | null;
+  reconnectCount: number;
+  restoredSubscriptionsCount: number;
+  activeSubscriptions: string[];
   fallbackEnforced: boolean;
   syncEpoch: number;
   reconnectAttempt?: number;
@@ -164,6 +185,8 @@ export function validateIncomingWsTick(
     maxJumpPct?: number;
     cmcBaseline?: CmcBaselineValuation | null;
     maxCmcDivergencePct?: number;
+    nowMs?: number;
+    maxStaleAgeMs?: number;
   }
 ): TickValidationResult {
   const symbol = typeof input.symbol === 'string' ? input.symbol.trim().toUpperCase() : '';
@@ -191,6 +214,36 @@ export function validateIncomingWsTick(
     };
   }
 
+  let validatedBid: number | undefined;
+  let validatedAsk: number | undefined;
+  if (input.bidPrice !== undefined || input.askPrice !== undefined) {
+    const bid = Number(input.bidPrice);
+    const ask = Number(input.askPrice);
+    if (!Number.isFinite(bid) || !Number.isFinite(ask) || bid <= 0 || ask <= 0 || ask < bid) {
+      return {
+        accepted: false,
+        reason: `${symbol}: Rejected tick with invalid or inverted bid/ask quote.`,
+      };
+    }
+    const mid = (bid + ask) / 2;
+    const spreadBps = ((ask - bid) / mid) * 10_000;
+    if (spreadBps > 500) {
+      return {
+        accepted: false,
+        reason: `${symbol}: Rejected tick with excessive bid/ask spread (${spreadBps.toFixed(1)} bps).`,
+      };
+    }
+    const lastVsMidPct = (Math.abs(price - mid) / mid) * 100;
+    if (lastVsMidPct > 5.0) {
+      return {
+        accepted: false,
+        reason: `${symbol}: Rejected tick because last price diverges ${lastVsMidPct.toFixed(2)}% from bid/ask midpoint.`,
+      };
+    }
+    validatedBid = bid;
+    validatedAsk = ask;
+  }
+
   if (options?.cmcBaseline) {
     const cmcCheck = validateSpotFeedAgainstCmc({
       symbol,
@@ -214,8 +267,19 @@ export function validateIncomingWsTick(
     };
   }
 
-  const changeRaw = input.change24hPercent ?? 0;
-  const change24hPercent = Number.isFinite(changeRaw) ? Number(changeRaw.toFixed(2)) : 0;
+  if (
+    input.change24hPercent !== undefined &&
+    (!Number.isFinite(input.change24hPercent) ||
+      input.change24hPercent < -99.99 ||
+      input.change24hPercent > 10_000)
+  ) {
+    return {
+      accepted: false,
+      reason: `${symbol}: Rejected tick with non-finite or out-of-bounds 24h change.`,
+    };
+  }
+  const change24hPercent =
+    input.change24hPercent !== undefined ? Number(input.change24hPercent.toFixed(2)) : 0;
 
   let high24h =
     input.high24h !== undefined && Number.isFinite(input.high24h) && input.high24h > 0
@@ -237,18 +301,44 @@ export function validateIncomingWsTick(
     low24h = Math.min(low24h, price);
   }
 
-  const receivedAtMs =
-    input.receivedAtMs !== undefined && Number.isFinite(input.receivedAtMs) && input.receivedAtMs > 0
-      ? input.receivedAtMs
-      : Date.now();
-
+  const nowMs = options?.nowMs ?? Date.now();
   if (
-    options?.previousTimestampMs !== undefined &&
-    receivedAtMs + MAX_CLOCK_SKEW_TOLERANCE_MS < options.previousTimestampMs
+    input.receivedAtMs !== undefined &&
+    (!Number.isFinite(input.receivedAtMs) || input.receivedAtMs <= 0)
   ) {
     return {
       accepted: false,
-      reason: `${symbol}: Rejected out-of-order stale WS frame (skew > ${MAX_CLOCK_SKEW_TOLERANCE_MS}ms).`,
+      reason: `${symbol}: Rejected tick with malformed timestamp.`,
+    };
+  }
+  const receivedAtMs = input.receivedAtMs !== undefined ? input.receivedAtMs : nowMs;
+
+  if (receivedAtMs > nowMs + MAX_CLOCK_SKEW_TOLERANCE_MS) {
+    return {
+      accepted: false,
+      reason: `${symbol}: Rejected future-dated WS frame (+${receivedAtMs - nowMs}ms > ${MAX_CLOCK_SKEW_TOLERANCE_MS}ms).`,
+    };
+  }
+
+  if (
+    options?.maxStaleAgeMs !== undefined &&
+    Number.isFinite(options.maxStaleAgeMs) &&
+    options.maxStaleAgeMs > 0 &&
+    nowMs - receivedAtMs > options.maxStaleAgeMs
+  ) {
+    return {
+      accepted: false,
+      reason: `${symbol}: Rejected stale WS frame (age ${nowMs - receivedAtMs}ms > ${options.maxStaleAgeMs}ms).`,
+    };
+  }
+
+  if (
+    options?.previousTimestampMs !== undefined &&
+    receivedAtMs < options.previousTimestampMs
+  ) {
+    return {
+      accepted: false,
+      reason: `${symbol}: Rejected out-of-order stale WS frame (${receivedAtMs} < ${options.previousTimestampMs}).`,
     };
   }
 
@@ -258,6 +348,8 @@ export function validateIncomingWsTick(
     tick: {
       symbol,
       price,
+      ...(validatedBid !== undefined ? { bidPrice: validatedBid } : {}),
+      ...(validatedAsk !== undefined ? { askPrice: validatedAsk } : {}),
       change24hPercent,
       high24h,
       low24h,
@@ -522,6 +614,7 @@ export class LiveWsFeedController {
   private anchorPrices: Record<string, number> = {};
   private authoritativePrices: Record<string, number> = {};
   private lastTickAtBySymbol: Record<string, number> = {};
+  private lastAcceptedSignatureBySymbol: Record<string, string> = {};
   private cmcBaselines: Record<string, CmcBaselineValuation> = {};
   private wsFactory?: WebSocketFactory;
   private flushIntervalMs: number;
@@ -532,9 +625,15 @@ export class LiveWsFeedController {
   private ws: MinimalWebSocketLike | null = null;
   private hostIndex = 0;
   private healAttempt = 0;
+  private reconnectCount = 0;
+  private restoredSubscriptionsCount = 0;
+  private hasEverOpened = false;
+  private activeSubscriptions: string[] = [];
   private circuitOpen = false;
   private fallbackStep = 0;
   private lastFrameAtMs = 0;
+  private lastDisconnectAtIso: string | null = null;
+  private lastReconnectAtIso: string | null = null;
   private wsConnected = false;
   private fallbackEnforced = true;
   private running = false;
@@ -548,6 +647,9 @@ export class LiveWsFeedController {
 
   private validatedTicksCount = 0;
   private rejectedTicksCount = 0;
+  private duplicateTicksDroppedCount = 0;
+  private outOfOrderTicksDroppedCount = 0;
+  private failedUpdatesCount = 0;
   private lastRejectionReason: string | null = null;
   private driftsResolvedCount = 0;
   private lastReconciledSymbol: string | null = null;
@@ -652,16 +754,55 @@ export class LiveWsFeedController {
     return this.authoritativePrices[symbol.toUpperCase()];
   }
 
-  getTelemetrySnapshot(): ReconciliationTelemetrySnapshot {
+  getConnectionHealth(nowMs: number = Date.now()): {
+    connectionHealth: WsConnectionHealth;
+    dataFreshness: DataFreshnessStatus;
+  } {
+    const freshnessEval =
+      this.lastFrameAtMs > 0
+        ? evaluateTimestampFreshness(this.lastFrameAtMs, nowMs)
+        : { freshness: 'INVALID_TIMESTAMP' as DataFreshnessStatus, ageMs: Number.POSITIVE_INFINITY, reason: 'No frames yet.' };
+
+    if (this.circuitOpen) {
+      return { connectionHealth: 'CIRCUIT_OPEN', dataFreshness: freshnessEval.freshness };
+    }
+    if (this.healTimerId !== null) {
+      return { connectionHealth: 'RECONNECTING', dataFreshness: freshnessEval.freshness };
+    }
+    if (!this.wsConnected) {
+      return { connectionHealth: 'DISCONNECTED', dataFreshness: freshnessEval.freshness };
+    }
+    if (freshnessEval.freshness === 'STALE') {
+      return { connectionHealth: 'STALE', dataFreshness: 'STALE' };
+    }
+    if (freshnessEval.freshness === 'DELAYED') {
+      return { connectionHealth: 'DELAYED', dataFreshness: 'DELAYED' };
+    }
+    return { connectionHealth: 'CONNECTED', dataFreshness: freshnessEval.freshness };
+  }
+
+  getTelemetrySnapshot(nowMs: number = Date.now()): ReconciliationTelemetrySnapshot {
+    const { connectionHealth, dataFreshness } = this.getConnectionHealth(nowMs);
     return {
       validatedTicksCount: this.validatedTicksCount,
       rejectedTicksCount: this.rejectedTicksCount,
+      duplicateTicksDroppedCount: this.duplicateTicksDroppedCount,
+      outOfOrderTicksDroppedCount: this.outOfOrderTicksDroppedCount,
+      failedUpdatesCount: this.failedUpdatesCount,
       lastRejectionReason: this.lastRejectionReason,
       driftsResolvedCount: this.driftsResolvedCount,
       lastReconciledSymbol: this.lastReconciledSymbol,
       lastDiscrepancyPct: this.lastDiscrepancyPct,
       lastReconciledAt: this.lastReconciledAt,
       wsConnected: this.wsConnected,
+      connectionHealth,
+      dataFreshness,
+      lastFrameAtIso: this.lastFrameAtMs > 0 ? new Date(this.lastFrameAtMs).toISOString() : null,
+      lastDisconnectAtIso: this.lastDisconnectAtIso,
+      lastReconnectAtIso: this.lastReconnectAtIso,
+      reconnectCount: this.reconnectCount,
+      restoredSubscriptionsCount: this.restoredSubscriptionsCount,
+      activeSubscriptions: this.activeSubscriptions.slice(),
       fallbackEnforced: this.fallbackEnforced,
       syncEpoch: this.buffer.getCurrentEpoch(),
       reconnectAttempt: this.healAttempt,
@@ -720,20 +861,35 @@ export class LiveWsFeedController {
 
     if (!res.accepted || !res.tick) {
       this.rejectedTicksCount += 1;
+      if (/out-of-order|future/i.test(res.reason)) {
+        this.outOfOrderTicksDroppedCount += 1;
+      } else {
+        this.failedUpdatesCount += 1;
+      }
       this.lastRejectionReason = res.reason;
       return res;
+    }
+
+    const signature = `${res.tick.price}|${res.tick.receivedAtMs}`;
+    if (this.lastAcceptedSignatureBySymbol[sym] === signature) {
+      this.duplicateTicksDroppedCount += 1;
+      this.rejectedTicksCount += 1;
+      this.lastRejectionReason = `Duplicate external tick ignored for ${sym} (${signature}).`;
+      return { accepted: false, reason: this.lastRejectionReason };
     }
 
     this.validatedTicksCount += 1;
     this.authoritativePrices[sym] = res.tick.price;
     this.lastTickAtBySymbol[sym] = res.tick.receivedAtMs;
+    this.lastAcceptedSignatureBySymbol[sym] = signature;
     this.anchorPrices[sym] = res.tick.price;
     return res;
   }
 
   /**
    * Parses raw Binance combined-stream JSON (!miniTicker@arr or @ticker), enforces epoch gating
-   * BEFORE mutating authoritative prices, validates against tracked allowlist, and quarantines anomalies.
+   * BEFORE mutating authoritative prices, validates against tracked allowlist, deduplicates identical
+   * frames, rejects out-of-order updates, and quarantines anomalies.
    */
   ingestRawWsPayload(
     rawData: string | Record<string, unknown>,
@@ -747,6 +903,7 @@ export class LiveWsFeedController {
 
     if (epoch !== currentEpoch) {
       this.rejectedTicksCount += 1;
+      this.failedUpdatesCount += 1;
       this.lastRejectionReason = `Rejected stale WS payload from superseded epoch ${epoch} (current ${currentEpoch}).`;
       return { acceptedCount: 0, rejectedCount: 1 };
     }
@@ -757,6 +914,7 @@ export class LiveWsFeedController {
         payload = JSON.parse(rawData) as Record<string, unknown>;
       } catch {
         this.rejectedTicksCount += 1;
+        this.failedUpdatesCount += 1;
         this.lastRejectionReason = 'Malformed WebSocket JSON frame quarantined.';
         return { acceptedCount: 0, rejectedCount: 1 };
       }
@@ -780,10 +938,31 @@ export class LiveWsFeedController {
           openP > 0 && Number.isFinite(openP)
             ? Number((((price - openP) / openP) * 100).toFixed(2))
             : 0;
-        const eventTsMs =
-          typeof raw.E === 'number' && Number.isFinite(raw.E) && raw.E > 1_000_000_000_000
-            ? raw.E
-            : receivedAtMs;
+        const hasExplicitEventTs = raw.E !== undefined && raw.E !== null;
+        if (
+          hasExplicitEventTs &&
+          (typeof raw.E !== 'number' || !Number.isFinite(raw.E) || raw.E <= 1_000_000_000_000)
+        ) {
+          this.rejectedTicksCount += 1;
+          this.failedUpdatesCount += 1;
+          this.lastRejectionReason = `${sym}: Rejected WS frame with malformed event timestamp.`;
+          rejectedCount += 1;
+          continue;
+        }
+        const eventTsMs = hasExplicitEventTs ? (raw.E as number) : receivedAtMs;
+
+        const incomingSig = `${price}|${eventTsMs}`;
+        if (
+          Number.isFinite(price) &&
+          price > 0 &&
+          this.lastAcceptedSignatureBySymbol[sym] === incomingSig
+        ) {
+          this.duplicateTicksDroppedCount += 1;
+          this.rejectedTicksCount += 1;
+          this.lastRejectionReason = `Duplicate WebSocket frame ignored for ${sym}.`;
+          rejectedCount += 1;
+          continue;
+        }
 
         const check = validateIncomingWsTick(
           {
@@ -805,6 +984,11 @@ export class LiveWsFeedController {
 
         if (!check.accepted || !check.tick) {
           this.rejectedTicksCount += 1;
+          if (/out-of-order|future/i.test(check.reason)) {
+            this.outOfOrderTicksDroppedCount += 1;
+          } else {
+            this.failedUpdatesCount += 1;
+          }
           this.lastRejectionReason = check.reason;
           rejectedCount += 1;
           continue;
@@ -822,6 +1006,7 @@ export class LiveWsFeedController {
         });
         if (!enqueued) {
           this.rejectedTicksCount += 1;
+          this.failedUpdatesCount += 1;
           rejectedCount += 1;
           continue;
         }
@@ -829,6 +1014,7 @@ export class LiveWsFeedController {
         this.validatedTicksCount += 1;
         this.authoritativePrices[sym] = check.tick.price;
         this.lastTickAtBySymbol[sym] = check.tick.receivedAtMs;
+        this.lastAcceptedSignatureBySymbol[sym] = `${check.tick.price}|${check.tick.receivedAtMs}`;
         acceptedCount += 1;
       }
       return { acceptedCount, rejectedCount };
@@ -841,18 +1027,40 @@ export class LiveWsFeedController {
         return { acceptedCount: 0, rejectedCount: 0 };
       }
 
-      const eventTsMs =
-        typeof raw.E === 'number' && Number.isFinite(raw.E) && raw.E > 1_000_000_000_000
-          ? raw.E
-          : receivedAtMs;
+      const parsedPrice = Number(raw.c);
+      const hasExplicitEventTs = raw.E !== undefined && raw.E !== null;
+      if (
+        hasExplicitEventTs &&
+        (typeof raw.E !== 'number' || !Number.isFinite(raw.E) || raw.E <= 1_000_000_000_000)
+      ) {
+        this.rejectedTicksCount += 1;
+        this.failedUpdatesCount += 1;
+        this.lastRejectionReason = `${sym}: Rejected WS frame with malformed event timestamp.`;
+        return { acceptedCount: 0, rejectedCount: 1 };
+      }
+      const eventTsMs = hasExplicitEventTs ? (raw.E as number) : receivedAtMs;
 
+      const incomingSig = `${parsedPrice}|${eventTsMs}`;
+      if (
+        Number.isFinite(parsedPrice) &&
+        parsedPrice > 0 &&
+        this.lastAcceptedSignatureBySymbol[sym] === incomingSig
+      ) {
+        this.duplicateTicksDroppedCount += 1;
+        this.rejectedTicksCount += 1;
+        this.lastRejectionReason = `Duplicate WebSocket frame ignored for ${sym}.`;
+        return { acceptedCount: 0, rejectedCount: 1 };
+      }
+
+      const hasBookFields = raw.b !== undefined || raw.a !== undefined;
       const check = validateIncomingWsTick(
         {
           symbol: sym,
-          price: Number(raw.c),
+          price: parsedPrice,
+          ...(hasBookFields ? { bidPrice: Number(raw.b), askPrice: Number(raw.a) } : {}),
           change24hPercent: Number(raw.P ?? 0),
-          high24h: Number(raw.h),
-          low24h: Number(raw.l),
+          high24h: raw.h !== undefined ? Number(raw.h) : undefined,
+          low24h: raw.l !== undefined ? Number(raw.l) : undefined,
           volume24hUsd: Number(raw.q ?? 0),
           receivedAtMs: eventTsMs,
           source: 'ws',
@@ -866,6 +1074,11 @@ export class LiveWsFeedController {
 
       if (!check.accepted || !check.tick) {
         this.rejectedTicksCount += 1;
+        if (/out-of-order|future/i.test(check.reason)) {
+          this.outOfOrderTicksDroppedCount += 1;
+        } else {
+          this.failedUpdatesCount += 1;
+        }
         this.lastRejectionReason = check.reason;
         return { acceptedCount: 0, rejectedCount: 1 };
       }
@@ -882,12 +1095,14 @@ export class LiveWsFeedController {
       });
       if (!enqueued) {
         this.rejectedTicksCount += 1;
+        this.failedUpdatesCount += 1;
         return { acceptedCount: 0, rejectedCount: 1 };
       }
 
       this.validatedTicksCount += 1;
       this.authoritativePrices[sym] = check.tick.price;
       this.lastTickAtBySymbol[sym] = check.tick.receivedAtMs;
+      this.lastAcceptedSignatureBySymbol[sym] = `${check.tick.price}|${check.tick.receivedAtMs}`;
       return { acceptedCount: 1, rejectedCount: 0 };
     }
 
@@ -952,6 +1167,7 @@ export class LiveWsFeedController {
     this.detachAndCloseSocket(this.ws);
     if (resetConnectionFlag && this.wsConnected) {
       this.wsConnected = false;
+      this.lastDisconnectAtIso = new Date().toISOString();
       this.onConnectionChange?.(false, this.fallbackEnforced, this.buffer.getCurrentEpoch());
     }
   }
@@ -974,8 +1190,9 @@ export class LiveWsFeedController {
       this.lastRejectionReason = `WebSocket reconnect circuit breaker opened after ${this.healAttempt} consecutive attempts.`;
       return;
     }
-    const delayMs = computeExponentialReconnectDelayMs(this.healAttempt, {
-      baseMs: this.reconnectBaseDelayMs,
+    const delayMs = computeBoundedExponentialBackoffMs(this.healAttempt, {
+      baseDelayMs: this.reconnectBaseDelayMs,
+      maxDelayMs: 30_000,
     });
     this.healAttempt += 1;
     this.healTimerId = globalThis.setTimeout(() => {
@@ -1001,10 +1218,12 @@ export class LiveWsFeedController {
       return;
     }
 
-    const streams = [
+    const streamList = [
       '!miniTicker@arr',
       ...this.coins.map((c) => `${c.symbol.toLowerCase()}@ticker`),
-    ].join('/');
+    ];
+    this.activeSubscriptions = streamList;
+    const streams = streamList.join('/');
     const host = SPOT_WS_HOSTS[this.hostIndex % SPOT_WS_HOSTS.length];
     const streamEpoch = this.buffer.getCurrentEpoch();
     let receivedFirstFrame = false;
@@ -1019,6 +1238,7 @@ export class LiveWsFeedController {
         if (!this.running || this.ws !== ws) return;
         if (ws.readyState !== 1) {
           this.wsConnected = false;
+          this.lastDisconnectAtIso = new Date().toISOString();
           this.hostIndex = (this.hostIndex + 1) % SPOT_WS_HOSTS.length;
           this.detachAndCloseSocket(ws);
           this.startFallbackLoop();
@@ -1031,6 +1251,7 @@ export class LiveWsFeedController {
         const ageMs = Date.now() - this.lastFrameAtMs;
         if (this.wsConnected && ageMs > WS_FRAME_STALE_THRESHOLD_MS) {
           this.wsConnected = false;
+          this.lastDisconnectAtIso = new Date().toISOString();
           this.hostIndex = (this.hostIndex + 1) % SPOT_WS_HOSTS.length;
           this.fallbackEnforced = true;
           this.onConnectionChange?.(false, true, this.buffer.getCurrentEpoch());
@@ -1049,7 +1270,14 @@ export class LiveWsFeedController {
           this.detachAndCloseSocket(ws);
           return;
         }
+        const nowIso = new Date().toISOString();
         this.lastFrameAtMs = Date.now();
+        if (this.hasEverOpened) {
+          this.reconnectCount += 1;
+          this.lastReconnectAtIso = nowIso;
+          this.restoredSubscriptionsCount += streamList.length;
+        }
+        this.hasEverOpened = true;
         this.wsConnected = true;
         this.fallbackEnforced = false;
         this.onConnectionChange?.(true, false, streamEpoch);
@@ -1067,6 +1295,7 @@ export class LiveWsFeedController {
           if (!receivedFirstFrame) {
             this.hostIndex = (this.hostIndex + 1) % SPOT_WS_HOSTS.length;
             this.wsConnected = false;
+            this.lastDisconnectAtIso = new Date().toISOString();
             this.onConnectionChange?.(false, true, this.buffer.getCurrentEpoch());
             this.clearSocketAndTimers(false);
             this.startFallbackLoop();
@@ -1094,6 +1323,8 @@ export class LiveWsFeedController {
       ws.onerror = () => {
         if (!this.running || this.ws !== ws) return;
         this.wsConnected = false;
+        this.lastDisconnectAtIso = new Date().toISOString();
+        this.failedUpdatesCount += 1;
         this.hostIndex = (this.hostIndex + 1) % SPOT_WS_HOSTS.length;
         this.clearSocketAndTimers(false);
         this.onConnectionChange?.(false, true, this.buffer.getCurrentEpoch());
@@ -1104,12 +1335,15 @@ export class LiveWsFeedController {
       ws.onclose = () => {
         if (!this.running || this.ws !== ws) return;
         this.wsConnected = false;
+        this.lastDisconnectAtIso = new Date().toISOString();
         this.clearSocketAndTimers(false);
         this.onConnectionChange?.(false, true, this.buffer.getCurrentEpoch());
         this.startFallbackLoop();
         this.scheduleReconnect();
       };
     } catch {
+      this.lastDisconnectAtIso = new Date().toISOString();
+      this.failedUpdatesCount += 1;
       this.clearSocketAndTimers(false);
       this.startFallbackLoop();
       this.scheduleReconnect();

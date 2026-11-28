@@ -14,7 +14,7 @@ use mmap_feed::MmapTickDataset;
 use order_book::{DynamicRiskEnvelope, OrderBookRouter};
 use std::env;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 fn main() -> std::io::Result<()> {
     let socket_path = env::var("SIGNAL_FORGE_IPC_SOCKET")
@@ -42,11 +42,21 @@ fn main() -> std::io::Result<()> {
             }
         };
 
+        // Bound the time an incomplete/malicious IPC frame can block the daemon.
+        // This is a single-connection event loop; heavy scans still need worker isolation.
+        if let Err(err) = stream.set_read_timeout(Some(Duration::from_secs(2))) {
+            eprintln!("[signal_forge_rust_engine] IPC read timeout setup error: {}", err);
+            continue;
+        }
+        if let Err(err) = stream.set_write_timeout(Some(Duration::from_secs(2))) {
+            eprintln!("[signal_forge_rust_engine] IPC write timeout setup error: {}", err);
+            continue;
+        }
         let started = Instant::now();
         let reply = match read_framed_command(&mut stream) {
             Ok(ControlPlaneCommand::Ping { seq, sent_ns }) => {
                 let now = monotonic_epoch_ns();
-                let one_way_ns = now.saturating_sub(sent_ns) as u64;
+                let one_way_ns = now.saturating_sub(u128::from(sent_ns)) as u64;
                 ExecutionReply {
                     ok: true,
                     engine_ts_ns: now,
@@ -83,28 +93,58 @@ fn main() -> std::io::Result<()> {
                 end_epoch_ns,
                 fast_window,
                 slow_window,
-            }) => match MmapTickDataset::open(&PathBuf::from(mmap_path)) {
-                Ok(dataset) => {
-                    let summary = dataset.run_vectorized_scan(
-                        start_epoch_ns,
-                        end_epoch_ns,
-                        fast_window,
-                        slow_window,
-                        2.5,
-                    );
+            }) => {
+                let candidate = PathBuf::from(&mmap_path);
+                let has_parent_dir = candidate
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir));
+                let allowed_prefix =
+                    mmap_path.starts_with("/tmp/sf_mmap_") || mmap_path.starts_with(".data/");
+                if has_parent_dir || !allowed_prefix {
                     ExecutionReply {
-                        ok: true,
+                        ok: false,
                         engine_ts_ns: monotonic_epoch_ns(),
                         latency_ns: started.elapsed().as_nanos() as u64,
-                        payload_json: serde_json::to_string(&summary).unwrap_or_default(),
+                        payload_json: r#"{"error":"mmap_path confinement violation blocked"}"#
+                            .to_string(),
+                    }
+                } else {
+                    match MmapTickDataset::open(&candidate) {
+                        Ok(dataset) => {
+                            let summary = dataset.run_vectorized_scan(
+                                start_epoch_ns,
+                                end_epoch_ns,
+                                fast_window,
+                                slow_window,
+                                2.5,
+                            );
+                            ExecutionReply {
+                                ok: true,
+                                engine_ts_ns: monotonic_epoch_ns(),
+                                latency_ns: started.elapsed().as_nanos() as u64,
+                                payload_json: serde_json::to_string(&summary).unwrap_or_default(),
+                            }
+                        }
+                        Err(err) => ExecutionReply {
+                            ok: false,
+                            engine_ts_ns: monotonic_epoch_ns(),
+                            latency_ns: started.elapsed().as_nanos() as u64,
+                            payload_json: format!(r#"{{"error":"{}"}}"#, err),
+                        },
                     }
                 }
-                Err(err) => ExecutionReply {
-                    ok: false,
-                    engine_ts_ns: monotonic_epoch_ns(),
-                    latency_ns: started.elapsed().as_nanos() as u64,
-                    payload_json: format!(r#"{{"error":"{}"}}"#, err),
-                },
+            }
+            Ok(ControlPlaneCommand::UpdateRiskEnvelope {
+                max_position_pct,
+                max_leverage,
+                hard_drawdown_pct,
+            }) if !max_position_pct.is_finite()
+                || !max_leverage.is_finite()
+                || !hard_drawdown_pct.is_finite() => ExecutionReply {
+                ok: false,
+                engine_ts_ns: monotonic_epoch_ns(),
+                latency_ns: started.elapsed().as_nanos() as u64,
+                payload_json: r#"{"error":"NON_FINITE_RISK_ENVELOPE"}"#.to_string(),
             },
             Ok(ControlPlaneCommand::UpdateRiskEnvelope {
                 max_position_pct,

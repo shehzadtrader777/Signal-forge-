@@ -21,6 +21,7 @@ import type {
   UiModificationAction,
 } from '../lib/agenticCliEngine';
 import type { WidgetLayoutContract, WidgetMetadataSegment, WidgetMetricItem } from '../lib/designSystem';
+import { apiFetch } from '../lib/apiClient';
 import { useTradingArchitectureStore } from '../store/useTradingArchitectureStore';
 import { useWorkspaceStore } from '../store/useWorkspaceStore';
 import {
@@ -190,7 +191,7 @@ export const AgenticCliOrchestratorPanel = memo(function AgenticCliOrchestratorP
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch('/api/agentic-cli/status');
+      const res = await apiFetch('/api/agentic-cli/status');
       if (!res.ok) return;
       const data = (await res.json()) as GatewaySnapshotResponse;
       if (data.ok && data.snapshot) {
@@ -203,9 +204,13 @@ export const AgenticCliOrchestratorPanel = memo(function AgenticCliOrchestratorP
 
   const fetchFilePreview = useCallback(async (targetPath: string) => {
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/agentic-cli/file-preview?path=${encodeURIComponent(targetPath)}`
       );
+      if (res.status === 401 || res.status === 403) {
+        setFileError('Owner/Admin authentication required to inspect local workspace files.');
+        return;
+      }
       const data = (await res.json()) as FilePreviewResponse;
       if (data.ok && typeof data.content === 'string') {
         setFileContent(data.content);
@@ -308,7 +313,7 @@ export const AgenticCliOrchestratorPanel = memo(function AgenticCliOrchestratorP
     setBusyAction('toggle');
     setStatusNotice(null);
     try {
-      const res = await fetch('/api/agentic-cli/toggle', {
+      const res = await apiFetch('/api/agentic-cli/toggle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: nextEnabled }),
@@ -337,7 +342,7 @@ export const AgenticCliOrchestratorPanel = memo(function AgenticCliOrchestratorP
       setBusyAction(`connector:${connectorId}`);
       setStatusNotice(null);
       try {
-        const res = await fetch('/api/agentic-cli/gateway/select', {
+        const res = await apiFetch('/api/agentic-cli/gateway/select', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ connectorId }),
@@ -380,7 +385,7 @@ export const AgenticCliOrchestratorPanel = memo(function AgenticCliOrchestratorP
       setBusyAction('propose');
       setStatusNotice(null);
       try {
-        const res = await fetch('/api/agentic-cli/propose', {
+        const res = await apiFetch('/api/agentic-cli/propose', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -420,7 +425,7 @@ export const AgenticCliOrchestratorPanel = memo(function AgenticCliOrchestratorP
       setBusyAction(`confirm:${proposal.id}`);
       setStatusNotice(null);
       try {
-        const res = await fetch('/api/agentic-cli/confirm', {
+        const res = await apiFetch('/api/agentic-cli/confirm', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -472,7 +477,7 @@ export const AgenticCliOrchestratorPanel = memo(function AgenticCliOrchestratorP
       setBusyAction(`reject:${proposalId}`);
       setStatusNotice(null);
       try {
-        const res = await fetch('/api/agentic-cli/reject', {
+        const res = await apiFetch('/api/agentic-cli/reject', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ proposalId }),
@@ -503,7 +508,7 @@ export const AgenticCliOrchestratorPanel = memo(function AgenticCliOrchestratorP
       setBusyAction(`revert:${proposal.id}`);
       setStatusNotice(null);
       try {
-        const res = await fetch('/api/agentic-cli/revert', {
+        const res = await apiFetch('/api/agentic-cli/revert', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ proposalId: proposal.id }),

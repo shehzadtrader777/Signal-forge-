@@ -1,36 +1,76 @@
-import { useState, type ReactNode } from 'react';
-import { BrowserRouter, Link, Navigate, Route, Routes } from 'react-router-dom';
+import { Suspense, lazy, useCallback, useEffect, useState, type ReactNode } from 'react';
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigationType,
+} from 'react-router-dom';
 import { MotionConfig } from 'motion/react';
-import { MessageCircle } from 'lucide-react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/Navbar';
 import { SideMenuDrawer } from './components/SideMenuDrawer';
 import { GlobalAppLiveBar } from './components/GlobalAppLiveBar';
 import { LivePriceStrip } from './components/LivePriceStrip';
 import { FloatingWidgetDock } from './components/FloatingWidgetDock';
-import { FloatingTelegramChannel } from './components/FloatingTelegramChannel';
+import { MaintenanceBannerAndGate } from './components/MaintenanceBannerAndGate';
 import {
-  DedicatedEmailIconLink,
-  FooterSocialIconsRow,
+  AnchoredSocialWidgets,
   GeminiCollaborationAttribution,
-  WHATSAPP_DESK_URL,
 } from './components/FooterSocialAndContact';
-import { GlobalSearchModal } from './components/GlobalSearchModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { Dashboard } from './pages/Dashboard';
-import { Portfolio } from './pages/Portfolio';
-import { Signals } from './pages/Signals';
-import { SignalHistory } from './pages/SignalHistory';
-import { Backtesting } from './pages/Backtesting';
-import { Watchlist } from './pages/Watchlist';
-import { Alerts } from './pages/Alerts';
-import { AutoReports } from './pages/AutoReports';
-import { About } from './pages/About';
-import { Auth } from './pages/Auth';
-import { TrustConsole } from './pages/TrustConsole';
-import { Settings } from './pages/Settings';
+import { PremiumLanding } from './pages/PremiumLanding';
+import { PlansPreview } from './pages/PlansPreview';
+import { PublicHome } from './pages/PublicHome';
 import { useWorkspaceStore } from './store/useWorkspaceStore';
 import { useRbacIdentity } from './hooks/useRbacIdentity';
+
+// Lazy-load secondary & heavyweight workspaces to eliminate startup delays
+const Dashboard = lazy(() =>
+  import('./pages/Dashboard').then((m) => ({ default: m.Dashboard }))
+);
+const Portfolio = lazy(() =>
+  import('./pages/Portfolio').then((m) => ({ default: m.Portfolio }))
+);
+const Signals = lazy(() =>
+  import('./pages/Signals').then((m) => ({ default: m.Signals }))
+);
+const SignalHistory = lazy(() =>
+  import('./pages/SignalHistory').then((m) => ({ default: m.SignalHistory }))
+);
+const Backtesting = lazy(() =>
+  import('./pages/Backtesting').then((m) => ({ default: m.Backtesting }))
+);
+const Watchlist = lazy(() =>
+  import('./pages/Watchlist').then((m) => ({ default: m.Watchlist }))
+);
+const Alerts = lazy(() =>
+  import('./pages/Alerts').then((m) => ({ default: m.Alerts }))
+);
+const AutoReports = lazy(() =>
+  import('./pages/AutoReports').then((m) => ({ default: m.AutoReports }))
+);
+const About = lazy(() =>
+  import('./pages/About').then((m) => ({ default: m.About }))
+);
+const Auth = lazy(() =>
+  import('./pages/Auth').then((m) => ({ default: m.Auth }))
+);
+const TrustConsole = lazy(() =>
+  import('./pages/TrustConsole').then((m) => ({ default: m.TrustConsole }))
+);
+const Settings = lazy(() =>
+  import('./pages/Settings').then((m) => ({ default: m.Settings }))
+);
+
+function RouteLoadingFallback() {
+  return (
+    <div className="mx-auto max-w-[1440px] px-6 py-16 text-center font-mono text-xs text-slate-400">
+      Loading Signal Forge module...
+    </div>
+  );
+}
 
 function ProtectedConsoleRoute({ children }: { children: ReactNode }) {
   const { rbac, loading } = useRbacIdentity();
@@ -47,14 +87,57 @@ function ProtectedConsoleRoute({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * Predictable Route Scroll Manager:
+ * - Scrolls to top (0, 0) ONLY on forward PUSH navigation when no hash anchor is targeted.
+ * - Preserves browser scroll restoration on POP (Back / Forward) navigation.
+ * - Scrolls smoothly to #hash elements when explicitly linked.
+ */
+function RouteScrollManager() {
+  const location = useLocation();
+  const navigationType = useNavigationType();
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (location.hash) {
+      const targetId = location.hash.replace(/^#/, '');
+      const timer = window.setTimeout(() => {
+        document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 120);
+      return () => window.clearTimeout(timer);
+    }
+    if (navigationType === 'PUSH') {
+      if (document.body.style.overflow === 'hidden') {
+        document.body.style.overflow = '';
+      }
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      const rafId = window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      });
+      return () => window.cancelAnimationFrame(rafId);
+    }
+  }, [location.pathname, location.hash, navigationType]);
+
+  return null;
+}
+
 function AppShell() {
   const [sideMenuOpen, setSideMenuOpen] = useState(false);
-  const { forgeCapitalState } = useApp();
+  const handleOpenSideMenu = useCallback(() => setSideMenuOpen(true), []);
+  const handleCloseSideMenu = useCallback(() => setSideMenuOpen(false), []);
+  const location = useLocation();
+  const { forgeCapitalState, user } = useApp();
   const { rbac } = useRbacIdentity();
   const neonGridOverlay = useWorkspaceStore((s) => s.cyber.neonGridOverlay);
   const designVariant = useWorkspaceStore((s) => s.cyber.designVariant);
   const density = useWorkspaceStore((s) => s.cyber.density);
   const activeProfile = forgeCapitalState?.activeGuardProfile;
+  const isPublicHomepage =
+    location.pathname === '/home' || (location.pathname === '/' && !user);
+
+  // Keep the public pre-login experience separate from the dark terminal shell.
+  if (location.pathname === '/welcome') return <PremiumLanding />;
+  if (location.pathname === '/pricing') return <PlansPreview />;
 
   if (!activeProfile) {
     return (
@@ -75,151 +158,67 @@ function AppShell() {
         neonGridOverlay ? 'cyber-grid-backdrop' : 'bg-[var(--forge-canvas-bg)]'
       }`}
     >
-      <Navbar onOpenSideMenu={() => setSideMenuOpen(true)} />
-      <SideMenuDrawer open={sideMenuOpen} onClose={() => setSideMenuOpen(false)} />
-      <GlobalAppLiveBar />
+      <Navbar onOpenSideMenu={handleOpenSideMenu} />
+      <SideMenuDrawer open={sideMenuOpen} onClose={handleCloseSideMenu} />
+      {!isPublicHomepage && <GlobalAppLiveBar />}
       <LivePriceStrip />
 
-      <main className="flex-1 pb-10">
-        <ErrorBoundary title="Dashboard View Recovery">
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/portfolio" element={<Portfolio />} />
-            <Route path="/signals" element={<Signals />} />
-            <Route path="/signal-history" element={<SignalHistory />} />
-            <Route path="/backtesting" element={<Backtesting />} />
-            <Route
-              path="/trust-console"
-              element={
-                <ProtectedConsoleRoute>
-                  <TrustConsole />
-                </ProtectedConsoleRoute>
-              }
-            />
-            <Route
-              path="/test-console"
-              element={
-                <ProtectedConsoleRoute>
-                  <TrustConsole />
-                </ProtectedConsoleRoute>
-              }
-            />
-            <Route path="/watchlist" element={<Watchlist />} />
-            <Route path="/alerts" element={<Alerts />} />
-            <Route path="/auto-reports" element={<AutoReports />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/about" element={<About />} />
-            <Route path="/login" element={<Auth />} />
-          </Routes>
-        </ErrorBoundary>
+      <main className="flex-1 pb-24 sm:pb-20">
+        <MaintenanceBannerAndGate>
+          <ErrorBoundary title="Dashboard View Recovery">
+            <Suspense fallback={<RouteLoadingFallback />}>
+              <Routes>
+                <Route path="/" element={user ? <Dashboard /> : <PublicHome />} />
+                <Route path="/home" element={<PublicHome />} />
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/portfolio" element={<Portfolio />} />
+                <Route path="/signals" element={<Signals />} />
+                <Route path="/signal-history" element={<SignalHistory />} />
+                <Route path="/backtesting" element={<Backtesting />} />
+                <Route
+                  path="/trust-console"
+                  element={
+                    <ProtectedConsoleRoute>
+                      <TrustConsole />
+                    </ProtectedConsoleRoute>
+                  }
+                />
+                <Route
+                  path="/test-console"
+                  element={
+                    <ProtectedConsoleRoute>
+                      <TrustConsole />
+                    </ProtectedConsoleRoute>
+                  }
+                />
+                <Route path="/watchlist" element={<Watchlist />} />
+                <Route path="/alerts" element={<Alerts />} />
+                <Route path="/auto-reports" element={<AutoReports />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="/about" element={<About />} />
+                <Route path="/login" element={<Auth />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Suspense>
+          </ErrorBoundary>
+        </MaintenanceBannerAndGate>
       </main>
 
-      {/* Pinned Sticky Footer Action Bar: Telegram + WhatsApp Widgets & Consolidated Bottom Voice Widget */}
-      <div
-        role="region"
-        aria-label="Sticky Footer Communication & Voice Bar"
-        data-testid="sticky-footer-bar"
-        className="sticky bottom-0 z-40 border-t border-cyan-500/20"
-      >
-        <div
-          aria-hidden="true"
-          className="absolute inset-0 -z-10 bg-[#070d1b]/95 backdrop-blur-md pointer-events-none"
-        />
-        <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-2 px-4 py-2 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-2">
-            <FloatingTelegramChannel />
-
-            <a
-              href={WHATSAPP_DESK_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Chat on WhatsApp with Amir Shehzad"
-              data-testid="sticky-footer-whatsapp-widget"
-              className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-3 py-1.5 text-xs font-bold text-slate-950 shadow-sm shadow-emerald-950/50 hover:bg-emerald-400 transition-colors whitespace-nowrap focus-visible:outline-2 focus-visible:outline-emerald-300"
-            >
-              <MessageCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span className="text-left leading-tight">
-                <span className="block font-display text-xs font-bold">WhatsApp</span>
-                <span className="hidden md:block text-[10px] font-medium text-emerald-950/85">
-                  Direct Desk
-                </span>
-              </span>
-            </a>
-          </div>
-
-          <FloatingWidgetDock />
-        </div>
-      </div>
-
-      {/* Main Footer: Brand + Dedicated Email Icon + Site Links + Bottom Social Media Icons Row */}
+      {/* Streamlined Footer: ONLY "Developed by Amir Shehzad", "Co-developed with Gemini", and mandatory disclaimer */}
       <footer
         data-testid="app-footer"
-        className="border-t border-slate-800/90 bg-[#050914] py-6 px-4 sm:px-6 lg:px-8"
+        className="border-t border-slate-800/90 bg-[#050914] pt-6 pb-28 sm:pb-24 px-4 sm:px-6 lg:px-8"
       >
-        <div className="mx-auto max-w-[1440px] space-y-5">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between text-xs text-slate-400">
-            <div className="flex flex-wrap items-center gap-2.5">
-              <span className="font-display text-sm font-bold text-white">Signal Forge</span>
-              <span className="text-slate-600" aria-hidden="true">
-                ·
-              </span>
-              <span>Developed by Amir Shahzad</span>
-              <span className="text-slate-600" aria-hidden="true">
-                ·
-              </span>
-              <DedicatedEmailIconLink testId="footer-email-icon-link" />
-            </div>
-
-            <nav aria-label="Footer Navigation" className="flex flex-wrap items-center gap-4">
-              <Link to="/portfolio" className="hover:text-white transition-colors whitespace-nowrap">
-                Portfolio
-              </Link>
-              <Link to="/signals" className="hover:text-white transition-colors whitespace-nowrap">
-                Signals
-              </Link>
-              <Link to="/auto-reports" className="hover:text-white transition-colors whitespace-nowrap">
-                Auto-Reports
-              </Link>
-              <Link to="/signal-history" className="hover:text-white transition-colors whitespace-nowrap">
-                Signal History
-              </Link>
-              <Link to="/backtesting" className="hover:text-white transition-colors whitespace-nowrap">
-                Backtesting
-              </Link>
-              <Link to="/settings" className="hover:text-white transition-colors whitespace-nowrap">
-                Settings
-              </Link>
-              {rbac.canAccessTestConsole && (
-                <Link to="/trust-console" className="hover:text-white transition-colors whitespace-nowrap">
-                  Test Console
-                </Link>
-              )}
-              <Link to="/alerts" className="hover:text-white transition-colors whitespace-nowrap">
-                Alerts
-              </Link>
-              <Link to="/about" className="hover:text-white transition-colors whitespace-nowrap">
-                About Us
-              </Link>
-            </nav>
-          </div>
-
-          <div className="flex flex-col gap-4 border-t border-slate-800/80 pt-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div className="max-w-3xl">
-                <GeminiCollaborationAttribution />
-              </div>
-              <div className="flex flex-col items-start sm:items-end gap-2 shrink-0">
-                <FooterSocialIconsRow />
-                <p className="text-[11px] text-slate-500">
-                  &copy; {new Date().getFullYear()} Signal Forge. All rights reserved.
-                </p>
-              </div>
-            </div>
-          </div>
+        <div className="mx-auto max-w-[1440px]">
+          <GeminiCollaborationAttribution />
         </div>
       </footer>
 
-      <GlobalSearchModal />
+      {/* Permanently Anchored Bottom-Left Circular Social Widgets (hidden cleanly while drawer is open) */}
+      {!sideMenuOpen && <AnchoredSocialWidgets />}
+
+      {/* Auth-Aware Bottom-Right Controls (hidden cleanly while drawer is open) */}
+      {!sideMenuOpen && <FloatingWidgetDock isLoggedIn={Boolean(user)} userRole={rbac.role} />}
     </div>
   );
 }
@@ -228,6 +227,7 @@ export default function App() {
   return (
     <MotionConfig reducedMotion="user">
       <BrowserRouter>
+        <RouteScrollManager />
         <AppProvider>
           <AppShell />
         </AppProvider>

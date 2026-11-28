@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   Bot,
@@ -42,7 +42,7 @@ import type {
   UnifiedTradingMode,
 } from '../lib/freqtradeCoreEngine';
 import type { CoreSourceModuleDescriptor } from '../lib/freqtradeCoreServer';
-import { useApp } from '../context/AppContext';
+import { apiFetch } from '../lib/apiClient';
 
 type TerminalTabId = 'EXECUTION' | 'RPC_AUDIT' | 'LEDGER' | 'CORE_CODE';
 
@@ -147,7 +147,6 @@ function formatPrice(value: number): string {
 }
 
 export const FreqtradeUnifiedTerminal = memo(function FreqtradeUnifiedTerminal() {
-  const { tickers } = useApp();
   const [snapshot, setSnapshot] = useState<FreqtradeSnapshotPayload | null>(null);
   const [activeTab, setActiveTab] = useState<TerminalTabId>('EXECUTION');
   const [busy, setBusy] = useState(false);
@@ -188,42 +187,49 @@ export const FreqtradeUnifiedTerminal = memo(function FreqtradeUnifiedTerminal()
   useEffect(() => {
     void fetchState();
     const timer = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       void fetchState();
-    }, 6000);
+    }, 15_000);
     return () => window.clearInterval(timer);
   }, [fetchState]);
 
-  const loadCoreSource = useCallback(
-    async (moduleId: string) => {
-      setSelectedModuleId(moduleId);
-      if (sourceCache[moduleId]) return;
-      setSourceLoading(true);
-      try {
-        const res = await fetch(`/api/freqtrade/source?file=${encodeURIComponent(moduleId)}`);
-        const data = (await res.json()) as SourceResponsePayload;
-        if (data.ok && data.content && data.relativePath) {
-          setSourceCache((prev) => ({
-            ...prev,
-            [moduleId]: { path: data.relativePath ?? moduleId, content: data.content ?? '' },
-          }));
-        }
-      } finally {
-        setSourceLoading(false);
+  const sourceCacheRef = useRef(sourceCache);
+  sourceCacheRef.current = sourceCache;
+  const attemptedSourceModulesRef = useRef<Set<string>>(new Set());
+
+  const loadCoreSource = useCallback(async (moduleId: string, force = false) => {
+    setSelectedModuleId(moduleId);
+    if (!force && (sourceCacheRef.current[moduleId] || attemptedSourceModulesRef.current.has(moduleId))) {
+      return;
+    }
+    attemptedSourceModulesRef.current.add(moduleId);
+    setSourceLoading(true);
+    try {
+      const res = await fetch(`/api/freqtrade/source?file=${encodeURIComponent(moduleId)}`);
+      const data = (await res.json()) as SourceResponsePayload;
+      if (data.ok && data.content && data.relativePath) {
+        setSourceCache((prev) => ({
+          ...prev,
+          [moduleId]: { path: data.relativePath ?? moduleId, content: data.content ?? '' },
+        }));
       }
-    },
-    [sourceCache]
-  );
+    } catch {
+      // Allow retry if user explicitly clicks the module again
+    } finally {
+      setSourceLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    if (activeTab === 'CORE_CODE' && !sourceCache[selectedModuleId]) {
+    if (activeTab === 'CORE_CODE' && !sourceCacheRef.current[selectedModuleId]) {
       void loadCoreSource(selectedModuleId);
     }
-  }, [activeTab, loadCoreSource, selectedModuleId, sourceCache]);
+  }, [activeTab, loadCoreSource, selectedModuleId]);
 
   const handleModeSwitch = useCallback(async (mode: UnifiedTradingMode) => {
     setBusy(true);
     try {
-      const res = await fetch('/api/freqtrade/mode', {
+      const res = await apiFetch('/api/freqtrade/mode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode }),
@@ -231,12 +237,13 @@ export const FreqtradeUnifiedTerminal = memo(function FreqtradeUnifiedTerminal()
       const data = (await res.json()) as {
         ok?: boolean;
         message?: string;
+        error?: string;
         snapshot?: FreqtradeSnapshotPayload;
       };
       if (data.snapshot) setSnapshot(data.snapshot);
       setNotice({
         tone: data.ok ? 'OK' : 'WARN',
-        text: data.message ?? (data.ok ? `Switched to ${mode}` : 'Mode transition rejected.'),
+        text: data.message ?? data.error ?? (data.ok ? `Switched to ${mode}` : 'Mode transition rejected.'),
       });
     } finally {
       setBusy(false);
@@ -246,12 +253,10 @@ export const FreqtradeUnifiedTerminal = memo(function FreqtradeUnifiedTerminal()
   const handleExecuteSignal = useCallback(async () => {
     setBusy(true);
     try {
-      const compactKey = symbol.replace('/', '');
-      const liveTickerPrice = tickers[compactKey]?.price;
       const numericStake = Number(stakeUsd) || 500;
       const numericLeverage = marketType === 'SPOT' ? 1 : Math.max(1, Math.min(20, Number(leverage) || 1));
 
-      const res = await fetch('/api/freqtrade/signal/execute', {
+      const res = await apiFetch('/api/freqtrade/signal/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -261,7 +266,6 @@ export const FreqtradeUnifiedTerminal = memo(function FreqtradeUnifiedTerminal()
           side,
           stakeUsd: numericStake,
           leverage: numericLeverage,
-          entryPrice: liveTickerPrice && liveTickerPrice > 0 ? liveTickerPrice : undefined,
           confidencePct: 86,
           strategyName: 'SignalForge_CCXT_Unified',
         }),
@@ -269,94 +273,78 @@ export const FreqtradeUnifiedTerminal = memo(function FreqtradeUnifiedTerminal()
       const data = (await res.json()) as {
         ok?: boolean;
         message?: string;
+        error?: string;
         snapshot?: FreqtradeSnapshotPayload;
       };
       if (data.snapshot) setSnapshot(data.snapshot);
       setNotice({
         tone: data.ok ? 'OK' : 'ERR',
-        text: data.message ?? 'Signal execution request processed.',
+        text: data.message ?? data.error ?? 'Signal execution request processed.',
       });
     } finally {
       setBusy(false);
     }
-  }, [exchange, leverage, marketType, side, stakeUsd, symbol, tickers]);
+  }, [exchange, leverage, marketType, side, stakeUsd, symbol]);
 
-  const handleClosePosition = useCallback(
-    async (pos: DryRunPositionRecord, mode: 'MARKET' | 'PROFIT_SIM' | 'STOP_SIM') => {
-      setBusy(true);
-      try {
-        let exitPrice = pos.currentPrice;
-        let reason = 'MANUAL_CLOSE';
-        if (mode === 'PROFIT_SIM') {
-          exitPrice =
-            pos.side === 'BUY'
-              ? Number((pos.entryPrice * 1.035).toFixed(4))
-              : Number((pos.entryPrice * 0.965).toFixed(4));
-          reason = 'TAKE_PROFIT_SCALED';
-        } else if (mode === 'STOP_SIM') {
-          exitPrice = pos.stopLoss;
-          reason = 'STOP_LOSS';
-        }
-        const res = await fetch(`/api/freqtrade/positions/${pos.tradeId}/close`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ exitPrice, reason }),
-        });
-        const data = (await res.json()) as {
-          ok?: boolean;
-          message?: string;
-          snapshot?: FreqtradeSnapshotPayload;
-        };
-        if (data.snapshot) setSnapshot(data.snapshot);
-        setNotice({
-          tone: data.ok ? 'OK' : 'ERR',
-          text: data.message ?? 'Position close processed.',
-        });
-      } finally {
-        setBusy(false);
-      }
-    },
-    []
-  );
-
-  const handleSyncMarketTick = useCallback(async () => {
+  const handleClosePosition = useCallback(async (pos: DryRunPositionRecord) => {
     setBusy(true);
     try {
-      const prices: Record<string, number> = {};
-      for (const [sym, tk] of Object.entries(tickers)) {
-        if (tk && Number.isFinite(tk.price) && tk.price > 0) {
-          prices[sym] = tk.price;
-        }
-      }
-      const res = await fetch('/api/freqtrade/tick', {
+      const res = await apiFetch(`/api/freqtrade/positions/${pos.tradeId}/close`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prices }),
+        body: JSON.stringify({ reason: 'MANUAL_MARKET_CLOSE' }),
       });
       const data = (await res.json()) as {
         ok?: boolean;
-        events?: readonly string[];
+        message?: string;
+        error?: string;
         snapshot?: FreqtradeSnapshotPayload;
       };
       if (data.snapshot) setSnapshot(data.snapshot);
       setNotice({
-        tone: 'OK',
-        text:
-          data.events && data.events.length > 0
-            ? data.events[0]
-            : 'Synced live CCXT mark prices & trailing stops across open positions.',
+        tone: data.ok ? 'OK' : 'ERR',
+        text: data.message ?? data.error ?? 'Position close processed.',
       });
     } finally {
       setBusy(false);
     }
-  }, [tickers]);
+  }, []);
+
+  const handleSyncMarketTick = useCallback(async () => {
+    setBusy(true);
+    try {
+      const res = await apiFetch('/api/freqtrade/tick', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        events?: readonly string[];
+        message?: string;
+        error?: string;
+        snapshot?: FreqtradeSnapshotPayload;
+      };
+      if (data.snapshot) setSnapshot(data.snapshot);
+      setNotice({
+        tone: data.ok ? 'OK' : 'ERR',
+        text: !data.ok
+          ? (data.message ?? data.error ?? 'Market tick sync rejected.')
+          : data.events && data.events.length > 0
+            ? data.events[0]
+            : 'Synced authoritative server live prices & trailing stops across open positions.',
+      });
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   const handleRunRpc = useCallback(async (cmd: string) => {
     const trimmed = cmd.trim();
     if (!trimmed) return;
     setBusy(true);
     try {
-      const res = await fetch('/api/freqtrade/rpc/command', {
+      const res = await apiFetch('/api/freqtrade/rpc/command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ command: trimmed }),
@@ -364,12 +352,13 @@ export const FreqtradeUnifiedTerminal = memo(function FreqtradeUnifiedTerminal()
       const data = (await res.json()) as {
         ok?: boolean;
         response?: string;
+        error?: string;
         snapshot?: FreqtradeSnapshotPayload;
       };
       if (data.snapshot) setSnapshot(data.snapshot);
       setNotice({
         tone: data.ok ? 'OK' : 'WARN',
-        text: `Telegram RPC ${trimmed} executed.`,
+        text: data.error ?? `Telegram RPC ${trimmed} executed.`,
       });
     } finally {
       setBusy(false);
@@ -379,7 +368,7 @@ export const FreqtradeUnifiedTerminal = memo(function FreqtradeUnifiedTerminal()
   const handleDispatchAudit = useCallback(async () => {
     setBusy(true);
     try {
-      const res = await fetch('/api/freqtrade/audit/dispatch', {
+      const res = await apiFetch('/api/freqtrade/audit/dispatch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
@@ -842,20 +831,11 @@ export const FreqtradeUnifiedTerminal = memo(function FreqtradeUnifiedTerminal()
                             <button
                               type="button"
                               disabled={busy}
-                              data-testid={`ft-close-win-${pos.tradeId}`}
-                              onClick={() => void handleClosePosition(pos, 'PROFIT_SIM')}
-                              className="rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-300 hover:bg-emerald-500/20 cursor-pointer"
-                            >
-                              Close +TP
-                            </button>
-                            <button
-                              type="button"
-                              disabled={busy}
                               data-testid={`ft-close-mkt-${pos.tradeId}`}
-                              onClick={() => void handleClosePosition(pos, 'MARKET')}
+                              onClick={() => void handleClosePosition(pos)}
                               className="rounded border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] text-slate-300 hover:text-white cursor-pointer"
                             >
-                              Close
+                              Close @ Live Market
                             </button>
                           </div>
                         </td>

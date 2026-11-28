@@ -1,0 +1,49 @@
+name: Signal Forge Hybrid Runtime & Container Resilience
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [feature/ai-studio-source-migration, integration/studio-react-stability-2026-11-27, reconciliation/studio-2026-11-27]
+  workflow_dispatch:
+
+concurrency:
+  group: hybrid-resilience-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust_engine:
+    name: Rust IPC, order simulator and binary-frame safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: hybrid_core/rust_engine
+      - run: cargo test --locked --manifest-path hybrid_core/rust_engine/Cargo.toml --all-targets --verbose
+
+  python_bridge:
+    name: Python IPC and bounded clone planner
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest discover -s hybrid_core/python_control_plane -p 'test_*.py' -v
+
+  production_container:
+    name: Reproducible Docker image build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify frozen dependency install and Node runtime image
+        run: docker build --pull --tag signal-forge:staging .
+      - name: Exercise the isolated container and trading locks
+        run: sh scripts/smoke-container.sh signal-forge:staging
+      - name: Browser smoke in network-isolated container
+        run: sh scripts/smoke-browser.sh signal-forge:staging

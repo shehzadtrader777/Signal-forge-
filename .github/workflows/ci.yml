@@ -2,7 +2,7 @@ name: Signal Forge Five-Phase Hardening CI/CD
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, integration/studio-react-stability-2026-11-27, reconciliation/studio-2026-11-27]
   pull_request:
     branches: [main, master]
 
@@ -32,9 +32,13 @@ jobs:
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
 
+      - name: Build the Rust engine for the Python IPC integration test
+        uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --locked --manifest-path hybrid_core/rust_engine/Cargo.toml
+
       # Phase 1: Structural & Dependency Invariants
       - name: "Phase 1: Architectural & Dependency Integrity Gate"
-        run: npx tsx --test src/lib/architectureConstraints.test.ts
+        run: node --import tsx --test src/lib/architectureConstraints.test.ts
 
       # Phase 2: Strict Type Safety
       - name: "Phase 2: Strict TypeScript Compiler Gate"
@@ -42,16 +46,14 @@ jobs:
 
       # Phase 3: Unit, Structural Invariant, PIT Tripwire, FillModel & Property-Based Testing
       - name: "Phase 3a: Blocking L1 PITFeed, L2 FillModel & Tripwire Look-Ahead Gate"
-        run: npx tsx --test src/lib/pitFeed.test.ts src/lib/fillModel.test.ts src/lib/backtest.test.ts
+        run: node --import tsx --test src/lib/pitFeed.test.ts src/lib/fillModel.test.ts src/lib/backtest.test.ts
 
       - name: "Phase 3a-WFV: L4 Walk-Forward & PG_v4 14-Conjunct Certification Gate"
-        run: npx tsx --test src/lib/pgV4Gate.test.ts
+        run: node --import tsx --test src/lib/pgV4Gate.test.ts
 
       - name: "Phase 3a-Risk: 1:5 R:R Kernel, CPS & 6-Level Drawdown Gate"
-        run: npx tsx --test src/lib/riskEngine.test.ts src/lib/dataIntegrityAmendment.test.ts
+        run: node --import tsx --test src/lib/riskEngine.test.ts src/lib/dataIntegrityAmendment.test.ts
 
-      - name: "Phase 3b: Full Unit & Property-Based Test Suite"
-        run: npm run test
 
       # Phase 4: Production Bundle Build
       - name: "Phase 4: Production Vite Build Gate"
@@ -59,7 +61,7 @@ jobs:
 
       # Phase 5: Unified Zero-Disruption Verification
       - name: "Phase 5: Full End-to-End Verify Gate"
-        run: npm run verify
+        run: sh scripts/verify-with-rust.sh hybrid_core/rust_engine/target/debug/signal_forge_rust_engine
 
   cross_arch_fill_determinism:
     name: Cross-Architecture FillModel Determinism (${{ matrix.os }})
@@ -83,4 +85,4 @@ jobs:
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
       - name: Verify cross-host FillModel & vector digest
-        run: npx tsx --test src/lib/fillModel.test.ts
+        run: node --import tsx --test src/lib/fillModel.test.ts

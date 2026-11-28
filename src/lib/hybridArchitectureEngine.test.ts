@@ -29,6 +29,18 @@ describe('Signal Forge 6-Phase Hybrid Production Architecture', () => {
     assert.equal(sumFamilies, highVol.totalActiveClones);
   });
 
+  it('bounds scale planning under excessive node requests or extreme volatility', () => {
+    const plan = computeHorizontalCloneScalePlan({
+      marketVolatilityPct: 100,
+      computeNodes: 10_000,
+      baseClonesPerNode: 10_000,
+    });
+    assert.equal(plan.computeNodes, 16);
+    assert.ok(plan.clonesPerNode <= 256);
+    assert.ok(plan.totalActiveClones <= 4096);
+    assert.equal(Object.values(plan.familyDistribution).reduce((sum, count) => sum + count, 0), plan.totalActiveClones);
+  });
+
   it('Phase 3 & 6: executes vectorized mmap simulation across Crypto, Forex, and Equities with date-range slicing', () => {
     for (const assetClass of ['CRYPTO', 'FOREX', 'EQUITIES'] as const) {
       const report = runVectorizedMmapBacktest({

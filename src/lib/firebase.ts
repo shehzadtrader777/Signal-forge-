@@ -21,6 +21,7 @@ import {
   getFirestore,
   doc,
   getDocFromServer,
+  runTransaction,
   setDoc,
   deleteDoc,
   updateDoc,
@@ -33,9 +34,29 @@ import {
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { isRetryableAuthNetworkError } from './firebaseAuthErrors';
+import {
+  normalizeToggleMapForFirestore,
+  sanitizeChecksum,
+  sanitizeErrorAuditFields,
+  sanitizeFirestoreId,
+  sanitizeFirestoreSymbol,
+  sanitizePriceAlertFields,
+  sanitizeUserProfileFields,
+  sanitizeWatchlistFields,
+} from './firestorePayloads';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+export function getFirestoreConfigMetadata(): {
+  projectId: string;
+  firestoreDatabaseId: string;
+} {
+  return {
+    projectId: firebaseConfig.projectId,
+    firestoreDatabaseId: firebaseConfig.firestoreDatabaseId,
+  };
+}
 
 /**
  * Initialize Firebase Auth without eagerly registering browserPopupRedirectResolver.
@@ -171,30 +192,95 @@ export interface UserPriceAlert {
   emailNotify: boolean;
 }
 
+/** Public-facing reference only. Firebase UID remains the authentication identity. */
+export function getSignalForgePublicId(uid: string): string {
+  return `SF-${uid}`;
+}
+
+const ensuredProfileInFlight = new Map<string, Promise<void>>();
+const documentWriteQueue = new Map<string, Promise<void>>();
+
+/**
+ * Serializes concurrent writes targeting the same Firestore document path within
+ * this tab so overlapping polling ticks or StrictMode double-effects never race.
+ */
+async function withDocumentWriteLock<T>(path: string, task: () => Promise<T>): Promise<T> {
+  const previous = documentWriteQueue.get(path) ?? Promise.resolve();
+  let releaseCurrent!: () => void;
+  const currentGate = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const tail = previous.catch(() => undefined).then(() => currentGate);
+  documentWriteQueue.set(path, tail);
+
+  await previous.catch(() => undefined);
+  try {
+    return await task();
+  } finally {
+    releaseCurrent();
+    if (documentWriteQueue.get(path) === tail) {
+      documentWriteQueue.delete(path);
+    }
+  }
+}
+
+/**
+ * Guarantees the parent `/users/{userId}` document exists before any subcollection
+ * `create` executes, preventing Master Gate `exists(/users/{userId})` race failures
+ * on first sign-in.
+ */
+async function ensureUserProfileReady(userId: string): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.emailVerified || currentUser.uid !== userId) {
+    return;
+  }
+  const existingPromise = ensuredProfileInFlight.get(userId);
+  if (existingPromise) {
+    await existingPromise;
+    return;
+  }
+  const syncPromise = syncUserProfile(currentUser).catch((err) => {
+    ensuredProfileInFlight.delete(userId);
+    throw err;
+  });
+  ensuredProfileInFlight.set(userId, syncPromise);
+  await syncPromise;
+}
+
 export async function syncUserProfile(user: User): Promise<void> {
   if (!user.emailVerified) return;
-  const userRef = doc(db, 'users', user.uid);
+  const fields = sanitizeUserProfileFields({
+    uid: user.uid,
+    email: user.email,
+    displayName: user.displayName,
+  });
+  const path = `users/${fields.uid}`;
+  const userRef = doc(db, 'users', fields.uid);
   try {
-    const existing = await getDocFromServer(userRef);
-    const displayName = (user.displayName || user.email?.split('@')[0] || 'Trader').slice(0, 80);
-    const email = (user.email || '').slice(0, 254);
-    if (!existing.exists()) {
-      await setDoc(userRef, {
-        uid: user.uid,
-        email,
-        displayName,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+    await withDocumentWriteLock(path, async () => {
+      await runTransaction(db, async (tx) => {
+        const existing = await tx.get(userRef);
+        if (!existing.exists()) {
+          tx.set(userRef, {
+            uid: fields.uid,
+            publicId: getSignalForgePublicId(user.uid),
+            email: fields.email,
+            displayName: fields.displayName,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          tx.update(userRef, {
+            publicId: getSignalForgePublicId(user.uid),
+            email: fields.email,
+            displayName: fields.displayName,
+            updatedAt: serverTimestamp(),
+          });
+        }
       });
-    } else {
-      await updateDoc(userRef, {
-        email,
-        displayName,
-        updatedAt: serverTimestamp(),
-      });
-    }
+    });
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
@@ -236,7 +322,13 @@ export async function signUpWithEmail(
 }
 
 export async function signOutUser(): Promise<void> {
+  ensuredProfileInFlight.clear();
   await signOut(auth);
+  const { clearCachedOperatorSession } = await import('./apiClient');
+  clearCachedOperatorSession();
+  try {
+    await fetch('/api/auth/session/logout', { method: 'POST', credentials: 'same-origin', redirect: 'error', headers: { 'X-Requested-With': 'XMLHttpRequest' }, signal: AbortSignal.timeout(3000) });
+  } catch { /* Local Firebase logout remains complete; server cookie expiry is bounded. */ }
 }
 
 export function subscribeAuth(callback: (user: User | null) => void): Unsubscribe {
@@ -277,14 +369,15 @@ export async function addWatchlistItem(
   symbol: string,
   coinName: string
 ): Promise<void> {
-  const cleanSymbol = symbol.replace(/[^A-Z0-9]/g, '').slice(0, 16);
-  const path = `users/${userId}/watchlist/${cleanSymbol}`;
+  const fields = sanitizeWatchlistFields({ userId, symbol, coinName });
+  const path = `users/${fields.userId}/watchlist/${fields.id}`;
   try {
-    await setDoc(doc(db, 'users', userId, 'watchlist', cleanSymbol), {
-      id: cleanSymbol,
-      userId,
-      symbol: cleanSymbol,
-      coinName: coinName.slice(0, 50),
+    await ensureUserProfileReady(fields.userId);
+    await setDoc(doc(db, 'users', fields.userId, 'watchlist', fields.id), {
+      id: fields.id,
+      userId: fields.userId,
+      symbol: fields.symbol,
+      coinName: fields.coinName,
       createdAt: serverTimestamp(),
     });
   } catch (error) {
@@ -293,7 +386,7 @@ export async function addWatchlistItem(
 }
 
 export async function removeWatchlistItem(userId: string, symbol: string): Promise<void> {
-  const cleanSymbol = symbol.replace(/[^A-Z0-9]/g, '').slice(0, 16);
+  const cleanSymbol = sanitizeFirestoreSymbol(symbol);
   const path = `users/${userId}/watchlist/${cleanSymbol}`;
   try {
     await deleteDoc(doc(db, 'users', userId, 'watchlist', cleanSymbol));
@@ -338,23 +431,31 @@ export async function createPriceAlert(
   userId: string,
   input: Omit<UserPriceAlert, 'id' | 'userId' | 'active' | 'triggered'>
 ): Promise<string> {
-  const cleanSymbol = input.symbol.replace(/[^A-Z0-9]/g, '').slice(0, 16);
-  const alertId = `al_${cleanSymbol}_${Date.now()}`.slice(0, 64);
-  const path = `users/${userId}/alerts/${alertId}`;
+  const cleanSymbol = sanitizeFirestoreSymbol(input.symbol);
+  const fields = sanitizePriceAlertFields({
+    alertId: `al_${cleanSymbol}_${Date.now()}`,
+    userId,
+    symbol: cleanSymbol,
+    condition: input.condition,
+    targetPrice: input.targetPrice,
+    emailNotify: input.emailNotify,
+  });
+  const path = `users/${fields.userId}/alerts/${fields.id}`;
   try {
-    await setDoc(doc(db, 'users', userId, 'alerts', alertId), {
-      id: alertId,
-      userId,
-      symbol: cleanSymbol,
-      condition: input.condition,
-      targetPrice: Number(input.targetPrice),
-      active: true,
-      triggered: false,
-      emailNotify: Boolean(input.emailNotify),
+    await ensureUserProfileReady(fields.userId);
+    await setDoc(doc(db, 'users', fields.userId, 'alerts', fields.id), {
+      id: fields.id,
+      userId: fields.userId,
+      symbol: fields.symbol,
+      condition: fields.condition,
+      targetPrice: fields.targetPrice,
+      active: fields.active,
+      triggered: fields.triggered,
+      emailNotify: fields.emailNotify,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
-    return alertId;
+    return fields.id;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
   }
@@ -365,9 +466,10 @@ export async function updatePriceAlertStatus(
   alertId: string,
   patch: Partial<Pick<UserPriceAlert, 'active' | 'triggered'>>
 ): Promise<void> {
-  const path = `users/${userId}/alerts/${alertId}`;
+  const cleanId = sanitizeFirestoreId(alertId, 64, 'alert');
+  const path = `users/${userId}/alerts/${cleanId}`;
   try {
-    await updateDoc(doc(db, 'users', userId, 'alerts', alertId), {
+    await updateDoc(doc(db, 'users', userId, 'alerts', cleanId), {
       ...patch,
       updatedAt: serverTimestamp(),
     });
@@ -377,9 +479,10 @@ export async function updatePriceAlertStatus(
 }
 
 export async function deletePriceAlert(userId: string, alertId: string): Promise<void> {
-  const path = `users/${userId}/alerts/${alertId}`;
+  const cleanId = sanitizeFirestoreId(alertId, 64, 'alert');
+  const path = `users/${userId}/alerts/${cleanId}`;
   try {
-    await deleteDoc(doc(db, 'users', userId, 'alerts', alertId));
+    await deleteDoc(doc(db, 'users', userId, 'alerts', cleanId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
@@ -389,7 +492,8 @@ export async function getCurrentFirebaseIdToken(forceRefresh = false): Promise<s
   try {
     const user = auth.currentUser;
     if (!user) return null;
-    return await user.getIdToken(forceRefresh);
+    const token = await user.getIdToken(forceRefresh);
+    return auth.currentUser === user ? token : null;
   } catch {
     return null;
   }
@@ -438,26 +542,37 @@ export async function saveWorkspaceControlConfig(
   checksum: string,
   toggles: Record<string, boolean>
 ): Promise<void> {
-  const path = `users/${userId}/workspaceConfig/controlMatrix`;
-  const ref = doc(db, 'users', userId, 'workspaceConfig', 'controlMatrix');
+  const cleanUserId = sanitizeFirestoreId(userId, 128, 'user');
+  if (!auth.currentUser || !auth.currentUser.emailVerified || auth.currentUser.uid !== cleanUserId) {
+    return;
+  }
+  const safeChecksum = sanitizeChecksum(checksum);
+  const safeToggles = normalizeToggleMapForFirestore(toggles);
+  const path = `users/${cleanUserId}/workspaceConfig/controlMatrix`;
+  const ref = doc(db, 'users', cleanUserId, 'workspaceConfig', 'controlMatrix');
   try {
-    const snap = await getDocFromServer(ref);
-    if (!snap.exists()) {
-      await setDoc(ref, {
-        id: 'controlMatrix',
-        userId,
-        checksum: checksum.slice(0, 40),
-        toggles,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+    await ensureUserProfileReady(cleanUserId);
+    await withDocumentWriteLock(path, async () => {
+      await runTransaction(db, async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists()) {
+          tx.set(ref, {
+            id: 'controlMatrix',
+            userId: cleanUserId,
+            checksum: safeChecksum,
+            toggles: safeToggles,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          tx.update(ref, {
+            checksum: safeChecksum,
+            toggles: safeToggles,
+            updatedAt: serverTimestamp(),
+          });
+        }
       });
-    } else {
-      await updateDoc(ref, {
-        checksum: checksum.slice(0, 40),
-        toggles,
-        updatedAt: serverTimestamp(),
-      });
-    }
+    });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -473,16 +588,19 @@ export async function saveRollbackCheckpointToFirestore(
     toggles: Record<string, boolean>;
   }
 ): Promise<void> {
-  const cleanId = input.snapshotId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
-  const path = `users/${userId}/rollbackSnapshots/${cleanId}`;
+  const cleanUserId = sanitizeFirestoreId(userId, 128, 'user');
+  const cleanId = sanitizeFirestoreId(input.snapshotId, 64, 'snap_checkpoint');
+  const safeToggles = normalizeToggleMapForFirestore(input.toggles);
+  const path = `users/${cleanUserId}/rollbackSnapshots/${cleanId}`;
   try {
-    await setDoc(doc(db, 'users', userId, 'rollbackSnapshots', cleanId), {
+    await ensureUserProfileReady(cleanUserId);
+    await setDoc(doc(db, 'users', cleanUserId, 'rollbackSnapshots', cleanId), {
       snapshotId: cleanId,
-      userId,
+      userId: cleanUserId,
       version: Math.max(1, Number(input.version) || 1),
-      reason: input.reason.slice(0, 200) || 'Checkpoint',
-      checksum: input.checksum.slice(0, 40),
-      toggles: input.toggles,
+      reason: input.reason.trim().slice(0, 200) || 'Checkpoint',
+      checksum: sanitizeChecksum(input.checksum),
+      toggles: safeToggles,
       createdAt: serverTimestamp(),
     });
   } catch (error) {
@@ -502,18 +620,22 @@ export async function saveErrorAuditToFirestore(
     recoveryAction: string;
   }
 ): Promise<void> {
-  const cleanId = input.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
-  const path = `users/${userId}/errorLogs/${cleanId}`;
+  const fields = sanitizeErrorAuditFields({
+    ...input,
+    userId,
+  });
+  const path = `users/${fields.userId}/errorLogs/${fields.id}`;
   try {
-    await setDoc(doc(db, 'users', userId, 'errorLogs', cleanId), {
-      id: cleanId,
-      userId,
-      correlationId: input.correlationId.slice(0, 80),
-      serviceId: input.serviceId.slice(0, 40),
-      severity: input.severity,
-      code: input.code.slice(0, 64),
-      message: input.message.slice(0, 320) || 'Error recorded',
-      recoveryAction: input.recoveryAction.slice(0, 240) || 'Contained',
+    await ensureUserProfileReady(fields.userId);
+    await setDoc(doc(db, 'users', fields.userId, 'errorLogs', fields.id), {
+      id: fields.id,
+      userId: fields.userId,
+      correlationId: fields.correlationId,
+      serviceId: fields.serviceId,
+      severity: fields.severity,
+      code: fields.code,
+      message: fields.message,
+      recoveryAction: fields.recoveryAction,
       createdAt: serverTimestamp(),
     });
   } catch (error) {
@@ -589,83 +711,54 @@ export function subscribeDailyPnlRecords(
   );
 }
 
-export async function saveDailyPnlRecordToFirestore(
+export function subscribeVaultLockerState(
   userId: string,
-  record: Omit<PersistedDailyPnlRecord, 'userId'>
-): Promise<void> {
-  if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(record.dateKey)) return;
-  const path = `users/${userId}/dailyPnlRecords/${record.dateKey}`;
-  const ref = doc(db, 'users', userId, 'dailyPnlRecords', record.dateKey);
-  const payload = {
-    startingEquityUsd: Math.max(0, Number(record.startingEquityUsd) || 0),
-    endingEquityUsd: Math.max(0, Number(record.endingEquityUsd) || 0),
-    realizedPnlUsd: Number(record.realizedPnlUsd) || 0,
-    returnPct: Number(record.returnPct) || 0,
-    scoopedToVaultUsd: Math.max(0, Number(record.scoopedToVaultUsd) || 0),
-    manualReleasedUsd: Math.max(0, Number(record.manualReleasedUsd) || 0),
-    tradeCount: Math.max(0, Number(record.tradeCount) || 0),
-    winningTrades: Math.max(0, Number(record.winningTrades) || 0),
-    losingTrades: Math.max(0, Number(record.losingTrades) || 0),
-    winRatePct: Math.min(100, Math.max(0, Number(record.winRatePct) || 0)),
-    recordHash: String(record.recordHash || '00000000').slice(0, 32),
-  };
-  try {
-    const snap = await getDocFromServer(ref);
-    if (!snap.exists()) {
-      await setDoc(ref, {
-        dateKey: record.dateKey,
-        userId,
-        ...payload,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+  onData: (state: PersistedVaultLockerState | null) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  const vaultId = 'primaryVault';
+  const path = `users/${userId}/vaultLocker/${vaultId}`;
+  return onSnapshot(
+    doc(db, 'users', userId, 'vaultLocker', vaultId),
+    (snap) => {
+      if (!snap.exists()) {
+        onData(null);
+        return;
+      }
+      const data = snap.data();
+      onData({
+        id: String(data.id || vaultId),
+        userId: String(data.userId || userId),
+        thresholdMode:
+          data.thresholdMode === 'PERCENT_OF_EQUITY' ? 'PERCENT_OF_EQUITY' : 'USD_FIXED',
+        profitThresholdUsd: Number(data.profitThresholdUsd) || 250,
+        profitThresholdPct: Number(data.profitThresholdPct) || 1.5,
+        scoopExcessRatioPct: Number(data.scoopExcessRatioPct) || 100,
+        enabled: Boolean(data.enabled),
+        lockedVaultBalanceUsd: Number(data.lockedVaultBalanceUsd) || 0,
+        totalScoopedLifetimeUsd: Number(data.totalScoopedLifetimeUsd) || 0,
+        stateVersion: Number(data.stateVersion) || 1,
       });
-    } else {
-      await updateDoc(ref, {
-        ...payload,
-        updatedAt: serverTimestamp(),
-      });
+    },
+    (error) => {
+      logFirestoreSnapshotError(error, OperationType.GET, path);
+      if (onError) onError(error);
     }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, path);
-  }
+  );
+}
+
+// Retained compatibility exports deliberately fail closed. Browser-provided data
+// cannot establish financial settlement provenance, even for a verified owner.
+export async function saveDailyPnlRecordToFirestore(
+  _userId: string,
+  _record: Omit<PersistedDailyPnlRecord, 'userId'>
+): Promise<void> {
+  throw new Error('FINANCIAL_CLIENT_WRITE_DISABLED');
 }
 
 export async function saveVaultLockerSnapshotToFirestore(
-  userId: string,
-  state: Omit<PersistedVaultLockerState, 'id' | 'userId'>
+  _userId: string,
+  _state: Omit<PersistedVaultLockerState, 'id' | 'userId'>
 ): Promise<void> {
-  const vaultId = 'primaryVault';
-  const path = `users/${userId}/vaultLocker/${vaultId}`;
-  const ref = doc(db, 'users', userId, 'vaultLocker', vaultId);
-  const payload = {
-    thresholdMode: state.thresholdMode === 'PERCENT_OF_EQUITY' ? 'PERCENT_OF_EQUITY' : 'USD_FIXED',
-    profitThresholdUsd: Math.min(100000, Math.max(10, Number(state.profitThresholdUsd) || 250)),
-    profitThresholdPct: Math.min(50, Math.max(0.25, Number(state.profitThresholdPct) || 1.5)),
-    scoopExcessRatioPct: Math.min(100, Math.max(25, Number(state.scoopExcessRatioPct) || 100)),
-    enabled: Boolean(state.enabled),
-    lockedVaultBalanceUsd: Math.max(0, Number(state.lockedVaultBalanceUsd) || 0),
-    totalScoopedLifetimeUsd: Math.max(0, Number(state.totalScoopedLifetimeUsd) || 0),
-    stateVersion: Math.max(1, Math.floor(Number(state.stateVersion) || 1)),
-  };
-  try {
-    const snap = await getDocFromServer(ref);
-    if (!snap.exists()) {
-      await setDoc(ref, {
-        id: vaultId,
-        userId,
-        ...payload,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    } else {
-      await updateDoc(ref, {
-        ...payload,
-        updatedAt: serverTimestamp(),
-      });
-    }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, path);
-  }
+  throw new Error('FINANCIAL_CLIENT_WRITE_DISABLED');
 }
-
-

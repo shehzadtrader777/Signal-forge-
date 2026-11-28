@@ -1085,7 +1085,7 @@ export function coordinateMultiAgentTrade(
         `Mark Entry: $${formatCryptoPrice(effectiveEntry)} | SL (${riskPlan.maxStopLossPct}% Max Cap): $${formatCryptoPrice(riskPlan.trailingStopLoss)} | 5x ATR TP: $${formatCryptoPrice(riskPlan.trailingTakeProfit5xAtr)}`,
         `Dynamic Targets: TP1 $${formatCryptoPrice(riskPlan.takeProfits[0])} (${riskPlan.dynamicRRs[0]}R) · TP2 $${formatCryptoPrice(riskPlan.takeProfits[1])} (${riskPlan.dynamicRRs[1]}R) · TP3 $${formatCryptoPrice(riskPlan.takeProfits[2])} (${riskPlan.dynamicRRs[2]}R)`,
         `Margin: IM $${futuresMargin.initialMarginUsd} ($${futuresMargin.notionalUsd} Notional) · Cross Liq $${formatCryptoPrice(futuresMargin.liquidationPrice)}`,
-        `Desk: https://wa.me/923015083557`,
+        `Desk: Signal Forge Terminal`,
       ].join('\n')
     : [
         `SIGNAL FORGE SPOT COORDINATOR ALERT`,
@@ -1093,7 +1093,7 @@ export function coordinateMultiAgentTrade(
         `Spot Entry: $${formatCryptoPrice(effectiveEntry)} | SL (${riskPlan.maxStopLossPct}% Max Cap): $${formatCryptoPrice(riskPlan.trailingStopLoss)} | 5x ATR TP: $${formatCryptoPrice(riskPlan.trailingTakeProfit5xAtr)}`,
         `Dynamic Targets: TP1 $${formatCryptoPrice(riskPlan.takeProfits[0])} (${riskPlan.dynamicRRs[0]}R) · TP2 $${formatCryptoPrice(riskPlan.takeProfits[1])} (${riskPlan.dynamicRRs[1]}R) · TP3 $${formatCryptoPrice(riskPlan.takeProfits[2])} (${riskPlan.dynamicRRs[2]}R)`,
         `Allocation: $${futuresMargin.notionalUsd} Spot Principal (1x · Zero Liquidation)`,
-        `Desk: https://wa.me/923015083557`,
+        `Desk: Signal Forge Terminal`,
       ].join('\n');
 
   const sourceModule = options?.sourceModule ?? 'AI_ENGINE';

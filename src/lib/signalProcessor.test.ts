@@ -134,7 +134,7 @@ test('evaluateSignalSpamFilter discards near-instant duplicates, identical finge
   assert.equal(vFlood.reasonCode, 'CHANNEL_FLOOD_LIMIT');
 });
 
-test('buildOutboundWebhookPayload targets designated Chat ID, Bot Token, P&L, and Hit TPs and masks URLs', () => {
+test('buildOutboundWebhookPayload emits secret-free structured signal payload without bot_token and masks URLs', () => {
   const res = extractTradingAlertParams({
     source: 'AUTOMATED',
     symbol: 'SOLUSDT',
@@ -154,12 +154,14 @@ test('buildOutboundWebhookPayload targets designated Chat ID, Bot Token, P&L, an
   if (!res.ok) return;
 
   const payload = buildOutboundWebhookPayload(res.card, {
-    chatId: '-1008928895086',
-    botToken: '1008928895086',
+    chatId: '-1002345678901',
+    channelName: 'Signal Forge',
   });
   assert.equal(payload.event_type, 'MILESTONE_PNL_UPDATE');
-  assert.equal(payload.chat_id, '-1008928895086');
-  assert.equal(payload.bot_token, '1008928895086');
+  assert.equal(payload.signal_category, 'REALIZED_RESULT');
+  assert.equal(payload.chat_id, '-1002345678901');
+  assert.equal('bot_token' in payload, false);
+  assert.equal(payload.symbol, 'SOLUSDT');
   assert.equal(payload.pair, 'SOLUSDT');
   assert.equal(payload.entry_price, 210);
   assert.equal(payload.take_profits.tp3, 172);

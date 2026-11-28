@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
   Activity,
   ArrowDownRight,
@@ -17,6 +16,8 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { formatCryptoPrice } from '../lib/marketData';
+import { SignalInspectChart } from '../components/SignalInspectChart';
+import { deriveTradeAuditIdentity } from '../lib/tradeAuditIdentity';
 import {
   DEFAULT_SIGNAL_HISTORY_FILTERS,
   buildUnifiedSignalHistory,
@@ -27,6 +28,7 @@ import {
   signalHistoryToCsv,
   type SignalHistoryFilterConfig,
   type SignalHistoryOutcome,
+  type UnifiedSignalAuditRecord,
 } from '../lib/signalHistory';
 
 interface EmailDispatchAudit {
@@ -71,7 +73,6 @@ function TrajectorySparkline({ points, isWin }: { points: number[]; isWin: boole
 }
 
 export function SignalHistory() {
-  const navigate = useNavigate();
   const {
     pinnedSignals,
     executionState,
@@ -79,7 +80,6 @@ export function SignalHistory() {
     autoReports,
     liveCrossMargin,
     telegramFeed,
-    setSelectedSymbol,
     refreshExecutionState,
     refreshAutoReports,
     refreshTelegramFeed,
@@ -89,6 +89,8 @@ export function SignalHistory() {
     DEFAULT_SIGNAL_HISTORY_FILTERS
   );
   const [showAllRows, setShowAllRows] = useState(false);
+  const [inspectedRecord, setInspectedRecord] = useState<UnifiedSignalAuditRecord | null>(null);
+  const [includeSimulatedBenchmarks, setIncludeSimulatedBenchmarks] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [emailHistory, setEmailHistory] = useState<EmailDispatchAudit[]>([]);
 
@@ -129,9 +131,10 @@ export function SignalHistory() {
         pinnedSignals,
         positions: executionState.positions,
         tickers,
-        includeCrossStrategyBenchmarks: true,
+        includeCrossStrategyBenchmarks: includeSimulatedBenchmarks,
+        includeHistoricalBenchmarks: includeSimulatedBenchmarks,
       }),
-    [pinnedSignals, executionState.positions, tickers]
+    [pinnedSignals, executionState.positions, tickers, includeSimulatedBenchmarks]
   );
 
   const filteredRecords = useMemo(
@@ -174,10 +177,7 @@ export function SignalHistory() {
     URL.revokeObjectURL(url);
   };
 
-  const handleInspectChart = (symbol: string) => {
-    setSelectedSymbol(symbol);
-    navigate('/');
-  };
+  const handleInspectChart = (record: UnifiedSignalAuditRecord) => setInspectedRecord(record);
 
   return (
     <div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8 space-y-6">
@@ -609,9 +609,14 @@ export function SignalHistory() {
               Historical Signals Audit Log
             </h2>
             <p className="text-xs text-slate-400">
-              Showing {visibleRows.length} of {filteredRecords.length} audited records
+              Showing {visibleRows.length} of {filteredRecords.length} records · observed-only by default
             </p>
           </div>
+          <label className="flex items-center gap-2 text-xs text-amber-200">
+            <input type="checkbox" checked={includeSimulatedBenchmarks}
+              onChange={e=>setIncludeSimulatedBenchmarks(e.target.checked)} />
+            Include simulated benchmark signals
+          </label>
           {filteredRecords.length > 25 && (
             <button
               type="button"
@@ -650,6 +655,7 @@ export function SignalHistory() {
                   <th className="px-3 py-2.5 font-medium text-right whitespace-nowrap">
                     Outcome · P&amp;L
                   </th>
+                  <th className="px-3 py-2.5 font-medium whitespace-nowrap">Audit ID / Status</th>
                   <th className="px-4 py-2.5 font-medium text-right whitespace-nowrap">Inspect</th>
                 </tr>
               </thead>
@@ -727,10 +733,14 @@ export function SignalHistory() {
                             : ''}
                         </div>
                       </td>
+                      <td className="px-3 py-3 font-sans text-xs">
+                        <div className="max-w-[180px] truncate font-mono text-slate-200" title={row.id}>{row.id}</div>
+                        <div className="text-[10px] text-amber-300">{deriveTradeAuditIdentity(row).verificationLabel}</div>
+                      </td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">
                         <button
                           type="button"
-                          onClick={() => handleInspectChart(row.symbol)}
+                          onClick={() => handleInspectChart(row)}
                           className="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-[#0d1323] px-2.5 py-1 text-[11px] font-sans font-semibold text-slate-200 hover:border-[#3b82f6] hover:text-white cursor-pointer whitespace-nowrap"
                         >
                           <LineChart className="h-3 w-3 text-[#3b82f6]" aria-hidden="true" />
@@ -814,6 +824,7 @@ export function SignalHistory() {
           </div>
         </div>
       </section>
+      {inspectedRecord && <SignalInspectChart record={inspectedRecord} onClose={() => setInspectedRecord(null)} />}
     </div>
   );
 }

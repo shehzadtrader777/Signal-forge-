@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Bell, Mail, Send, Trash2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { TRACKED_COINS, formatCryptoPrice } from '../lib/marketData';
+import { formatCryptoPrice } from '../lib/marketData';
+import { buildBacktestResearchUniverse } from '../lib/backtestUniverse';
 import { apiFetch } from '../lib/apiClient';
 
 interface EmailDispatchRecord {
@@ -18,6 +19,8 @@ export function Alerts() {
   const {
     user,
     tickers,
+    allKnownCoins,
+    topGainers,
     priceAlerts,
     addPriceAlert,
     removePriceAlert,
@@ -25,13 +28,14 @@ export function Alerts() {
   } = useApp();
 
   const [symbol, setSymbol] = useState('BTCUSDT');
+  const alertUniverse = useMemo(() => buildBacktestResearchUniverse(allKnownCoins, topGainers, Object.keys(tickers)), [allKnownCoins, topGainers, tickers]);
   const [condition, setCondition] = useState<'ABOVE' | 'BELOW'>('ABOVE');
   const [targetPrice, setTargetPrice] = useState('95000');
   const [emailNotify, setEmailNotify] = useState(true);
   const [formError, setFormError] = useState('');
 
   const [history, setHistory] = useState<EmailDispatchRecord[]>([]);
-  const [ownerEmail, setOwnerEmail] = useState('amirshehzad2647tcs@gmail.com');
+  const [ownerEmail, setOwnerEmail] = useState('configured recipient');
   const [resendConfigured, setResendConfigured] = useState(false);
   const [telegramConfigured, setTelegramConfigured] = useState(false);
   const [statusFeedback, setStatusFeedback] = useState<string | null>(null);
@@ -198,7 +202,7 @@ export function Alerts() {
                     }}
                     className="w-full rounded-lg border border-slate-700 bg-[#0a0e1a] px-3 py-2 text-xs text-white focus:border-[#3b82f6] focus:outline-none"
                   >
-                    {TRACKED_COINS.map((c) => (
+                    {alertUniverse.map((c) => (
                       <option key={c.symbol} value={c.symbol}>
                         {c.symbol}
                       </option>
@@ -369,7 +373,7 @@ export function Alerts() {
                     Strict 3-Hour Batched Signal Email Digest
                   </h3>
                   <p className="mt-0.5 text-slate-400">
-                    Consolidates all queued high-confidence signal alerts and Binance Top Movers into one scheduled digest every 3 hours with direct WhatsApp desk link (<span className="font-mono">https://wa.me/923015083557</span>).
+                    Consolidates all queued high-confidence signal alerts and Binance Top Movers into one scheduled digest every 3 hours with configured support desk link.
                   </p>
                 </div>
                 <button

@@ -24,12 +24,6 @@ import {
 import { useApp } from '../context/AppContext';
 import { apiFetch } from '../lib/apiClient';
 import {
-  saveDailyPnlRecordToFirestore,
-  saveVaultLockerSnapshotToFirestore,
-  subscribeDailyPnlRecords,
-  type PersistedDailyPnlRecord,
-} from '../lib/firebase';
-import {
   USER_OVERRIDE_CONFIRMATION_PHRASES,
   type DailyPnlHistoryRecord,
   type ProfitScoopConfig,
@@ -45,6 +39,8 @@ import {
   ForgeWidgetFrame,
 } from './ui/ForgeDesignSystem';
 
+import { ErrorBoundary } from './ErrorBoundary';
+
 const LOCAL_STORAGE_KEY = 'signal_forge_daily_pnl_vault_v1';
 
 const WIDGET_LAYOUT: WidgetLayoutContract = {
@@ -56,40 +52,19 @@ const WIDGET_LAYOUT: WidgetLayoutContract = {
   showStreamRail: true,
 };
 
+const VAULT_BAR_CHART_MARGIN = { top: 8, right: 12, left: 0, bottom: 0 } as const;
+const VAULT_BAR_RADIUS: [number, number, number, number] = [4, 4, 0, 0];
+const VAULT_AXIS_TICK_STYLE = { fill: '#94a3b8', fontSize: 11, fontFamily: 'monospace' } as const;
+const VAULT_AXIS_LINE_STYLE = { stroke: 'rgba(148,163,184,0.2)' } as const;
+const VAULT_TOOLTIP_STYLE = {
+  backgroundColor: '#0f172a',
+  border: '1px solid rgba(56,189,248,0.35)',
+  borderRadius: '8px',
+  fontSize: '12px',
+  fontFamily: 'monospace',
+} as const;
+
 type VaultPanelTab = 'VAULT_OVERRIDE' | 'DAILY_PNL' | 'IMMUTABLE_LEDGER';
-
-interface LocalPersistedVaultCache {
-  readonly savedAtIso: string;
-  readonly snapshot: ProfitVaultSnapshot;
-}
-
-function loadCachedVaultSnapshot(): ProfitVaultSnapshot | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<LocalPersistedVaultCache>;
-    if (parsed && parsed.snapshot && Array.isArray(parsed.snapshot.dailyHistory)) {
-      return parsed.snapshot;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function saveCachedVaultSnapshot(snapshot: ProfitVaultSnapshot): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const payload: LocalPersistedVaultCache = {
-      savedAtIso: new Date().toISOString(),
-      snapshot,
-    };
-    window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(payload));
-  } catch {
-    // ignore storage quota errors
-  }
-}
 
 function formatUsdSigned(val: number, decimals = 2): string {
   const sign = val > 0 ? '+' : val < 0 ? '-' : '';
@@ -111,6 +86,16 @@ function formatPct4(val: number): string {
   return `${sign}${val.toFixed(4)}%`;
 }
 
+function formatVaultYAxisTick(v: number): string {
+  return `${v > 0 ? '+' : ''}${v.toFixed(2)}%`;
+}
+
+function formatVaultTooltip(value: unknown, name: unknown): [string, string] {
+  const num = Number(value) || 0;
+  if (name === 'returnPct') return [formatPct4(num), 'Daily Return'];
+  return [formatUsdSigned(num, 4), String(name)];
+}
+
 function formatCsvValue(v: string | number): string {
   const str = String(v);
   if (str.includes(',') || str.includes('"') || str.includes('\n')) {
@@ -121,8 +106,7 @@ function formatCsvValue(v: string | number): string {
 
 export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlPanel() {
   const { appLiveEnabled, user, selectedSymbol } = useApp();
-  const [vault, setVault] = useState<ProfitVaultSnapshot | null>(() => loadCachedVaultSnapshot());
-  const [cloudDailyRecords, setCloudDailyRecords] = useState<readonly PersistedDailyPnlRecord[]>([]);
+  const [vault, setVault] = useState<ProfitVaultSnapshot | null>(null);
   const [activeTab, setActiveTab] = useState<VaultPanelTab>('VAULT_OVERRIDE');
 
   // Threshold form state
@@ -151,12 +135,24 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     readonly tone: 'NOMINAL' | 'CRITICAL' | 'INFO';
     readonly text: string;
   } | null>(null);
-  const [cloudSyncedAtIso, setCloudSyncedAtIso] = useState<string | null>(null);
-
-  const lastSyncedDailyHashRef = useRef<Map<string, string>>(new Map());
-  const lastSyncedVaultVersionRef = useRef<number>(0);
-
   const verifiedUid = user && user.emailVerified ? user.uid : null;
+  const activeVaultUidRef = useRef<string | null>(verifiedUid);
+  activeVaultUidRef.current = verifiedUid;
+  
+  // Sensitive financial snapshots must not survive a logout or a switch of accounts.
+  useEffect(() => {
+    setVault(null);
+  }, [verifiedUid]);
+
+  // Purge older releases' shared browser cache once; never persist vault financial state here.
+  useEffect(() => {
+    try {
+      window.localStorage.removeItem(LOCAL_STORAGE_KEY);
+    } catch {
+      // Storage access can be denied in private/incognito contexts.
+    }
+  }, []);
+
 
   const syncDraftsFromConfig = useCallback((cfg: ProfitScoopConfig) => {
     setEnabledDraft(cfg.enabled);
@@ -167,25 +163,33 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     setConfigDirty(false);
   }, []);
 
+  const configDirtyRef = useRef<boolean>(configDirty);
+  configDirtyRef.current = configDirty;
+
   const fetchVaultState = useCallback(async () => {
+    if (!verifiedUid) return;
     try {
-      const res = await fetch('/api/vault/state');
-      if (!res.ok) return;
+      const res = await apiFetch('/api/vault/state');
+      if (activeVaultUidRef.current !== verifiedUid) return;
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) setVault(null);
+        return;
+      }
       const data = (await res.json()) as {
         ok?: boolean;
         vault?: ProfitVaultSnapshot;
       };
+      if (activeVaultUidRef.current !== verifiedUid) return;
       if (data?.ok && data.vault) {
         setVault(data.vault);
-        saveCachedVaultSnapshot(data.vault);
-        if (!configDirty) {
+        if (!configDirtyRef.current) {
           syncDraftsFromConfig(data.vault.config);
         }
       }
     } catch {
-      // retain cached local snapshot cleanly
+      // Keep the last in-memory snapshot; never expose it through persistent browser storage.
     }
-  }, [configDirty, syncDraftsFromConfig]);
+  }, [syncDraftsFromConfig, verifiedUid]);
 
   useEffect(() => {
     fetchVaultState();
@@ -193,7 +197,10 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
 
   useEffect(() => {
     if (!appLiveEnabled) return;
-    const id = window.setInterval(fetchVaultState, 5000);
+    const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      fetchVaultState();
+    }, 15_000);
     return () => window.clearInterval(id);
   }, [appLiveEnabled, fetchVaultState]);
 
@@ -203,77 +210,11 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     }
   }, [selectedSymbol]);
 
-  // Subscribe to verified user's cloud Daily PnL history in Firestore
-  useEffect(() => {
-    if (!verifiedUid) {
-      setCloudDailyRecords([]);
-      return;
-    }
-    const unsub = subscribeDailyPnlRecords(
-      verifiedUid,
-      (records) => {
-        setCloudDailyRecords(records);
-      },
-      () => {
-        // Firestore read error is logged by firebase.ts helper
-      }
-    );
-    return () => unsub();
-  }, [verifiedUid]);
-
-  // Auto-persist high-precision Daily PnL records & Vault Locker state to Firestore when signed in
-  useEffect(() => {
-    if (!verifiedUid || !vault) return;
-
-    const persistToCloud = async () => {
-      try {
-        if (vault.stateVersion > lastSyncedVaultVersionRef.current) {
-          await saveVaultLockerSnapshotToFirestore(verifiedUid, {
-            thresholdMode: vault.config.thresholdMode,
-            profitThresholdUsd: vault.config.profitThresholdUsd,
-            profitThresholdPct: vault.config.profitThresholdPct,
-            scoopExcessRatioPct: vault.config.scoopExcessRatioPct,
-            enabled: vault.config.enabled,
-            lockedVaultBalanceUsd: vault.lockedVaultBalanceUsd,
-            totalScoopedLifetimeUsd: vault.totalScoopedLifetimeUsd,
-            stateVersion: vault.stateVersion,
-          });
-          lastSyncedVaultVersionRef.current = vault.stateVersion;
-        }
-
-        const recentDays = vault.dailyHistory.slice(-14);
-        let syncedAny = false;
-        for (const day of recentDays) {
-          if (lastSyncedDailyHashRef.current.get(day.dateKey) === day.recordHash) continue;
-          await saveDailyPnlRecordToFirestore(verifiedUid, {
-            dateKey: day.dateKey,
-            startingEquityUsd: day.startingEquityUsd,
-            endingEquityUsd: day.endingEquityUsd,
-            realizedPnlUsd: day.realizedPnlUsd,
-            returnPct: day.returnPct,
-            scoopedToVaultUsd: day.scoopedToVaultUsd,
-            manualReleasedUsd: day.manualReleasedUsd,
-            tradeCount: day.tradeCount,
-            winningTrades: day.winningTrades,
-            losingTrades: day.losingTrades,
-            winRatePct: day.winRatePct,
-            recordHash: day.recordHash,
-          });
-          lastSyncedDailyHashRef.current.set(day.dateKey, day.recordHash);
-          syncedAny = true;
-        }
-        if (syncedAny) {
-          setCloudSyncedAtIso(new Date().toISOString());
-        }
-      } catch {
-        // non-blocking cloud sync; local cache remains authoritative
-      }
-    };
-
-    void persistToCloud();
-  }, [verifiedUid, vault]);
+  // The shared simulation snapshot must never enter a personal financial ledger.
+  // Legacy browser-authored records are deliberately not read into the dashboard.
 
   const handleSaveConfig = useCallback(async () => {
+    if (!verifiedUid) return;
     setSavingConfig(true);
     setFeedback(null);
     try {
@@ -293,6 +234,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
         vault?: ProfitVaultSnapshot;
         error?: string;
       };
+      if (activeVaultUidRef.current !== verifiedUid) return;
       if (!res.ok || !data?.ok || !data.vault) {
         setFeedback({
           tone: 'CRITICAL',
@@ -301,7 +243,6 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
         return;
       }
       setVault(data.vault);
-      saveCachedVaultSnapshot(data.vault);
       syncDraftsFromConfig(data.vault.config);
       setFeedback({
         tone: 'NOMINAL',
@@ -321,9 +262,11 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     thresholdPctDraft,
     scoopRatioDraft,
     syncDraftsFromConfig,
+    verifiedUid,
   ]);
 
   const handleRecordRealizedGain = useCallback(async () => {
+    if (!verifiedUid) return;
     const parsedUsd = Number(gainUsdInput);
     if (!Number.isFinite(parsedUsd) || parsedUsd === 0) {
       setFeedback({
@@ -354,6 +297,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
         };
         error?: string;
       };
+      if (activeVaultUidRef.current !== verifiedUid) return;
       if (!res.ok || !data?.ok || !data.vault) {
         setFeedback({
           tone: 'CRITICAL',
@@ -362,7 +306,6 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
         return;
       }
       setVault(data.vault);
-      saveCachedVaultSnapshot(data.vault);
       if (data.outcome?.scoopedNow) {
         setFeedback({
           tone: 'NOMINAL',
@@ -383,9 +326,10 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     } finally {
       setRecordingGain(false);
     }
-  }, [gainSymbol, gainUsdInput, gainAgentInput]);
+  }, [gainSymbol, gainUsdInput, gainAgentInput, verifiedUid]);
 
   const handleExecuteManualOverride = useCallback(async () => {
+    if (!verifiedUid) return;
     const parsedAmount = Number(overrideAmountInput);
     if (!Number.isFinite(parsedAmount) || parsedAmount < 1) {
       setFeedback({ tone: 'CRITICAL', text: 'Override amount must be at least $1.00 USD.' });
@@ -412,6 +356,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
         error?: string;
         vault?: ProfitVaultSnapshot;
       };
+      if (activeVaultUidRef.current !== verifiedUid) return;
       if (!res.ok || !data?.ok || !data.vault) {
         setFeedback({
           tone: 'CRITICAL',
@@ -420,7 +365,6 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
         return;
       }
       setVault(data.vault);
-      saveCachedVaultSnapshot(data.vault);
       setConfirmationPhraseInput('');
       setFeedback({
         tone: 'NOMINAL',
@@ -431,40 +375,17 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     } finally {
       setSubmittingOverride(false);
     }
-  }, [overrideAction, overrideAmountInput, confirmationPhraseInput, overrideReasonInput]);
+  }, [overrideAction, overrideAmountInput, confirmationPhraseInput, overrideReasonInput, verifiedUid]);
 
-  const mergedDailyHistory: readonly DailyPnlHistoryRecord[] = useMemo(() => {
-    const map = new Map<string, DailyPnlHistoryRecord>();
-    for (const cloud of cloudDailyRecords) {
-      map.set(cloud.dateKey, {
-        dateKey: cloud.dateKey,
-        startingEquityUsd: cloud.startingEquityUsd,
-        endingEquityUsd: cloud.endingEquityUsd,
-        realizedPnlUsd: cloud.realizedPnlUsd,
-        returnPct: cloud.returnPct,
-        scoopedToVaultUsd: cloud.scoopedToVaultUsd,
-        manualReleasedUsd: cloud.manualReleasedUsd,
-        tradeCount: cloud.tradeCount,
-        winningTrades: cloud.winningTrades,
-        losingTrades: cloud.losingTrades,
-        winRatePct: cloud.winRatePct,
-        largestWinUsd: 0,
-        largestLossUsd: 0,
-        recordHash: cloud.recordHash,
-        updatedAtIso: new Date().toISOString(),
-      });
-    }
-    if (vault) {
-      for (const local of vault.dailyHistory) {
-        map.set(local.dateKey, local);
-      }
-    }
-    return Array.from(map.values()).sort((a, b) => a.dateKey.localeCompare(b.dateKey));
-  }, [vault, cloudDailyRecords]);
+  const mergedDailyHistory: readonly DailyPnlHistoryRecord[] = useMemo(
+    () => vault ? [...vault.dailyHistory].sort((a, b) => a.dateKey.localeCompare(b.dateKey)) : [],
+    [vault]
+  );
 
   const handleExportDailyPnlCsv = useCallback(() => {
     if (mergedDailyHistory.length === 0) return;
     const headers = [
+      'provenance',
       'date_utc',
       'starting_equity_usd',
       'ending_equity_usd',
@@ -480,6 +401,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     ];
     const rows = mergedDailyHistory.map((d) =>
       [
+        'UNVERIFIED_RESEARCH_SIMULATION',
         d.dateKey,
         d.startingEquityUsd.toFixed(4),
         d.endingEquityUsd.toFixed(4),
@@ -501,7 +423,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `signal-forge-daily-pnl-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `signal-forge-research-only-pnl-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -514,7 +436,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     if (!vault) {
       return [
         { id: 'locked-vault', label: 'Immutable Locker Vault', value: '$0.00', subtext: 'Initializing...', tone: 'INFO' },
-        { id: 'active-trading', label: 'Active Trading Capital', value: '$25,000.00', subtext: 'Isolated from vault', tone: 'NOMINAL' },
+        { id: 'active-trading', label: 'Active Trading Capital', value: '—', subtext: 'Awaiting research snapshot', tone: 'NOMINAL' },
         { id: 'today-pnl', label: 'Today Realized Return', value: '+0.0000%', subtext: '$0.0000 realized', tone: 'INFO' },
         { id: 'audit-drift', label: 'Accounting Drift', value: '$0.0000', subtext: 'Hash chain pending', tone: 'NOMINAL' },
       ];
@@ -604,12 +526,8 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
         {
           id: 'persistence-mode',
           label: 'Persistence',
-          value: verifiedUid
-            ? cloudSyncedAtIso
-              ? 'Local + Firestore Synced'
-              : 'Local + Firestore Active'
-            : 'Local Cache Active',
-          tone: 'INFO',
+          value: 'Research only · Financial cloud writes disabled',
+          tone: 'WARNING',
         },
       ]}
       actions={
@@ -624,7 +542,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
     >
       <div className="space-y-5">
         <p className="text-xs text-slate-400">
-          Continuously sweeps realized profits exceeding your threshold into an agent-isolated Locker Vault with User-Only Manual Override and 4-decimal Daily PnL persistence.
+          Shared owner-only research simulation. Balances, PnL and hash chains are not verified exchange settlements or personal funds. Financial cloud writes are disabled until a trusted per-user ledger is available.
         </p>
         <ForgeMetricStrip items={metrics} />
 
@@ -793,10 +711,10 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
               <div className="border-t border-slate-800/80 pt-3.5 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-300">
-                    Ingest Realized Trade Settlement
+                    Manual PnL — Research Demo Only
                   </span>
                   <span className="font-mono text-[10px] text-slate-400">
-                    Auto-sweeps excess above {formatUsdPlain(vault?.effectiveThresholdUsd ?? 250)}
+                    Not exchange-verified · default disabled
                   </span>
                 </div>
                 <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
@@ -829,7 +747,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
                 <div className="flex items-center justify-end">
                   <ForgeInteractiveButton
                     intent="secondary"
-                    label={recordingGain ? 'Settling...' : 'Record Realized Gain & Evaluate Scoop'}
+                    label={recordingGain ? 'Simulating...' : 'Simulate PnL & Evaluate Scoop'}
                     disabled={recordingGain}
                     onClick={handleRecordRealizedGain}
                     icon={<ArrowDownToLine className="h-3.5 w-3.5" />}
@@ -986,49 +904,41 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
             </div>
 
             {/* Daily Return % Bar Chart */}
-            <div className="h-56 w-full rounded-xl border border-slate-800/80 bg-slate-950/65 p-3">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.12)" />
-                  <XAxis
-                    dataKey="date"
-                    tick={{ fill: '#94a3b8', fontSize: 11, fontFamily: 'monospace' }}
-                    axisLine={{ stroke: 'rgba(148,163,184,0.2)' }}
-                    tickLine={false}
-                  />
-                  <YAxis
-                    tickFormatter={(v: number) => `${v > 0 ? '+' : ''}${v.toFixed(2)}%`}
-                    tick={{ fill: '#94a3b8', fontSize: 11, fontFamily: 'monospace' }}
-                    axisLine={{ stroke: 'rgba(148,163,184,0.2)' }}
-                    tickLine={false}
-                    width={62}
-                  />
-                  <ReferenceLine y={0} stroke="rgba(148,163,184,0.45)" />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#0f172a',
-                      border: '1px solid rgba(56,189,248,0.35)',
-                      borderRadius: '8px',
-                      fontSize: '12px',
-                      fontFamily: 'monospace',
-                    }}
-                    formatter={(value: unknown, name: unknown) => {
-                      const num = Number(value) || 0;
-                      if (name === 'returnPct') return [formatPct4(num), 'Daily Return'];
-                      return [formatUsdSigned(num, 4), String(name)];
-                    }}
-                  />
-                  <Bar dataKey="returnPct" radius={[4, 4, 0, 0]}>
-                    {chartData.map((entry) => (
-                      <Cell
-                        key={entry.fullDate}
-                        fill={entry.returnPct >= 0 ? '#10b981' : '#f43f5e'}
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            <ErrorBoundary title="Daily PnL Chart Recovery">
+              <div className="h-56 w-full min-w-0 rounded-xl border border-slate-800/80 bg-slate-950/65 p-3">
+                <ResponsiveContainer width="100%" height={200} minWidth={0} debounce={50}>
+                  <BarChart data={chartData} margin={VAULT_BAR_CHART_MARGIN}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.12)" />
+                    <XAxis
+                      dataKey="date"
+                      tick={VAULT_AXIS_TICK_STYLE}
+                      axisLine={VAULT_AXIS_LINE_STYLE}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tickFormatter={formatVaultYAxisTick}
+                      tick={VAULT_AXIS_TICK_STYLE}
+                      axisLine={VAULT_AXIS_LINE_STYLE}
+                      tickLine={false}
+                      width={62}
+                    />
+                    <ReferenceLine y={0} stroke="rgba(148,163,184,0.45)" />
+                    <Tooltip
+                      contentStyle={VAULT_TOOLTIP_STYLE}
+                      formatter={formatVaultTooltip}
+                    />
+                    <Bar dataKey="returnPct" radius={VAULT_BAR_RADIUS} isAnimationActive={false}>
+                      {chartData.map((entry) => (
+                        <Cell
+                          key={entry.fullDate}
+                          fill={entry.returnPct >= 0 ? '#10b981' : '#f43f5e'}
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </ErrorBoundary>
 
             {/* High-Precision Daily PnL Table */}
             <div className="overflow-x-auto rounded-xl border border-slate-800/80 bg-slate-950/65">

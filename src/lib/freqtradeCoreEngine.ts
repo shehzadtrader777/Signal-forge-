@@ -9,6 +9,11 @@
  *  - Structured System Audit Log formatter (CPU, Memory, Latency, Execution Errors)
  */
 
+import {
+  computeSimulatedPaperExecutionQuote,
+  type CanonicalPriceObservation,
+} from './marketPriceModel';
+
 export type UnifiedExchangeId = 'binance' | 'bybit' | 'okx' | 'kraken';
 export type UnifiedMarketType = 'SPOT' | 'FUTURES';
 export type UnifiedTradingMode = 'TESTNET' | 'PAPER_DRY_RUN' | 'LIVE';
@@ -68,6 +73,10 @@ export interface StandardizedAiSignalInput {
   readonly leverage?: number;
   readonly confidencePct: number;
   readonly strategyName?: string;
+  readonly marketObservation?: CanonicalPriceObservation;
+  readonly slippageBps?: number;
+  readonly requireVerifiedMarketObservation?: boolean;
+  readonly nowMs?: number;
 }
 
 export interface CcxtRouteValidationResult {
@@ -81,6 +90,14 @@ export interface CcxtRouteValidationResult {
   readonly feeUsd: number;
   readonly stopLoss: number;
   readonly takeProfit: number;
+  readonly priceSource: string;
+  readonly priceTimestampIso: string;
+  readonly bidPrice: number | null;
+  readonly askPrice: number | null;
+  readonly spreadBps: number | null;
+  readonly slippageBps: number;
+  readonly profitLabel: 'SIMULATED_PAPER_ONLY';
+  readonly isRealProfit: false;
 }
 
 export interface DryRunPositionRecord {
@@ -106,6 +123,15 @@ export interface DryRunPositionRecord {
   readonly closeReason: string;
   readonly openedAtIso: string;
   readonly closedAtIso: string | null;
+  readonly priceSource: string;
+  readonly priceTimestampIso: string;
+  readonly bidPrice: number | null;
+  readonly askPrice: number | null;
+  readonly spreadBps: number | null;
+  readonly slippageBps: number;
+  readonly feeUsd: number;
+  readonly profitLabel: 'SIMULATED_PAPER_ONLY';
+  readonly isRealProfit: false;
 }
 
 export interface SystemAuditLogEntry {
@@ -167,61 +193,119 @@ export function normalizeCcxtSymbol(raw: string): string {
   return `${cleaned}/USDT`;
 }
 
+function rejectedRoute(reason: string): CcxtRouteValidationResult {
+  return {
+    valid: false,
+    reason,
+    normalizedSymbol: '',
+    effectiveLeverage: 1,
+    fillPrice: 0,
+    quantity: 0,
+    notionalUsd: 0,
+    feeUsd: 0,
+    stopLoss: 0,
+    takeProfit: 0,
+    priceSource: 'REJECTED_INVALID_PRICE',
+    priceTimestampIso: new Date().toISOString(),
+    bidPrice: null,
+    askPrice: null,
+    spreadBps: null,
+    slippageBps: 0,
+    profitLabel: 'SIMULATED_PAPER_ONLY',
+    isRealProfit: false,
+  };
+}
+
 export function validateAndPrepareCcxtSignal(
   input: StandardizedAiSignalInput,
   risk: HardCodedRiskParameters = HARD_CODED_RISK_PARAMETERS
 ): CcxtRouteValidationResult {
   if (!isSupportedExchange(input.exchange)) {
-    return {
-      valid: false,
-      reason: `Unsupported CCXT exchange "${input.exchange}". Allowed: ${SUPPORTED_CCXT_EXCHANGES.join(', ')}.`,
-      normalizedSymbol: '',
-      effectiveLeverage: 1,
-      fillPrice: 0,
-      quantity: 0,
-      notionalUsd: 0,
-      feeUsd: 0,
-      stopLoss: 0,
-      takeProfit: 0,
-    };
-  }
-
-  if (!Number.isFinite(input.entryPrice) || input.entryPrice <= 0) {
-    return {
-      valid: false,
-      reason: 'Entry price must be a finite positive number.',
-      normalizedSymbol: '',
-      effectiveLeverage: 1,
-      fillPrice: 0,
-      quantity: 0,
-      notionalUsd: 0,
-      feeUsd: 0,
-      stopLoss: 0,
-      takeProfit: 0,
-    };
+    return rejectedRoute(
+      `Unsupported CCXT exchange "${input.exchange}". Allowed: ${SUPPORTED_CCXT_EXCHANGES.join(', ')}.`
+    );
   }
 
   if (!Number.isFinite(input.stakeUsd) || input.stakeUsd < 10) {
-    return {
-      valid: false,
-      reason: 'Stake USD must be at least $10.00.',
-      normalizedSymbol: '',
-      effectiveLeverage: 1,
-      fillPrice: 0,
-      quantity: 0,
-      notionalUsd: 0,
-      feeUsd: 0,
-      stopLoss: 0,
-      takeProfit: 0,
-    };
+    return rejectedRoute('Stake USD must be at least $10.00.');
   }
 
   const normalizedSymbol = normalizeCcxtSymbol(input.symbol);
   const rawLev = input.marketType === 'FUTURES' ? (input.leverage ?? 3) : 1;
   const effectiveLeverage = Math.max(1, Math.min(20, Number.isFinite(rawLev) ? rawLev : 1));
-  const slippageMult = input.side === 'BUY' ? 1.0002 : 0.9998;
-  const fillPrice = Number((input.entryPrice * slippageMult).toFixed(6));
   const notionalUsd = Number((input.stakeUsd * effectiveLeverage).toFixed(2));
+  const configuredSlippageBps =
+    input.slippageBps !== undefined && Number.isFinite(input.slippageBps) && input.slippageBps >= 0
+      ? input.slippageBps
+      : 2;
+
+  // Enforce canonical market observation validation whenever supplied or explicitly required
+  if (input.marketObservation || input.requireVerifiedMarketObservation) {
+    if (!input.marketObservation) {
+      return rejectedRoute(
+        'Paper execution blocked: a verified timestamped market observation is required.'
+      );
+    }
+
+    const quote = computeSimulatedPaperExecutionQuote({
+      symbol: normalizedSymbol,
+      exchange: input.exchange,
+      marketType: input.marketType,
+      side: input.side,
+      stakeUsd: input.stakeUsd,
+      leverage: effectiveLeverage,
+      takerFeeRate: risk.takerFeeRate,
+      slippageBps: configuredSlippageBps,
+      observation: input.marketObservation,
+      nowMs: input.nowMs,
+    });
+
+    if (!quote.valid) {
+      return rejectedRoute(`Paper execution blocked: ${quote.rejectionReason ?? 'Invalid market observation.'}`);
+    }
+
+    const fillPrice = quote.paperExecutionPrice;
+    const quantity = quote.quantity;
+    const stopLoss =
+      input.side === 'BUY'
+        ? Number((fillPrice * (1 - risk.stopLossPct)).toFixed(6))
+        : Number((fillPrice * (1 + risk.stopLossPct)).toFixed(6));
+    const takeProfit =
+      input.side === 'BUY'
+        ? Number((fillPrice * (1 + risk.takeProfitPct)).toFixed(6))
+        : Number((fillPrice * (1 - risk.takeProfitPct)).toFixed(6));
+
+    return {
+      valid: true,
+      reason: `Standardized CCXT paper route ready (${input.exchange.toUpperCase()} ${input.marketType} ${normalizedSymbol} · ${quote.priceSource})`,
+      normalizedSymbol,
+      effectiveLeverage,
+      fillPrice,
+      quantity,
+      notionalUsd: quote.notionalUsd,
+      feeUsd: quote.feeUsd,
+      stopLoss,
+      takeProfit,
+      priceSource: quote.priceSource,
+      priceTimestampIso: quote.priceTimestampIso,
+      bidPrice: quote.bidPrice,
+      askPrice: quote.askPrice,
+      spreadBps: quote.spreadBps,
+      slippageBps: quote.slippageBps,
+      profitLabel: 'SIMULATED_PAPER_ONLY',
+      isRealProfit: false,
+    };
+  }
+
+  if (!Number.isFinite(input.entryPrice) || input.entryPrice <= 0) {
+    return rejectedRoute('Entry price must be a finite positive number.');
+  }
+
+  const slippageMult =
+    input.side === 'BUY'
+      ? 1 + configuredSlippageBps / 10_000
+      : 1 - configuredSlippageBps / 10_000;
+  const fillPrice = Number((input.entryPrice * slippageMult).toFixed(6));
   const quantity = Number((notionalUsd / fillPrice).toFixed(6));
   const feeUsd = Number((notionalUsd * risk.takerFeeRate).toFixed(4));
 
@@ -246,6 +330,14 @@ export function validateAndPrepareCcxtSignal(
     feeUsd,
     stopLoss,
     takeProfit,
+    priceSource: `${input.exchange.toUpperCase()}_${input.marketType}_DIRECT_QUOTED`,
+    priceTimestampIso: new Date(input.nowMs ?? Date.now()).toISOString(),
+    bidPrice: null,
+    askPrice: null,
+    spreadBps: null,
+    slippageBps: configuredSlippageBps,
+    profitLabel: 'SIMULATED_PAPER_ONLY',
+    isRealProfit: false,
   };
 }
 

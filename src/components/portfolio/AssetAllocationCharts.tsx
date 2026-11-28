@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import {
   Bar,
   BarChart,
@@ -18,16 +18,121 @@ import {
   type PortfolioEvaluationResult,
 } from '../../lib/portfolioManager';
 
+import { ErrorBoundary } from '../ErrorBoundary';
+
+const ALLOC_BAR_MARGIN = { top: 10, right: 12, left: -12, bottom: 4 } as const;
+const ALLOC_BAR_RADIUS: [number, number, number, number] = [4, 4, 0, 0];
+const ALLOC_AXIS_TICK = { fill: '#94a3b8', fontSize: 11 } as const;
+const ALLOC_AXIS_LINE = { stroke: '#334155' } as const;
+const ALLOC_TOOLTIP_CURSOR = { fill: 'rgba(59, 130, 246, 0.08)' } as const;
+const ALLOC_TOOLTIP_STYLE = {
+  backgroundColor: '#0d1323',
+  borderColor: '#334155',
+  borderRadius: '8px',
+  fontSize: '12px',
+  color: '#f8fafc',
+} as const;
+
+function formatAllocWeightTooltip(value: unknown, name?: string | number): [string, string] {
+  const num = safeFiniteNumber(value, 0);
+  return [
+    `${num.toFixed(2)}%`,
+    name === 'currentWeight' ? 'Actual Weight' : 'Target Parity Weight',
+  ];
+}
+
+function formatAllocDonutTooltip(
+  value: unknown,
+  name?: string | number,
+  item?: { payload?: { notionalUsd?: number } }
+): [string, string] {
+  const pct = safeFiniteNumber(value, 0);
+  const usd = safeFiniteNumber(item?.payload?.notionalUsd, 0);
+  return [
+    `${pct.toFixed(1)}% ($${usd.toLocaleString(undefined, { maximumFractionDigits: 0 })})`,
+    String(name ?? ''),
+  ];
+}
+
 interface AssetAllocationChartsProps {
   evaluation: PortfolioEvaluationResult | null | undefined;
 }
 
 type ChartMode = 'WEIGHTS' | 'DONUT';
 
-export function AssetAllocationCharts({ evaluation }: AssetAllocationChartsProps) {
+export const AssetAllocationCharts = memo(function AssetAllocationCharts({
+  evaluation,
+}: AssetAllocationChartsProps) {
   const [chartMode, setChartMode] = useState<ChartMode>('WEIGHTS');
 
-  if (!evaluation || !Array.isArray(evaluation.assets) || evaluation.assets.length === 0) {
+  const dataSignature = useMemo(() => {
+    if (!evaluation || !Array.isArray(evaluation.assets) || evaluation.assets.length === 0) {
+      return '';
+    }
+    const meter = evaluation.exposureMeter;
+    const assetSig = evaluation.assets
+      .map(
+        (a) =>
+          `${a.baseAsset}:${safeFiniteNumber(a.currentWeightPct, 0).toFixed(2)}:${safeFiniteNumber(
+            a.targetWeightPct,
+            0
+          ).toFixed(2)}:${Math.round(safeFiniteNumber(a.notionalUsd, 0))}`
+      )
+      .join('|');
+    return `${assetSig}||USDT:${safeFiniteNumber(meter.stablecoinReservePct, 0).toFixed(2)}:${safeFiniteNumber(
+      evaluation.config.minStablecoinReservePct,
+      15
+    ).toFixed(2)}:${Math.round(safeFiniteNumber(meter.stablecoinReserveUsd, 0))}`;
+  }, [evaluation]);
+
+  const barData = useMemo(() => {
+    if (!evaluation || !Array.isArray(evaluation.assets) || evaluation.assets.length === 0) {
+      return [];
+    }
+    const assets = evaluation.assets;
+    const meter = evaluation.exposureMeter;
+    return [
+      ...assets.map((a) => ({
+        name: a.baseAsset,
+        currentWeight: Number(safeFiniteNumber(a.currentWeightPct, 0).toFixed(2)),
+        targetWeight: Number(safeFiniteNumber(a.targetWeightPct, 0).toFixed(2)),
+        notionalUsd: safeFiniteNumber(a.notionalUsd, 0),
+        driftPct: safeFiniteNumber(a.driftPct, 0),
+        color: a.color || '#3b82f6',
+      })),
+      {
+        name: 'USDT',
+        currentWeight: Number(safeFiniteNumber(meter.stablecoinReservePct, 0).toFixed(2)),
+        targetWeight: Number(
+          safeFiniteNumber(evaluation.config.minStablecoinReservePct, 15).toFixed(2)
+        ),
+        notionalUsd: safeFiniteNumber(meter.stablecoinReserveUsd, 0),
+        driftPct: Number(
+          (
+            safeFiniteNumber(meter.stablecoinReservePct, 0) -
+            safeFiniteNumber(evaluation.config.minStablecoinReservePct, 15)
+          ).toFixed(2)
+        ),
+        color: PORTFOLIO_COLORS.USDT,
+      },
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataSignature]);
+
+  const donutData = useMemo(
+    () =>
+      barData
+        .filter((d) => d.currentWeight > 0)
+        .map((d) => ({
+          name: d.name,
+          value: d.currentWeight,
+          notionalUsd: d.notionalUsd,
+          color: d.color,
+        })),
+    [barData]
+  );
+
+  if (!evaluation || barData.length === 0) {
     return (
       <section className="rounded-xl border border-slate-800/80 bg-[#111827] p-5">
         <div className="flex items-center gap-2 text-slate-400 text-sm">
@@ -38,41 +143,7 @@ export function AssetAllocationCharts({ evaluation }: AssetAllocationChartsProps
     );
   }
 
-  const assets = evaluation.assets;
   const meter = evaluation.exposureMeter;
-
-  const barData = [
-    ...assets.map((a) => ({
-      name: a.baseAsset,
-      currentWeight: Number(safeFiniteNumber(a.currentWeightPct, 0).toFixed(2)),
-      targetWeight: Number(safeFiniteNumber(a.targetWeightPct, 0).toFixed(2)),
-      notionalUsd: safeFiniteNumber(a.notionalUsd, 0),
-      driftPct: safeFiniteNumber(a.driftPct, 0),
-      color: a.color || '#3b82f6',
-    })),
-    {
-      name: 'USDT',
-      currentWeight: Number(safeFiniteNumber(meter.stablecoinReservePct, 0).toFixed(2)),
-      targetWeight: Number(safeFiniteNumber(evaluation.config.minStablecoinReservePct, 15).toFixed(2)),
-      notionalUsd: safeFiniteNumber(meter.stablecoinReserveUsd, 0),
-      driftPct: Number(
-        (
-          safeFiniteNumber(meter.stablecoinReservePct, 0) -
-          safeFiniteNumber(evaluation.config.minStablecoinReservePct, 15)
-        ).toFixed(2)
-      ),
-      color: PORTFOLIO_COLORS.USDT,
-    },
-  ];
-
-  const donutData = barData
-    .filter((d) => d.currentWeight > 0)
-    .map((d) => ({
-      name: d.name,
-      value: d.currentWeight,
-      notionalUsd: d.notionalUsd,
-      color: d.color,
-    }));
 
   return (
     <section
@@ -122,101 +193,77 @@ export function AssetAllocationCharts({ evaluation }: AssetAllocationChartsProps
       </div>
 
       <div className="p-5 flex-1 flex flex-col justify-between gap-4 min-w-0">
-        {/* Responsive Recharts Canvas */}
-        <div className="h-[270px] w-full min-w-0">
-          {chartMode === 'WEIGHTS' ? (
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={barData} margin={{ top: 10, right: 12, left: -12, bottom: 4 }}>
-                <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" vertical={false} />
-                <XAxis
-                  dataKey="name"
-                  tick={{ fill: '#94a3b8', fontSize: 11 }}
-                  axisLine={{ stroke: '#334155' }}
-                  tickLine={false}
-                />
-                <YAxis
-                  tick={{ fill: '#94a3b8', fontSize: 11 }}
-                  axisLine={false}
-                  tickLine={false}
-                  unit="%"
-                />
-                <Tooltip
-                  cursor={{ fill: 'rgba(59, 130, 246, 0.08)' }}
-                  contentStyle={{
-                    backgroundColor: '#0d1323',
-                    borderColor: '#334155',
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                    color: '#f8fafc',
-                  }}
-                  formatter={(value: unknown, name?: string | number) => {
-                    const num = safeFiniteNumber(value, 0);
-                    return [
-                      `${num.toFixed(2)}%`,
-                      name === 'currentWeight' ? 'Actual Weight' : 'Target Parity Weight',
-                    ];
-                  }}
-                />
-                <Bar
-                  dataKey="currentWeight"
-                  name="currentWeight"
-                  fill="#3b82f6"
-                  radius={[4, 4, 0, 0]}
-                  barSize={18}
-                />
-                <Bar
-                  dataKey="targetWeight"
-                  name="targetWeight"
-                  fill="#10b981"
-                  radius={[4, 4, 0, 0]}
-                  barSize={18}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={donutData}
-                  dataKey="value"
-                  nameKey="name"
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={62}
-                  outerRadius={98}
-                  paddingAngle={2}
-                  stroke="#0a0e1a"
-                  strokeWidth={2}
-                >
-                  {donutData.map((entry) => (
-                    <Cell key={entry.name} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#0d1323',
-                    borderColor: '#334155',
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                    color: '#f8fafc',
-                  }}
-                  formatter={(
-                    value: unknown,
-                    name?: string | number,
-                    item?: { payload?: { notionalUsd?: number } }
-                  ) => {
-                    const pct = safeFiniteNumber(value, 0);
-                    const usd = safeFiniteNumber(item?.payload?.notionalUsd, 0);
-                    return [
-                      `${pct.toFixed(1)}% ($${usd.toLocaleString(undefined, { maximumFractionDigits: 0 })})`,
-                      String(name ?? ''),
-                    ];
-                  }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          )}
-        </div>
+        {/* Responsive Recharts Canvas (Fixed Height + Module-Level Stable Props) */}
+        <ErrorBoundary title="Asset Allocation Chart Recovery">
+          <div className="h-[270px] w-full min-w-0">
+            {chartMode === 'WEIGHTS' ? (
+              <ResponsiveContainer width="100%" height={270} minWidth={0} debounce={50}>
+                <BarChart data={barData} margin={ALLOC_BAR_MARGIN}>
+                  <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" vertical={false} />
+                  <XAxis
+                    dataKey="name"
+                    tick={ALLOC_AXIS_TICK}
+                    axisLine={ALLOC_AXIS_LINE}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    tick={ALLOC_AXIS_TICK}
+                    axisLine={false}
+                    tickLine={false}
+                    unit="%"
+                  />
+                  <Tooltip
+                    cursor={ALLOC_TOOLTIP_CURSOR}
+                    contentStyle={ALLOC_TOOLTIP_STYLE}
+                    formatter={formatAllocWeightTooltip}
+                  />
+                  <Bar
+                    dataKey="currentWeight"
+                    name="currentWeight"
+                    fill="#3b82f6"
+                    radius={ALLOC_BAR_RADIUS}
+                    barSize={18}
+                    isAnimationActive={false}
+                  />
+                  <Bar
+                    dataKey="targetWeight"
+                    name="targetWeight"
+                    fill="#10b981"
+                    radius={ALLOC_BAR_RADIUS}
+                    barSize={18}
+                    isAnimationActive={false}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <ResponsiveContainer width="100%" height={270} minWidth={0} debounce={50}>
+                <PieChart>
+                  <Pie
+                    data={donutData}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={62}
+                    outerRadius={98}
+                    paddingAngle={2}
+                    stroke="#0a0e1a"
+                    strokeWidth={2}
+                    isAnimationActive={false}
+                  >
+                    {donutData.map((entry) => (
+                      <Cell key={entry.name} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={ALLOC_TOOLTIP_STYLE}
+                    formatter={formatAllocDonutTooltip}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </ErrorBoundary>
 
         {/* Clean Legend & Notional Table */}
         <div className="border-t border-slate-800/80 pt-3">
@@ -260,4 +307,4 @@ export function AssetAllocationCharts({ evaluation }: AssetAllocationChartsProps
       </div>
     </section>
   );
-}
+});

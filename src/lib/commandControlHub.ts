@@ -330,8 +330,10 @@ export function sanitizeCommandControlState(
     domainOverrides,
     granularEnabled,
     dock,
-    stateVersion: typeof raw.stateVersion === 'number' && raw.stateVersion >= 1 ? raw.stateVersion : 1,
-    updatedAtIso: typeof raw.updatedAtIso === 'string' ? raw.updatedAtIso : defaults.updatedAtIso,
+    stateVersion: Number.isSafeInteger(raw.stateVersion) && (raw.stateVersion ?? 0) >= 1
+      ? raw.stateVersion as number : 1,
+    updatedAtIso: typeof raw.updatedAtIso === 'string' && !Number.isNaN(Date.parse(raw.updatedAtIso))
+      ? raw.updatedAtIso : defaults.updatedAtIso,
   };
 }
 

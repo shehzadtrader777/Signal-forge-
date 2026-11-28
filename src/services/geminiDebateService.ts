@@ -9,6 +9,7 @@ import {
   type SearchGroundingCitation,
   type SearchGroundingResult,
 } from '../lib/multiAgentDebateEngine';
+import { getSharedAiProviderVault } from '../lib/aiProviderVaultServer';
 
 export class GeminiServiceError extends Error {
   readonly httpStatus: number;
@@ -38,10 +39,12 @@ let cachedClient: GoogleGenAI | null = null;
 let cachedApiKey = '';
 
 function getGeminiClient(): GoogleGenAI {
-  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
-  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey === 'replace-me') {
+  const apiKey = getSharedAiProviderVault().resolveEffectiveGeminiKey().apiKey;
+  if (!apiKey) {
+    cachedClient = null;
+    cachedApiKey = '';
     throw new GeminiServiceError(
-      'GEMINI_API_KEY is not configured in Settings > Secrets. Configure a valid Gemini API key to invoke live multi-agent debate or Search grounding.',
+      'Gemini API Key is not configured. Save a valid Gemini API key in Settings > Command Hub to invoke live multi-agent debate or Search grounding.',
       503,
       'GEMINI_API_KEY_UNCONFIGURED'
     );
@@ -61,11 +64,7 @@ function getGeminiClient(): GoogleGenAI {
 }
 
 export function getGeminiConfigurationHealth(): 'healthy' | 'unconfigured' {
-  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
-  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey === 'replace-me') {
-    return 'unconfigured';
-  }
-  return 'healthy';
+  return getSharedAiProviderVault().hasEffectiveGeminiKey() ? 'healthy' : 'unconfigured';
 }
 
 function mapGeminiError(err: unknown): GeminiServiceError {

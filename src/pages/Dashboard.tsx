@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Lock, RefreshCw } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Eye, Lock, RefreshCw, Wrench } from 'lucide-react';
 import { CandleChart } from '../components/CandleChart';
+import { PremiumWorkspaceOverview } from '../components/PremiumWorkspaceOverview';
+import { ExchangeControlCenter } from '../components/ExchangeControlCenter';
 import { SmcVolumeProfilePanel } from '../components/SmcVolumeProfilePanel';
 import { TopGainersPanel } from '../components/TopGainersPanel';
 import { SignalCard } from '../components/SignalCard';
@@ -27,12 +30,12 @@ import { AgenticCliOrchestratorPanel } from '../components/AgenticCliOrchestrato
 import { FableOrchestratorPanel } from '../components/FableOrchestratorPanel';
 import { FreqtradeUnifiedTerminal } from '../components/FreqtradeUnifiedTerminal';
 import { HybridArchitectureConsole } from '../components/HybridArchitectureConsole';
+import { MasterContainmentProtocolPanel } from '../components/MasterContainmentProtocolPanel';
 import { SignalDetailModal } from '../components/SignalDetailModal';
-import { useWorkspaceStore, type MonitorId } from '../store/useWorkspaceStore';
-import { AnimatePresence, motion } from 'motion/react';
+import { useWorkspaceStore } from '../store/useWorkspaceStore';
 import { useApp } from '../context/AppContext';
 import { generateDeterministicCandles } from '../lib/marketData';
-import { apiFetch } from '../lib/apiClient';
+import { apiFetch, hasVerifiedOperatorSession } from '../lib/apiClient';
 import type { BackendExecutionPipelineSnapshot } from '../lib/executionPipeline';
 import { generateTopSignals, type TradingSignal } from '../lib/signals';
 import { runSmcVolumeProfileAgent, type SmcAgentAnalysis } from '../lib/smcAgent';
@@ -111,16 +114,6 @@ export function Dashboard() {
     []
   );
 
-  const handleSlideDisplay = useCallback(
-    (delta: -1 | 1) => {
-      const order: MonitorId[] = ['DISPLAY_1', 'DISPLAY_2', 'DISPLAY_3'];
-      const curIdx = order.indexOf(activeMonitorId);
-      const nextIdx = (curIdx + delta + order.length) % order.length;
-      setActiveMonitor(order[nextIdx]);
-    },
-    [activeMonitorId, setActiveMonitor]
-  );
-
   const handleModalBuyRoute = useCallback(
     (sig: TradingSignal) => {
       setSelectedSymbol(sig.symbol);
@@ -169,8 +162,9 @@ export function Dashboard() {
   useEffect(() => {
     if (!appLiveEnabled) return;
     const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       fetchPipelineSnapshot();
-    }, 5000);
+    }, 10_000);
     return () => window.clearInterval(id);
   }, [appLiveEnabled, fetchPipelineSnapshot]);
 
@@ -535,94 +529,105 @@ export function Dashboard() {
     [topSignals, activeSmcAnalysis, patternScanSummary]
   );
 
-  // Strictly batch >= 85% AI, SMC, and Pattern Scanner signal alerts into the 3-Hour Coordinator Email Digest (zero individual email spam)
+  // Strictly batch >= 85% AI, SMC, and Pattern Scanner signal alerts into the 3-Hour Coordinator Email Digest (authorized operators only)
   useEffect(() => {
     if (!emailDigestSig || emailDigestSig === lastEmailEvalSigRef.current) return;
-    lastEmailEvalSigRef.current = emailDigestSig;
+    let cancelled = false;
+    let refreshTimer: number | null = null;
 
-    let queuedAny = false;
+    hasVerifiedOperatorSession()
+      .then((isOperator) => {
+        if (cancelled || !isOperator) return;
+        lastEmailEvalSigRef.current = emailDigestSig;
+        let queuedAny = false;
 
-    for (const sig of topSignalsRef.current) {
-      if (sig.confidence < 85) continue;
-      const key = `${sig.symbol}_${sig.direction}`;
-      if (alertedSignalKeysRef.current.has(key)) continue;
-      alertedSignalKeysRef.current.add(key);
-      queuedAny = true;
+        for (const sig of topSignalsRef.current) {
+          if (sig.confidence < 85) continue;
+          const key = `${sig.symbol}_${sig.direction}`;
+          if (alertedSignalKeysRef.current.has(key)) continue;
+          alertedSignalKeysRef.current.add(key);
+          queuedAny = true;
 
-      apiFetch('/api/alerts/email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'HIGH_CONFIDENCE_SIGNAL',
-          sourceModule: 'AI_ENGINE',
-          symbol: sig.symbol,
-          direction: sig.direction,
-          confidence: sig.confidence,
-          entryPrice: sig.entryPrice,
-          stopLoss: sig.stopLoss,
-          trailingStopLoss: sig.stopLoss,
-          takeProfits: sig.takeProfits,
-          reason: sig.reason,
-        }),
-      }).catch(() => undefined);
-    }
+          apiFetch('/api/alerts/email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'HIGH_CONFIDENCE_SIGNAL',
+              sourceModule: 'AI_ENGINE',
+              symbol: sig.symbol,
+              direction: sig.direction,
+              confidence: sig.confidence,
+              entryPrice: sig.entryPrice,
+              stopLoss: sig.stopLoss,
+              trailingStopLoss: sig.stopLoss,
+              takeProfits: sig.takeProfits,
+              reason: sig.reason,
+            }),
+          }).catch(() => undefined);
+        }
 
-    const curSmc = activeSmcAnalysisRef.current;
-    if (curSmc && curSmc.confidence >= 85) {
-      const smcKey = `smc_${curSmc.symbol}_${curSmc.direction}`;
-      if (!alertedSignalKeysRef.current.has(smcKey)) {
-        alertedSignalKeysRef.current.add(smcKey);
-        queuedAny = true;
-        apiFetch('/api/alerts/email', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            type: 'HIGH_CONFIDENCE_SIGNAL',
-            sourceModule: 'SMC_FRVP',
-            symbol: curSmc.symbol,
-            direction: curSmc.direction,
-            confidence: curSmc.confidence,
-            entryPrice: curSmc.entryPrice,
-            stopLoss: curSmc.stopLoss,
-            trailingStopLoss: curSmc.stopLoss,
-            takeProfits: curSmc.takeProfits,
-            reason: curSmc.rationale,
-          }),
-        }).catch(() => undefined);
-      }
-    }
+        const curSmc = activeSmcAnalysisRef.current;
+        if (curSmc && curSmc.confidence >= 85) {
+          const smcKey = `smc_${curSmc.symbol}_${curSmc.direction}`;
+          if (!alertedSignalKeysRef.current.has(smcKey)) {
+            alertedSignalKeysRef.current.add(smcKey);
+            queuedAny = true;
+            apiFetch('/api/alerts/email', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                type: 'HIGH_CONFIDENCE_SIGNAL',
+                sourceModule: 'SMC_FRVP',
+                symbol: curSmc.symbol,
+                direction: curSmc.direction,
+                confidence: curSmc.confidence,
+                entryPrice: curSmc.entryPrice,
+                stopLoss: curSmc.stopLoss,
+                trailingStopLoss: curSmc.stopLoss,
+                takeProfits: curSmc.takeProfits,
+                reason: curSmc.rationale,
+              }),
+            }).catch(() => undefined);
+          }
+        }
 
-    for (const pat of patternSignalsRef.current.slice(0, 2)) {
-      if (pat.confidence < 85) continue;
-      const key = `pat_${pat.symbol}_${pat.direction}`;
-      if (alertedSignalKeysRef.current.has(key)) continue;
-      alertedSignalKeysRef.current.add(key);
-      queuedAny = true;
+        for (const pat of patternSignalsRef.current.slice(0, 2)) {
+          if (pat.confidence < 85) continue;
+          const key = `pat_${pat.symbol}_${pat.direction}`;
+          if (alertedSignalKeysRef.current.has(key)) continue;
+          alertedSignalKeysRef.current.add(key);
+          queuedAny = true;
 
-      apiFetch('/api/alerts/email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'HIGH_CONFIDENCE_SIGNAL',
-          sourceModule: 'PATTERN_SCANNER',
-          symbol: pat.symbol,
-          direction: pat.direction,
-          confidence: pat.confidence,
-          entryPrice: pat.entryPrice,
-          stopLoss: pat.stopLoss,
-          trailingStopLoss: pat.stopLoss,
-          takeProfits: pat.takeProfits,
-          reason: `${pat.patternName} (${pat.moveType}) · ${pat.summary}`,
-        }),
-      }).catch(() => undefined);
-    }
+          apiFetch('/api/alerts/email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'HIGH_CONFIDENCE_SIGNAL',
+              sourceModule: 'PATTERN_SCANNER',
+              symbol: pat.symbol,
+              direction: pat.direction,
+              confidence: pat.confidence,
+              entryPrice: pat.entryPrice,
+              stopLoss: pat.stopLoss,
+              trailingStopLoss: pat.stopLoss,
+              takeProfits: pat.takeProfits,
+              reason: `${pat.patternName} (${pat.moveType}) · ${pat.summary}`,
+            }),
+          }).catch(() => undefined);
+        }
 
-    if (queuedAny) {
-      const timer = window.setTimeout(() => {
-        refreshDigestStatus();
-      }, 350);
-      return () => window.clearTimeout(timer);
-    }
+        if (queuedAny && !cancelled) {
+          refreshTimer = window.setTimeout(() => {
+            refreshDigestStatus();
+          }, 350);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+    };
   }, [emailDigestSig, refreshDigestStatus]);
 
   const resolvedPinnedCount = useMemo(
@@ -649,31 +654,50 @@ export function Dashboard() {
   return (
     <div>
       <div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8 space-y-8">
+        {/* User-customizable premium overview. Never modifies trade execution or balance state. */}
+        <PremiumWorkspaceOverview />
+        {/* Dedicated Public Preview & Safe Maintenance Quick Access (No Logout Needed) */}
+        <div
+          data-testid="dashboard-public-preview-bar"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800/90 bg-[#0d1323] px-4 py-2.5 text-xs"
+        >
+          <span className="font-mono text-slate-300">
+            Signal Forge Workspace · Paper/Demo Default · Private Trading Context
+          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              to="/home"
+              data-testid="dashboard-public-preview-btn"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-blue-500/45 bg-blue-500/12 px-3 py-1.5 font-semibold text-blue-200 hover:bg-blue-500/20 hover:text-white transition-colors whitespace-nowrap"
+            >
+              <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>Public Preview (No Logout)</span>
+            </Link>
+            <Link
+              to="/settings"
+              data-testid="dashboard-maintenance-control-btn"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 font-semibold text-amber-200 hover:bg-amber-500/20 transition-colors whitespace-nowrap"
+            >
+              <Wrench className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>Maintenance &amp; Command Hub</span>
+            </Link>
+          </div>
+        </div>
+
         {/* Multi-Screen Workspace Synchronization, Cyber-AI Theme Controls & Backend AI Pulse */}
         <MultiScreenWorkspaceBar pipelineSnapshot={pipelineSnapshot} />
 
-        {/* Gesture-Driven Horizontal Display Transition Stage (Swipe left/right across Displays 1-3 at 120Hz) */}
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.div
-            key={activeMonitorId}
-            initial={{ opacity: 0, x: 14 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -14 }}
-            transition={{ type: 'spring', stiffness: 420, damping: 36, mass: 0.7 }}
-            drag="x"
-            dragConstraints={{ left: 0, right: 0 }}
-            dragElastic={0.12}
-            onDragEnd={(_, info) => {
-              if (info.offset.x < -120 || info.velocity.x < -600) {
-                handleSlideDisplay(1);
-              } else if (info.offset.x > 120 || info.velocity.x > 600) {
-                handleSlideDisplay(-1);
-              }
-            }}
-            className="space-y-8"
-          >
+        {/* Stable Dashboard Workspace Stage (switched via MultiScreenWorkspaceBar — no touch-drag hijacking on mobile scroll) */}
+        <div
+          data-testid="dashboard-workspace-stage"
+          data-active-monitor={activeMonitorId}
+          className="space-y-8"
+        >
             {/* Signal Forge 6-Phase Hybrid Production Core (Python Control Plane + Rust Execution Engine) */}
             {panels.hybridArchitecture && <HybridArchitectureConsole />}
+
+            {/* Master Containment & Strategy Protocol (Circuit Breakers, Funding De-Leverage, HMAC Offline Alerts, ATR & Correlated Hedging) */}
+            <MasterContainmentProtocolPanel />
 
             {/* Signal Forge × Freqtrade Unified CCXT Execution, SQLite Dry-Run, 50-Win Live Gate & Telegram RPC Terminal */}
             {panels.freqtradeTerminal && <FreqtradeUnifiedTerminal />}
@@ -743,6 +767,9 @@ export function Dashboard() {
             smcAnalysis={activeSmcAnalysis}
           />
         )}
+
+        {/* Exchange & Trading Control Center (Binance, Bybit, OKX, Kraken + Switch to Live Gate) */}
+        <ExchangeControlCenter />
 
         {/* Active Signals Multi-Column Grid (6–12 Pre-Pump & AI Coordinator Signals) */}
         {panels.activeEntryZoneSignals && (
@@ -859,8 +886,7 @@ export function Dashboard() {
             onSendToCoordinator={handleSendPatternToCoordinator}
           />
         )}
-          </motion.div>
-        </AnimatePresence>
+        </div>
       </div>
 
       <SignalDetailModal

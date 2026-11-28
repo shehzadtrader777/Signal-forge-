@@ -404,11 +404,11 @@
     },
     "/users/{userId}/dailyPnlRecords/{dateKey}": {
       "schema": { "$ref": "#/entities/DailyPnlRecord" },
-      "description": "High-precision daily realized PnL & percentage return historical records."
+      "description": "Legacy unverified browser-authored research PnL records; read-only to clients, never authoritative settlement."
     },
     "/users/{userId}/vaultLocker/{vaultId}": {
       "schema": { "$ref": "#/entities/VaultLockerState" },
-      "description": "User-scoped immutable Locker Vault snapshot and profit scooping thresholds."
+      "description": "Legacy unverified browser-authored vault snapshot; read-only to clients, never verified personal funds."
     }
   }
 }

@@ -96,6 +96,19 @@ export interface TelegramWebhookInboundEvent {
 export interface TelegramDualStreamStatus {
   ok: boolean;
   botConfigured: boolean;
+  botAuthVerified?: boolean;
+  botHealthState?:
+    | 'UNCONFIGURED'
+    | 'CONFIGURED_NOT_VERIFIED'
+    | 'AUTHENTICATED'
+    | 'WEBHOOK_UNREACHABLE'
+    | 'AUTH_FAILED'
+    | 'DELIVERY_ACCEPTED'
+    | 'DELIVERY_FAILED'
+    | 'BLOCKED';
+  botUsername?: string | null;
+  botAuthError?: string | null;
+  configAdvisories?: string[];
   maskedToken: string;
   publicChannel: {
     name: string;
@@ -103,6 +116,9 @@ export interface TelegramDualStreamStatus {
     handle: string;
     totalDispatched: number;
     deliveredCount: number;
+    acceptedCount?: number;
+    failedCount?: number;
+    suppressedCount?: number;
     lastDispatchedAt: string | null;
   };
   developerAudit: {
@@ -125,6 +141,7 @@ export interface TelegramDualStreamStatus {
     configuredUrl: string | null;
     registered: boolean;
     secretHeaderEnforced: boolean;
+    secretValid?: boolean;
     lastRegisteredAt: string | null;
     lastInboundAt: string | null;
     totalInboundUpdates: number;

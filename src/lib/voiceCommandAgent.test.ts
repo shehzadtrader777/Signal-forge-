@@ -29,6 +29,16 @@ test('parseVoiceCommandTranscript recognizes liquidate, resume, tick, audit, and
   assert.equal(navSignals.routeTarget, '/signals');
 });
 
+test('parseVoiceCommandTranscript recognizes harmless greetings and punctuated status safely', () => {
+  const hello = parseVoiceCommandTranscript('hello');
+  assert.equal(hello.intent, 'GREETING');
+  assert.ok(hello.summary.includes('status'));
+
+  assert.equal(parseVoiceCommandTranscript('Hello!').intent, 'GREETING');
+  assert.equal(parseVoiceCommandTranscript('help').intent, 'GREETING');
+  assert.equal(parseVoiceCommandTranscript('Status.').intent, 'STATUS');
+});
+
 test('parseVoiceCommandTranscript returns UNKNOWN cleanly for unrelated utterances', () => {
   const unknown = parseVoiceCommandTranscript('hello weather today');
   assert.equal(unknown.intent, 'UNKNOWN');

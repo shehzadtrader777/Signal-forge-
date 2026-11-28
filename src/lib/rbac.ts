@@ -9,7 +9,10 @@ export type RbacPermission =
   | 'PROFIT_POLICY_TUNE'
   | 'TEST_CONSOLE_VIEW'
   | 'DEBUG_ENDPOINTS_ACCESS'
-  | 'PROMOTION_CERTIFY';
+  | 'PROMOTION_CERTIFY'
+  | 'OPERATOR_SESSION_ISSUE'
+  | 'AGENTIC_CLI_WRITE'
+  | 'AI_ADMIN_COMMAND';
 
 export interface RbacIdentity {
   authenticated: boolean;
@@ -42,6 +45,9 @@ const ROLE_PERMISSIONS: Readonly<Record<RbacRole, readonly RbacPermission[]>> = 
     'TEST_CONSOLE_VIEW',
     'DEBUG_ENDPOINTS_ACCESS',
     'PROMOTION_CERTIFY',
+    'OPERATOR_SESSION_ISSUE',
+    'AGENTIC_CLI_WRITE',
+    'AI_ADMIN_COMMAND',
   ],
   SUPER_ADMIN: [
     'DASHBOARD_VIEW',
@@ -51,17 +57,18 @@ const ROLE_PERMISSIONS: Readonly<Record<RbacRole, readonly RbacPermission[]>> = 
     'TEST_CONSOLE_VIEW',
     'DEBUG_ENDPOINTS_ACCESS',
     'PROMOTION_CERTIFY',
+    'OPERATOR_SESSION_ISSUE',
+    'AGENTIC_CLI_WRITE',
+    'AI_ADMIN_COMMAND',
   ],
 };
 
 /**
- * Authorized platform administrator emails (lowercase). Additional emails can be
- * injected via ADMIN_EMAIL_ALLOWLIST on the server.
+ * Authorized platform administrator emails are supplied exclusively on the server
+ * via environment configuration (ADMIN_EMAIL_ALLOWLIST / OWNER_ALERT_EMAIL / RECIPIENT_EMAIL).
+ * Kept empty in client-imported code so no personal email addresses are bundled publicly.
  */
-export const DEFAULT_ADMIN_EMAILS: readonly string[] = [
-  'amirshehzad2647tcs@gmail.com',
-  'dillwalaa.69@gmail.com',
-];
+export const DEFAULT_ADMIN_EMAILS: readonly string[] = [];
 
 export const TEST_CONSOLE_ALLOWED_ROLES: readonly RbacRole[] = ['ADMIN', 'SUPER_ADMIN'];
 
@@ -73,11 +80,8 @@ export function resolveRbacRoleFromPrincipal(
     return 'GUEST';
   }
 
-  // Server-side operator CLI automation clearance
-  if (principal.uid === 'operator-cli-token') {
-    return 'SUPER_ADMIN';
-  }
-
+  // Never infer SUPER_ADMIN from a client-supplied UID. CLI authorization must be
+  // checked independently on the server using a validated scoped credential.
   const normalizedEmail = (principal.email || '').trim().toLowerCase();
   const allowlist = new Set<string>([
     ...DEFAULT_ADMIN_EMAILS,
