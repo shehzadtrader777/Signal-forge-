@@ -126,3 +126,23 @@ test('Dirty Dozen security invariants hold across all 8 Firestore collections', 
     }
   }
 });
+
+test('reconciled user profile publicId supports legacy migration without arbitrary ID changes', () => {
+  const start = rulesText.indexOf('function isValidUserProfile(');
+  const end = rulesText.indexOf('function isValidWatchlistItem(', start);
+  assert.ok(start >= 0 && end > start);
+  const validator = rulesText.slice(start, end);
+  assert.ok(validator.includes("data.keys().hasAll(['uid', 'publicId', 'email', 'displayName', 'createdAt', 'updatedAt'])"));
+  assert.ok(validator.includes("data.publicId == 'SF-' + userId"));
+  const usersStart = rulesText.indexOf('match /users/{userId}');
+  const watchlistStart = rulesText.indexOf('match /watchlist/{coinId}', usersStart);
+  assert.ok(usersStart >= 0 && watchlistStart > usersStart);
+  const profileRules = rulesText.slice(usersStart, watchlistStart);
+  assert.ok(profileRules.includes("(!('publicId' in existing()) || incoming().publicId == existing().publicId)"),
+    'Once an account ID is set it must not be altered; old profiles may gain the new field');
+  assert.ok(profileRules.includes("'publicId', 'displayName', 'email', 'updatedAt'"),
+    'Legacy profiles must be allowed to add a validated publicId without changing immutable UID or creation time');
+  const firebaseSource = fs.readFileSync(path.resolve(ROOT_DIR, 'src/lib/firebase.ts'), 'utf8');
+  assert.ok(firebaseSource.includes('publicId: getSignalForgePublicId(user.uid)'),
+    'Both new profiles and legacy updates must write the matching deterministic public ID');
+});
