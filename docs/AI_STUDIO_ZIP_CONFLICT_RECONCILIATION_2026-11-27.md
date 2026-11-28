@@ -67,3 +67,7 @@ Studio's older `src/lib/rbac.ts` directly assigned `SUPER_ADMIN` for the user-co
 - `src/components/MultiScreenWorkspaceBar.tsx` — both source versions use stable top-level `PRESET_BTN_TAP` and `PANEL_BTN_TAP` constants. Preserve the reviewed reconciliation component and avoid unrelated UI rewrites pending visual QA.
 
 These decisions reduce the source paths requiring *further* comparison, but **do not prove whole-app behavioral equivalence**. The major backend/Firestore/financial/trading/UI routing conflicts and secret-scan findings still block main merge and Google AI Studio synchronization.
+
+### Live-feed validator test: preserve explicit Rust UDS transport assertion
+
+Reviewed the actual 27 November Studio ZIP and branch `src/lib/liveFeedValidator.test.ts` side by side. The Studio test invoked the Python hybrid control-plane self-test and checked clone/tick/chamber/tracked-row outputs. The reconciled GitHub test additionally asserts `result.transport === 'RUST_UDS_IPC'`; all the surrounding test logic is otherwise aligned in the inspected section. **Decision: preserve the stricter GitHub test**, not the older Studio version. This resolves one *test-only* semantic-review item; do not interpret this as full Rust integration equivalence or permission to replace the engine binary.
