@@ -71,3 +71,7 @@ These decisions reduce the source paths requiring *further* comparison, but **do
 ### Live-feed validator test: preserve explicit Rust UDS transport assertion
 
 Reviewed the actual 27 November Studio ZIP and branch `src/lib/liveFeedValidator.test.ts` side by side. The Studio test invoked the Python hybrid control-plane self-test and checked clone/tick/chamber/tracked-row outputs. The reconciled GitHub test additionally asserts `result.transport === 'RUST_UDS_IPC'`; all the surrounding test logic is otherwise aligned in the inspected section. **Decision: preserve the stricter GitHub test**, not the older Studio version. This resolves one *test-only* semantic-review item; do not interpret this as full Rust integration equivalence or permission to replace the engine binary.
+
+### Agent-loop telemetry: retain async timer guard
+
+Reviewed the Studio ZIP's `src/components/AgentLoopTelemetryPanel.tsx` against the reconciled source, line by line in the polling effect. Both versions preserve the `REFRESH_BTN_TAP` stable animation constant, the 12-second timer, hidden-tab suppression and interval cleanup. Reconciliation adds an explicit comment about polling safety and changes the ignored promise from `fetchTelemetry()` to `void fetchTelemetry()`. **Decision: preserve the GitHub version.** No Studio-only functionality is lost in that reviewed effect; a separate regression test covers this behavior.
