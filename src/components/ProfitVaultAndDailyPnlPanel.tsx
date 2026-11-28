@@ -213,7 +213,7 @@ export const ProfitVaultAndDailyPnlPanel = memo(function ProfitVaultAndDailyPnlP
 
   const fetchVaultState = useCallback(async () => {
     try {
-      const res = await fetch('/api/vault/state');
+      const res = await apiFetch('/api/vault/state');
       if (!res.ok) return;
       const data = (await res.json()) as {
         ok?: boolean;
